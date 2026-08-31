@@ -1,0 +1,39 @@
+[build]
+  publish = "build/web"
+  # SUPABASE_URL / SUPABASE_ANON_KEY are read from Netlify's own Environment
+  # Variables (Site settings > Environment variables), not hardcoded here —
+  # 2026-08-31, matching SeaWyze's netlify.toml in shape (git + Netlify CI,
+  # a build plugin that installs Flutter, a separate staging context) but
+  # deliberately NOT copying SeaWyze's habit of typing the actual URL/key
+  # values straight into this file. Not a security fix — the anon/
+  # publishable key is meant to be public, the same value ships inside every
+  # client regardless — just tidier: the value lives in one place (Netlify's
+  # dashboard) instead of being duplicated across this file's two build
+  # contexts, and can be rotated without touching a file in the repo. Set
+  # both variables' values once for the "Production" scope and again for
+  # the "staging" branch scope in that same Netlify screen — see this file's
+  # own [context.staging] section below for why a second, separate Supabase
+  # project's values belong there rather than the production ones.
+  command = "flutter build web --dart-define=SUPABASE_URL=$SUPABASE_URL --dart-define=SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+
+[[plugins]]
+  package = "netlify-plugin-flutter"
+
+# Deploys the `staging` branch to its own fixed URL (Netlify's branch-deploy
+# feature — not a rotating deploy-preview URL, which would break the
+# password-reset flow the same way a local `flutter run` restart does; see
+# app_router.dart / main.dart's own notes on why that link needs a stable
+# origin). The build COMMAND is identical to the default [build] block
+# above — it isn't hardcoded per environment (unlike SeaWyze's own staging
+# context, which passes a different literal command including an
+# APP_BASE_URL define) — because WyzeSales never needed that: every
+# redirect URL this app builds (see auth_repository.dart's
+# sendPasswordResetEmail) is computed at runtime from the browser's own
+# Uri.base.origin, not baked in at compile time. So the only thing that
+# actually needs to differ for staging is which values Netlify injects for
+# $SUPABASE_URL/$SUPABASE_ANON_KEY — scope those two variables to the
+# `staging` branch in Netlify's Environment Variables screen, pointing at
+# WyzeSales' separate staging Supabase project, and this same command
+# picks them up automatically.
+[context.staging]
+  command = "flutter build web --dart-define=SUPABASE_URL=$SUPABASE_URL --dart-define=SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
