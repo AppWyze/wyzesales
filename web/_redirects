@@ -1,0 +1,23 @@
+# Netlify SPA fallback — needed as of 2026-08-31, now that main.dart calls
+# usePathUrlStrategy() (see its own comment for why: fixing the password-
+# reset link, which needs a real path like /reset-password rather than
+# Flutter web's default /#/reset-password).
+#
+# Under the OLD hash-based routing this file was never necessary — every
+# route lived after a # fragment, which browsers never send to the server,
+# so Netlify only ever needed to serve / (index.html) and the app's own
+# router handled everything past the #. Under path-based routing, a direct
+# load of any other route — clicking the password-reset email link and
+# landing straight on /reset-password being the immediate case, but this
+# now applies to every screen (bookmarking /sales-analysis, or just
+# refreshing the browser while on /settings) — is a real HTTP request for
+# that literal path, and without this file Netlify would 404 it: there's no
+# actual file at build/web/reset-password, only build/web/index.html, which
+# is what needs to run for every one of these paths so Flutter's own router
+# can then take over client-side.
+#
+# 200 (not a 301/302) is deliberate — this rewrites the request to serve
+# index.html while leaving the browser's address bar showing the original
+# URL the user actually asked for, which is what a client-side router needs
+# to then read and act on.
+/*    /index.html   200

@@ -1,0 +1,83 @@
+name: wyzesales
+description: WyzeSales — sales, quote, and budget analysis for Water Components SA, built on Supabase.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+# NOTE: this pubspec was hand-written in a sandbox with no network access to
+# pub.dev, so it could not be resolved here (no `flutter pub get` was run
+# against it). Version ranges below are deliberately conservative, known-good
+# releases as of mid-2025/2026 — the first `flutter pub get` on a machine with
+# real network access is the real check. See README.md "First build" section.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Routing — same package and auth-redirect pattern as SeaWyze, for
+  # consistency across the two apps (not a shared dependency/package, just
+  # the same well-understood approach).
+  go_router: ^14.2.0
+
+  # Supabase client (Postgres data, Auth, Realtime if ever needed).
+  supabase_flutter: ^2.5.0
+
+  # State management — matches SeaWyze's use of Riverpod's StateNotifierProvider.
+  flutter_riverpod: ^2.5.1
+
+  # Persisted local prefs (theme mode only, same as SeaWyze).
+  shared_preferences: ^2.2.3
+
+  # Date/number formatting (fiscal month labels, currency, percentages).
+  intl: ^0.19.0
+
+  cupertino_icons: ^1.0.8
+
+  # 2026-08-27: frozen header + frozen Totals row for every DataTable in the
+  # app (see shared/widgets/responsive_data_table.dart's own doc comment for
+  # why this replaced a hand-rolled attempt that crashed three times on a
+  # real device). Free, BSD-3-Clause.
+  #
+  # Originally pinned to ^2.8.0 to avoid 3.0.0's new `material_ui`
+  # dependency — but 2.8.0 (like 3.0.0) needs Dart >=3.13.0, and Craig's
+  # installed Dart is 3.12.1 (`flutter pub get` failed with exactly that
+  # version-solving error, suggesting this same downgrade itself:
+  # `flutter pub add data_table_2:^2.7.2`). Re-pinned to ^2.7.2 rather than
+  # asking Craig to upgrade Flutter for this — 2.7.2 only needs Dart
+  # >=3.0.0/Flutter >=3.27.0 (comfortably below whatever he's already
+  # running), has no `material_ui` dependency either, and already had
+  # `fixedTopRows` (added back in 2.3.0) and `minWidth`/`columnSpacing` —
+  # everything responsive_data_table.dart actually uses — well before this
+  # version. If Craig upgrades Flutter for unrelated reasons later, moving
+  # back up to 2.8.0+ is a one-line change, not a requirement.
+  data_table_2: ^2.7.2
+
+  # Real CSV/PDF export (2026-08-31), replacing the old placeholder buttons
+  # that only ever showed a "not implemented yet" SnackBar. As with every
+  # dependency in this file per the note above, these versions haven't been
+  # resolved against a real toolchain from here — if `flutter pub get`
+  # reports a version-solving conflict (the same failure mode data_table_2
+  # hit against your installed Dart 3.12.1, see its own comment above),
+  # send me the exact error text and I'll pin to compatible versions.
+  csv: ^8.0.0
+  pdf: ^3.13.0
+  file_saver: ^0.4.0
+
+  # Switches Flutter web off its default hash-based URL strategy
+  # (https://mysite.com/#/reset-password) onto real path-based URLs
+  # (https://mysite.com/reset-password) — 2026-08-31, needed to fix the
+  # password-reset link (see app_router.dart's own note). Ships as part of
+  # the Flutter SDK itself (`sdk: flutter`, like `flutter_test` below), not
+  # a pub.dev package, so unlike csv/pdf/file_saver above there's no version
+  # to guess at — it always matches whatever Flutter SDK is installed.
+  flutter_web_plugins:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
