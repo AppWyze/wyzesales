@@ -1,11 +1,11 @@
 {
-    "name": "wyzesales",
-    "short_name": "wyzesales",
+    "name": "WyzeSales",
+    "short_name": "WyzeSales",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FFFFFF",
+    "theme_color": "#0A1620",
+    "description": "WyzeSales — sales, quote, and budget analysis for Water Components SA.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
