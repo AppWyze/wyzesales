@@ -1,4 +1,5 @@
 import '../../core/constants/fiscal.dart';
+import '../../core/filters/global_filters.dart';
 import '../../core/supabase/supabase_config.dart';
 import '../models/reference_data.dart';
 
@@ -76,6 +77,34 @@ class ReferenceDataRepository {
   Future<Map<String, String>> namesFor(SalesDimension dimension) async {
     final list = await entitiesFor(dimension);
     return {for (final c in list) c.code: c.displayLabel};
+  }
+
+  /// Which `dimension` entity codes have at least one matching row under
+  /// every OTHER currently active global filter — schema/017, Craig
+  /// 2026-09-01: "If I filter on an Item and then I look up Customer in the
+  /// Customer Filter, I should only be able to select a customer who has
+  /// purchased that item... greyed out." Returns null (not an empty set)
+  /// when no OTHER filter is active — including `dimension`'s own current
+  /// selection, which is deliberately ignored here, same reasoning
+  /// fn_dimension_filter_options' own doc comment gives: picking a NEW
+  /// Customer shouldn't be constrained by whichever Customer is already
+  /// active — so callers can tell "don't grey anything out" apart from "grey
+  /// out, but this particular call happened to match everything."
+  Future<Set<String>?> filterOptionCodes(SalesDimension dimension, GlobalFilters filters) async {
+    final hasOtherEntityFilter = SalesDimension.values.any((d) => d != dimension && filters.forDimension(d) != null);
+    if (!hasOtherEntityFilter && filters.fiscalYear == null && filters.fiscalMonth == null) return null;
+
+    final rows = await supabase.rpc('fn_dimension_filter_options', params: {
+      'p_dimension': dimension.dbValue,
+      'p_fiscal_year': filters.fiscalYear,
+      'p_fiscal_month': filters.fiscalMonth,
+      'p_filter_sales_person': dimension == SalesDimension.salesPerson ? null : filters.salesPerson?.code,
+      'p_filter_customer': dimension == SalesDimension.customer ? null : filters.customer?.code,
+      'p_filter_item': dimension == SalesDimension.item ? null : filters.item?.code,
+      'p_filter_category': dimension == SalesDimension.category ? null : filters.category?.code,
+      'p_filter_branch': dimension == SalesDimension.branch ? null : filters.branch?.code,
+    });
+    return (rows as List).map<String>((r) => r['entity_code'] as String).toSet();
   }
 
   /// Top-bar search (Craig, 2026-08-26: "search on the dimensions, then

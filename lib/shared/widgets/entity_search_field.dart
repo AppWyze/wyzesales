@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/app_providers.dart';
 import '../../core/constants/fiscal.dart';
+import '../../core/filters/global_filters.dart';
 import '../../data/models/reference_data.dart';
 
 /// Real, server-backed search dialog for picking one Category/Item/Sales
@@ -36,6 +37,19 @@ import '../../data/models/reference_data.dart';
 /// value with zero new information. This dialog function is now called
 /// directly by `global_filter_bar.dart`'s "Add filter" picker only — the
 /// single remaining place any of the 5 dimension filters get set.
+///
+/// 2026-09-01: rows with no matching sales data under whichever OTHER
+/// global filters are already active now render greyed out with a "No
+/// data" tag — Craig: "If I filter on an Item and then I look up Customer
+/// in the Customer Filter, I should only be able to select a customer who
+/// has purchased that item... greyed out." Deliberately not blocked from
+/// selection (Craig, same conversation: still selectable) — greying is a
+/// hint, not a hard rule, since sometimes a user knows data is coming or
+/// wants to confirm a combination is genuinely empty. Deliberately NOT
+/// applied to TopBarSearch (searchAllDimensions) — this dialog is the only
+/// place that behaviour was asked for. See schema/017's own doc comment for
+/// the database side of this (`fn_dimension_filter_options`) and
+/// ReferenceDataRepository.filterOptionCodes for how it's called.
 Future<CodeName?> showEntitySearchDialog(BuildContext context, {required SalesDimension dimension, required String title}) {
   return showDialog<CodeName>(
     context: context,
@@ -59,10 +73,31 @@ class _EntitySearchDialogState extends ConsumerState<_EntitySearchDialog> {
   List<CodeName> _results = [];
   bool _loading = true;
 
+  /// Codes with at least one matching row under every OTHER active global
+  /// filter — schema/017, Craig 2026-09-01: "If I filter on an Item... I
+  /// should only be able to select a customer who has purchased that item...
+  /// greyed out." Null means "don't grey anything" — either no other filter
+  /// is active, or this dialog's own dimension has no such thing as "other"
+  /// filters to check against (there always is one, since a dimension is
+  /// never checked against its own current value — see
+  /// ReferenceDataRepository.filterOptionCodes' own doc comment). Fetched
+  /// once per dialog open, in parallel with the initial browse list, since
+  /// the global filters can't change while this modal is the only thing on
+  /// screen.
+  Set<String>? _matchingCodes;
+
   @override
   void initState() {
     super.initState();
     _search(''); // initial browse list — same "first N, unfiltered" default the old dropdowns opened to.
+    _loadMatchingCodes();
+  }
+
+  Future<void> _loadMatchingCodes() async {
+    final filters = ref.read(globalFiltersProvider);
+    final codes = await ref.read(referenceDataRepositoryProvider).filterOptionCodes(widget.dimension, filters);
+    if (!mounted || codes == null) return;
+    setState(() => _matchingCodes = codes);
   }
 
   @override
@@ -119,9 +154,22 @@ class _EntitySearchDialogState extends ConsumerState<_EntitySearchDialog> {
                           itemCount: _results.length,
                           itemBuilder: (context, index) {
                             final entity = _results[index];
+                            // Greyed, not removed/disabled — Craig, 2026-09-01:
+                            // still selectable on tap either way (schema/017's
+                            // own doc comment has the full reasoning: a hint,
+                            // not a hard block).
+                            final noData = _matchingCodes != null && !_matchingCodes!.contains(entity.code);
+                            final mutedColor = Theme.of(context).disabledColor;
                             return ListTile(
                               dense: true,
-                              title: Text(entity.displayLabel, overflow: TextOverflow.ellipsis),
+                              title: Text(
+                                entity.displayLabel,
+                                overflow: TextOverflow.ellipsis,
+                                style: noData ? TextStyle(color: mutedColor) : null,
+                              ),
+                              trailing: noData
+                                  ? Text('No data', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: mutedColor))
+                                  : null,
                               onTap: () => Navigator.of(context).pop(entity),
                             );
                           },
