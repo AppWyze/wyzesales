@@ -846,9 +846,22 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
     super.dispose();
   }
 
+  // 2026-09-01, Craig: "If a User level is set to User and/or RegUser the
+  // Rep code and Branch code fields are not optional but mandatory... Save
+  // cannot happen without this in place." Both fields now drive row-level
+  // security directly (schema/018) — a User/RegUser login with either left
+  // blank would match nothing under the new scoped RLS policies, so this
+  // isn't just a data-quality nicety, an unset code would silently make
+  // every screen look empty for that person.
+  bool get _repBranchRequired => _level == UserLevel.user || _level == UserLevel.reguser;
+
   Future<void> _save() async {
     if (_nameController.text.trim().isEmpty || _emailController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
       setState(() => _error = 'Please fill in all required fields.');
+      return;
+    }
+    if (_repBranchRequired && (_repCodeController.text.trim().isEmpty || _branchCodeController.text.trim().isEmpty)) {
+      setState(() => _error = 'Rep code and Branch code are required for User and RegUser levels.');
       return;
     }
     setState(() {
@@ -905,9 +918,9 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        Expanded(child: _tf('Rep code (optional)', _repCodeController, isDark)),
+                        Expanded(child: _tf(_repBranchRequired ? 'Rep code *' : 'Rep code (optional)', _repCodeController, isDark)),
                         const SizedBox(width: 12),
-                        Expanded(child: _tf('Branch code (optional)', _branchCodeController, isDark)),
+                        Expanded(child: _tf(_repBranchRequired ? 'Branch code *' : 'Branch code (optional)', _branchCodeController, isDark)),
                       ],
                     ),
                     if (_error != null) ...[
@@ -946,6 +959,8 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
             DropdownMenuItem(value: UserLevel.reguser, child: Text('RegUser')),
             DropdownMenuItem(value: UserLevel.adminuser, child: Text('Admin')),
           ],
+          // setState alone is enough to flip the Rep/Branch code labels'
+          // required asterisk live as Level changes — see _repBranchRequired.
           onChanged: (v) => setState(() => _level = v ?? UserLevel.user),
         ),
       ],
@@ -999,9 +1014,18 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
     super.dispose();
   }
 
+  // See _AddUserDialogState's own copy of this getter/comment for why
+  // (2026-09-01, Craig — Rep/Branch code now drive row-level security,
+  // schema/018).
+  bool get _repBranchRequired => _level == UserLevel.user || _level == UserLevel.reguser;
+
   Future<void> _save() async {
     if (_nameController.text.trim().isEmpty) {
       setState(() => _error = 'Full name is required.');
+      return;
+    }
+    if (_repBranchRequired && (_repCodeController.text.trim().isEmpty || _branchCodeController.text.trim().isEmpty)) {
+      setState(() => _error = 'Rep code and Branch code are required for User and RegUser levels.');
       return;
     }
     setState(() {
@@ -1052,9 +1076,9 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        Expanded(child: _tf('Rep code (optional)', _repCodeController, isDark)),
+                        Expanded(child: _tf(_repBranchRequired ? 'Rep code *' : 'Rep code (optional)', _repCodeController, isDark)),
                         const SizedBox(width: 12),
-                        Expanded(child: _tf('Branch code (optional)', _branchCodeController, isDark)),
+                        Expanded(child: _tf(_repBranchRequired ? 'Branch code *' : 'Branch code (optional)', _branchCodeController, isDark)),
                       ],
                     ),
                     if (_error != null) ...[
@@ -1093,6 +1117,8 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
             DropdownMenuItem(value: UserLevel.reguser, child: Text('RegUser')),
             DropdownMenuItem(value: UserLevel.adminuser, child: Text('Admin')),
           ],
+          // setState alone is enough to flip the Rep/Branch code labels'
+          // required asterisk live as Level changes — see _repBranchRequired.
           onChanged: (v) => setState(() => _level = v ?? UserLevel.user),
         ),
       ],
