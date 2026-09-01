@@ -567,6 +567,26 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     required Map<String, _EntityPeriod> previous,
     required Map<String, String> names,
   }) {
+    // 2026-09-01, Craig, testing on 1 September with no data loaded yet
+    // for the brand-new fiscal month: "This is incorrect as we have no
+    // MTD data for September yet" — the MTD pie's legend was showing 5
+    // real customer names, each next to R0, which reads as "these are
+    // this month's top 5 customers" when the real situation is simpler
+    // and more important: there is no data for this period AT ALL yet
+    // (the extract hasn't run for September). Root cause: with `current`
+    // completely empty, every rank mode's sort compares `_valueOf(current
+    // [x])` values that are all 0 — a no-op that just preserves whatever
+    // order the union Set below happened to produce — so `.take(5)`
+    // silently surfaced 5 arbitrary PREVIOUS-month customer codes as if
+    // they still applied this month. Checked here, before the deliberate
+    // union logic below (which handles a genuinely different case — see
+    // its own comment): a period with zero rows on record isn't "every
+    // customer declined to zero," it's "we don't have this period's data
+    // yet," and none of the four rank modes has anything real to show for
+    // that. Returning no slices lets SimplePieChart's own "No data for the
+    // current filters" fallback say the honest thing instead.
+    if (current.isEmpty) return const [];
+
     // Union, not just current.keys — an entity that had activity last
     // period but none this period (dropped to zero) is exactly the kind of
     // thing "Diminishing 5" should be able to surface, not silently omit.
