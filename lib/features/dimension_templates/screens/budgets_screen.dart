@@ -24,8 +24,8 @@ import '../../../shared/widgets/responsive_data_table.dart';
 /// one live-editable numeric input in the app rather than a read-only
 /// Text/DataCell. Re-formats to "591,080" on every keystroke as the admin
 /// types; digits are stripped back out again before parsing/saving
-/// (`_MonthTableState._save`), so what's actually persisted is still the
-/// plain numeric value budget_figures.budget_value always was.
+/// (`_MonthTableState._saveMonth`), so what's actually persisted is still
+/// the plain numeric value budget_figures.budget_value always was.
 ///
 /// Deliberately simple rather than cursor-position-preserving: always
 /// re-collapses to the digits typed so far and places the cursor at the
@@ -34,9 +34,20 @@ import '../../../shared/widgets/responsive_data_table.dart';
 /// number the way there might be in a general-purpose form field — so the
 /// simpler implementation was not worth trading against a much fussier
 /// mid-string-edit-safe version for a field nobody edits that way.
+/// 2026-09-01, Craig, testing the field this formatter lives on: "Can you
+/// Also remove the decimals on the input." Some existing budget_figures
+/// rows already carry cents (e.g. 591080.13, presumably from before this
+/// field had any formatting at all) — `NumberFormat.decimalPattern`
+/// preserves whatever precision a value actually has, so those rows'
+/// initial display picked up their real decimals the moment this field
+/// switched from the old `.toStringAsFixed(0)` (always whole, no matter
+/// what was stored) to this formatter. Pattern `'#,##0'` forces whole-Rand
+/// display unconditionally, matching what this field always showed before
+/// today and simply adding comma grouping on top — nobody has ever been
+/// able to see or rely on cents in this field.
 class _ThousandsInputFormatter extends TextInputFormatter {
   static final RegExp _nonDigits = RegExp(r'[^\d]');
-  static final NumberFormat _format = NumberFormat.decimalPattern('en_US');
+  static final NumberFormat _format = NumberFormat('#,##0', 'en_US');
 
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
@@ -309,6 +320,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   // widget.data.budget[month], so a different rotation never changes which
   // value a row shows, only which row it shows first).
   late final List<String> _months;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -331,14 +343,28 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     super.dispose();
   }
 
-  Future<void> _save(String month) async {
-    final clientId = widget.clientId;
-    if (clientId == null) return;
-    // _ThousandsInputFormatter keeps this field's text comma-grouped (e.g.
-    // "591,080") — strip that back out before parsing, since budget_figures
-    // itself still just stores the plain numeric value.
-    final digitsOnly = _controllers[month]!.text.replaceAll(RegExp(r'[^\d]'), '');
-    final parsed = digitsOnly.isEmpty ? 0 : num.tryParse(digitsOnly);
+  /// Parses one month's current field text back into a plain number and
+  /// upserts it — no snackbar of its own; `_saveAll` below is the only
+  /// user-facing entry point now (see its doc comment for why).
+  ///
+  /// Strips only commas, not every non-digit character. The previous
+  /// version of this method used `replaceAll(RegExp(r'[^\d]'), '')`, which
+  /// strips a decimal point right along with the thousands commas — safe
+  /// only as long as a "." could never appear in this field at all. That
+  /// assumption briefly didn't hold: for the short window today between
+  /// this field first getting comma-formatted and `_ThousandsInputFormatter`
+  /// being fixed to force whole-Rand display, a pre-existing row with real
+  /// cents (e.g. 591080.13) would render here as "591,080.13" — and hitting
+  /// Enter on it with the old digit-stripping would have silently saved
+  /// 59108013, not 591080.13 or even 591080, mashing the whole and
+  /// fractional parts together into a number two orders of magnitude too
+  /// large. Not reachable any more now that `_ThousandsInputFormatter`
+  /// never lets a "." into this field's text in the first place (see its
+  /// own doc comment) — fixed properly here anyway rather than left as a
+  /// latent trap for the next thing that touches this method.
+  Future<void> _saveMonth(String month, String clientId) async {
+    final text = _controllers[month]!.text.replaceAll(',', '');
+    final parsed = text.isEmpty ? 0 : num.tryParse(text);
     if (parsed == null) return;
     await ref.read(budgetRepositoryProvider).setBudgetValue(
           clientId: clientId,
@@ -347,8 +373,35 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
           fiscalMonth: month,
           budgetValue: parsed,
         );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$month budget saved.')));
+  }
+
+  /// 2026-09-01, Craig: "you have to input a budget number then enter for
+  /// it to save before inputting the next one. If you input more than one
+  /// at a time it only saves the last when. What about a Save button.
+  /// Change all and press Save." The old design saved a field the instant
+  /// the admin hit Enter (or otherwise submitted) on it — meaning every
+  /// OTHER field they'd already typed into during the same visit, but not
+  /// yet individually submitted, was silently never persisted. Replaced
+  /// with one explicit Save button that saves every month in this table in
+  /// a single batch; each field's own `onSubmitted` now just advances focus
+  /// to the next one (Enter to tab through quickly) instead of saving on
+  /// its own — matching "fill several in, then press Save" rather than
+  /// pretending each field commits independently as you go.
+  Future<void> _saveAll() async {
+    final clientId = widget.clientId;
+    if (clientId == null || _saving) return;
+    setState(() => _saving = true);
+    try {
+      await Future.wait(_months.map((month) => _saveMonth(month, clientId)));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sales Budget saved.')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -376,44 +429,94 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     // included in the "Totals to the top" scope Craig confirmed for the
     // other tables). A frozen HEADER alone would be safe to add here today
     // if wanted — flagged as an easy follow-up, not applied unasked.
-    return ResponsiveDataTable(
-      stickyHeader: false,
-      columns: const [
-        DataColumn(label: Text('Month')),
-        DataColumn(label: Text('Sales Budget'), numeric: true),
-        DataColumn(label: Text('Seasonal Forecast'), numeric: true),
-        DataColumn(label: Text('Confidence')),
-      ],
-      rows: [
-        ..._months.map((month) {
-          return DataRow(cells: [
-            DataCell(Text(month)),
-            DataCell(
-              widget.canEdit
-                  ? SizedBox(
-                      width: 120,
-                      child: TextField(
-                        controller: _controllers[month],
-                        keyboardType: TextInputType.number,
-                        // Right-aligned to match the read-only Seasonal
-                        // Forecast column beside it (Craig, 2026-09-01,
-                        // "can you right justify these values as well") —
-                        // DataTable's `numeric: true` column setting only
-                        // right-aligns a plain Text cell automatically, not
-                        // a TextField, so this needed setting explicitly.
-                        textAlign: TextAlign.right,
-                        inputFormatters: [_ThousandsInputFormatter()],
-                        decoration: const InputDecoration(isDense: true, prefixText: 'R '),
-                        onSubmitted: (_) => _save(month),
-                      ),
-                    )
-                  : Text(formatRand(widget.data.budget[month])),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: ResponsiveDataTable(
+            stickyHeader: false,
+            columns: const [
+              DataColumn(label: Text('Month')),
+              DataColumn(label: Text('Sales Budget'), numeric: true),
+              DataColumn(label: Text('Seasonal Forecast'), numeric: true),
+              DataColumn(label: Text('Confidence')),
+            ],
+            rows: [
+              ..._months.map((month) {
+                return DataRow(cells: [
+                  DataCell(Text(month)),
+                  DataCell(
+                    widget.canEdit
+                        ? Align(
+                            // Wraps the whole input box, not just the text
+                            // inside it — 2026-09-01, Craig: "not right
+                            // aligned" even with the TextField's own
+                            // textAlign already set to
+                            // TextAlign.right. `DataColumn(numeric: true)`
+                            // right-aligns a plain Text CELL by centering
+                            // its layout logic on `Text`/`Number` content;
+                            // a fixed-width custom widget child (this
+                            // SizedBox) isn't guaranteed the same
+                            // treatment, so the 120px box itself could sit
+                            // left-of-center in a column data_table_2 has
+                            // stretched wider than 120px, regardless of
+                            // what's happening inside the box. This Align
+                            // pins the box itself to the cell's right edge;
+                            // TextAlign.right on the TextField (kept below)
+                            // still does its own job of pinning the digits
+                            // to the box's own right edge — together they
+                            // cover both possible causes rather than
+                            // guessing which one it was.
+                            alignment: Alignment.centerRight,
+                            child: SizedBox(
+                              width: 120,
+                              child: TextField(
+                                controller: _controllers[month],
+                                keyboardType: TextInputType.number,
+                                textAlign: TextAlign.right,
+                                inputFormatters: [_ThousandsInputFormatter()],
+                                decoration: const InputDecoration(isDense: true, prefixText: 'R '),
+                                // No longer saves on its own — see
+                                // _saveAll's doc comment. Enter now just
+                                // moves to the next field, so typing
+                                // Enter->Enter->Enter tabs straight down
+                                // the column while filling several months
+                                // in before pressing Save.
+                                onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+                              ),
+                            ),
+                          )
+                        : Text(formatRand(widget.data.budget[month])),
+                  ),
+                  DataCell(Text(formatRand(widget.data.forecast[month]))),
+                  DataCell(Text(widget.data.confidence[month] ?? '—')),
+                ]);
+              }),
+              _totalsRow(),
+            ],
+          ),
+        ),
+        if (widget.canEdit) ...[
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: SizedBox(
+              height: 36,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: _saving ? null : _saveAll,
+                icon: _saving
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save, size: 16),
+                label: Text(_saving ? 'Saving…' : 'Save'),
+              ),
             ),
-            DataCell(Text(formatRand(widget.data.forecast[month]))),
-            DataCell(Text(widget.data.confidence[month] ?? '—')),
-          ]);
-        }),
-        _totalsRow(),
+          ),
+        ],
       ],
     );
   }
