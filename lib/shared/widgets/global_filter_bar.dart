@@ -133,19 +133,27 @@ class GlobalFilterBar extends ConsumerWidget {
       return;
     }
     if (key == '_month') {
+      // 2026-09-01, Craig: "2027 has no data for Sept forward therefore
+      // these should be greyed out" — grey out any calendar month with no
+      // rows on record for the RELEVANT fiscal year: whichever Year filter
+      // is currently active, if one is, since a month like September
+      // genuinely does have data for most past years even while the
+      // current year's September is still empty; falling back to the
+      // current (most recent) fiscal year only when no Year filter is set,
+      // since "hasn't happened yet" is only a meaningful reading of a bare
+      // month with no year attached. (Corrected from an earlier version
+      // that checked the current fiscal year unconditionally, which left
+      // September greyed even with Year 2025 selected — caught by Craig
+      // testing the exact Year 2027 + Month combination this now handles.)
+      final referenceYear = filters.fiscalYear ?? availability?.currentFiscalYear;
+      final monthsWithData = (availability == null || referenceYear == null)
+          ? null
+          : (availability.monthsWithDataByYear[referenceYear] ?? const <String>{});
       final month = await _pickFromList<String>(
         context,
         title: 'Month',
         options: fiscalMonthOrderFor(startMonth: startMonth),
-        // 2026-09-01, Craig: "2027 has no data for Sept forward therefore
-        // these should be greyed out" — grey out any calendar month the
-        // CURRENT fiscal year has no rows for yet (hasn't happened, or
-        // hasn't loaded). This is checked against the current fiscal year
-        // specifically, not whichever Year filter (if any) happens to be
-        // active — Month is one flat list of calendar months shared across
-        // every fiscal year, and "hasn't happened yet" is only a meaningful
-        // idea for the year still in progress.
-        isEnabled: availability == null ? null : (m) => availability.currentYearMonthsWithData.contains(m),
+        isEnabled: monthsWithData == null ? null : (m) => monthsWithData.contains(m),
       );
       if (month != null) notifier.setFiscalMonth(month);
       return;

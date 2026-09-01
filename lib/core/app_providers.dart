@@ -106,14 +106,14 @@ final fiscalYearHistoryYearsProvider = FutureProvider<int>((ref) {
   return ref.watch(settingsRepositoryProvider).getDataHistoryYears();
 });
 
-/// Which fiscal years (within the client's own history window) actually
-/// have any sales data on record, and which calendar months of the CURRENT
-/// (most recent, possibly still in-progress) fiscal year do — 2026-09-01,
-/// Craig: "Year and Month filters. Can we apply the no data rule shaded
-/// grey. E.g. 2027 has no data for Sept forward therefore these should be
-/// greyed out and there is no data for 2023 and 2024." Backs the global
-/// filter bar's Year/Month "Add filter" pickers (global_filter_bar.dart),
-/// which grey out and disable any option this doesn't list.
+/// Which fiscal years (within the client's own history window) actually have
+/// any sales data on record, and — per fiscal year — which calendar months
+/// do — 2026-09-01, Craig: "Year and Month filters. Can we apply the no data
+/// rule shaded grey. E.g. 2027 has no data for Sept forward therefore these
+/// should be greyed out and there is no data for 2023 and 2024." Backs the
+/// global filter bar's Year/Month "Add filter" pickers
+/// (global_filter_bar.dart), which grey out and disable any option this
+/// doesn't list.
 ///
 /// Derived from the same `fetchConsolidatedSales` company-wide monthly
 /// rollup YTD Comparative already reads, over the client's actual configured
@@ -122,22 +122,33 @@ final fiscalYearHistoryYearsProvider = FutureProvider<int>((ref) {
 /// month) pairs needed and RLS already scopes it to what the signed-in user
 /// can see, same as everywhere else in the app. A fiscal year with zero rows
 /// in the window (2023/2024 in Craig's example — this client's data simply
-/// doesn't go back that far) never appears in `yearsWithData`; a calendar
-/// month of the CURRENT fiscal year that hasn't happened yet (or whose data
-/// hasn't landed yet) never appears in `currentYearMonthsWithData`. Deliberately
-/// NOT used to grey month options for a specific PAST year — the global Month
-/// filter is one flat list of calendar months, independent of any Year
-/// selection, so "this month" is graded only against the one fiscal year
-/// where "hasn't happened yet" is actually a meaningful idea.
+/// doesn't go back that far) never appears in `yearsWithData`.
+///
+/// 2026-09-01 correction: the Month picker's greying originally checked ONLY
+/// the current fiscal year's months (`currentYearMonthsWithData`, since
+/// removed) regardless of whether a Year filter was active — Craig caught
+/// that this meant a month like September stayed greyed even with Year 2025
+/// selected (which has real September data), because the check never
+/// actually looked at 2025. `monthsWithDataByYear` fixes this by keying
+/// month-availability per fiscal year; global_filter_bar.dart now checks the
+/// currently-selected Year filter's own months when one is active, falling
+/// back to `currentFiscalYear`'s months only when no Year filter is set —
+/// which is when "hasn't happened yet" is the only sensible reading of
+/// picking a bare month with no year attached.
 ///
 /// Plain (non-autoDispose) FutureProvider, same convention as
 /// lastDataUpdateProvider/fiscalYearStartMonthProvider above — this changes
 /// at most once a day (when the extract runs), so one shared cached read is
 /// right rather than every screen or filter-bar open refetching it.
 class FiscalDataAvailability {
-  const FiscalDataAvailability({required this.yearsWithData, required this.currentYearMonthsWithData});
+  const FiscalDataAvailability({
+    required this.yearsWithData,
+    required this.currentFiscalYear,
+    required this.monthsWithDataByYear,
+  });
   final Set<int> yearsWithData;
-  final Set<String> currentYearMonthsWithData;
+  final int currentFiscalYear;
+  final Map<int, Set<String>> monthsWithDataByYear;
 }
 
 final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability>((ref) async {
@@ -149,10 +160,10 @@ final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability
   final rows = await ref.watch(salesRepositoryProvider).fetchConsolidatedSales(fiscalYears: window);
 
   final years = <int>{};
-  final currentYearMonths = <String>{};
+  final monthsByYear = <int, Set<String>>{};
   for (final row in rows) {
     years.add(row.fiscalYear);
-    if (row.fiscalYear == currentFy) currentYearMonths.add(fiscalMonthLabelFor(row.month));
+    monthsByYear.putIfAbsent(row.fiscalYear, () => {}).add(fiscalMonthLabelFor(row.month));
   }
-  return FiscalDataAvailability(yearsWithData: years, currentYearMonthsWithData: currentYearMonths);
+  return FiscalDataAvailability(yearsWithData: years, currentFiscalYear: currentFy, monthsWithDataByYear: monthsByYear);
 });
