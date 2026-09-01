@@ -99,8 +99,26 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return labels[date.month - 1];
   }
 
-  int _effectiveFiscalYear(GlobalFilters filters) =>
-      filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+  /// 2026-09-01, Craig: "if I filter on August then it must filter on and
+  /// display and sum all transactions for all of the augusts not just the
+  /// last one" — reported against Sales Analysis/Quote Analysis/Sales Order
+  /// Analysis but explicitly named Performance too. This screen used to
+  /// default straight to the current fiscal year the moment Year was unset,
+  /// even with a Month filter active on its own — same class of bug as
+  /// document_analysis_view.dart's `_effectiveFiscalYear` (see that file's
+  /// own doc comment on the fix), fixed the same way: only default to the
+  /// current fiscal year when NEITHER Year nor Month is set at all. A Month
+  /// filter on its own now returns null here, so `fetchDimensionPerformance`
+  /// (which already treats a null `fiscalYear` as "every fiscal year",
+  /// unlike this screen's old always-current-year default) can return one
+  /// row per entity PER FISCAL YEAR that has data for that month — `_load`
+  /// below collapses those into a single merged row per entity when that
+  /// happens (see `_mergeAcrossYears`'s own doc comment).
+  int? _effectiveFiscalYear(GlobalFilters filters) {
+    if (filters.fiscalYear != null) return filters.fiscalYear;
+    if (filters.fiscalMonth != null) return null;
+    return fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+  }
 
   String _effectiveFiscalMonth(GlobalFilters filters) => filters.fiscalMonth ?? _currentFiscalMonthLabel(DateTime.now());
 
@@ -136,9 +154,72 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
           ),
       ref.read(referenceDataRepositoryProvider).namesFor(widget.dimension),
     ]);
-    final rows = results[0] as List<DimensionPerformance>;
-    debugPrint('[PerformanceScreen] _load() completed — ${rows.length} row(s) returned');
+    final rawRows = results[0] as List<DimensionPerformance>;
+    // effectiveYear == null means the query above wasn't restricted to one
+    // fiscal year, so `rawRows` can hold more than one row per entity (one
+    // per fiscal year that has data for `effectiveMonth`) — merge before
+    // this reaches _buildTable/_totalsRow/_buildExportData, all three of
+    // which assume exactly one row per entity. When effectiveYear IS set,
+    // this is a no-op (every entity already has at most one row) and
+    // returns rawRows completely unchanged, so the normal single-period
+    // case can never regress from this change.
+    final rows = effectiveYear == null ? _mergeAcrossYears(rawRows) : rawRows;
+    debugPrint('[PerformanceScreen] _load() completed — ${rawRows.length} raw row(s), ${rows.length} after merge');
     return _PerformanceData(rows: rows, names: results[1] as Map<String, String>);
+  }
+
+  /// Collapses possibly-several-per-entity rows (one per fiscal year that
+  /// had data for the filtered month) into one row per entity, the shape
+  /// every other part of this screen assumes. The additive measures
+  /// (actualValue/actualQuantity/actualProfit/targetValue) are summed
+  /// exactly like `_totalsRow`/`_buildExportData` already sum them ACROSS
+  /// ENTITIES below — same idea, just across years instead. `targetValue`
+  /// stays null (rather than becoming a misleading 0) only when literally
+  /// every contributing row has no target set; otherwise nulls are treated
+  /// as 0 and folded into the sum. `gpPercent`/`targetPercent` are
+  /// recomputed from the summed Rand figures rather than averaged — the
+  /// same "a ratio of ratios isn't the right ratio" reasoning `_totalsRow`'s
+  /// own doc comment already gives for %Target/%GP.
+  ///
+  /// `contributionPercent` is recomputed too, as this entity's merged
+  /// actualValue divided by every merged entity's actualValue summed
+  /// together — the best available definition of "this entity's share"
+  /// once a single row no longer means "share of one specific period's
+  /// company total." Flagged here because it's the one figure with real
+  /// room for a different, equally defensible definition (e.g. an average
+  /// of each year's own contribution) — worth Craig's eyes if the %
+  /// Contribution total row doesn't land where he expects with a bare Month
+  /// filter active.
+  List<DimensionPerformance> _mergeAcrossYears(List<DimensionPerformance> rawRows) {
+    final byEntity = <String, List<DimensionPerformance>>{};
+    for (final row in rawRows) {
+      byEntity.putIfAbsent(row.entityCode, () => []).add(row);
+    }
+    final grandTotalValue = rawRows.fold<num>(0, (sum, r) => sum + r.actualValue);
+    return byEntity.entries.map((entry) {
+      final entityRows = entry.value;
+      final value = entityRows.fold<num>(0, (sum, r) => sum + r.actualValue);
+      final quantity = entityRows.fold<num>(0, (sum, r) => sum + r.actualQuantity);
+      final profit = entityRows.fold<num>(0, (sum, r) => sum + r.actualProfit);
+      final hasAnyTarget = entityRows.any((r) => r.targetValue != null);
+      final target = hasAnyTarget ? entityRows.fold<num>(0, (sum, r) => sum + (r.targetValue ?? 0)) : null;
+      return DimensionPerformance(
+        dimension: entityRows.first.dimension,
+        entityCode: entry.key,
+        // Not displayed or exported anywhere on this screen — kept as the
+        // most recent contributing year purely so this remains a real,
+        // meaningful value rather than an arbitrary placeholder.
+        fiscalYear: entityRows.map((r) => r.fiscalYear).reduce((a, b) => a > b ? a : b),
+        fiscalMonth: entityRows.first.fiscalMonth,
+        actualValue: value,
+        actualQuantity: quantity,
+        actualProfit: profit,
+        gpPercent: value == 0 ? 0 : (profit / value) * 100,
+        targetValue: target,
+        targetPercent: (target == null || target == 0) ? null : (value / target) * 100,
+        contributionPercent: grandTotalValue == 0 ? null : (value / grandTotalValue) * 100,
+      );
+    }).toList();
   }
 
   void _refetch() {

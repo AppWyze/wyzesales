@@ -133,12 +133,38 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     widget.onExportReady?.call(_buildExportData);
   }
 
+  /// 2026-09-01, Craig: "if I filter on August then it must filter on and
+  /// display and sum all transactions for all of the augusts not just the
+  /// last one." Every call site here used to pass `filters.fiscalYear ??
+  /// fiscalYearFor(DateTime.now(), ...)` straight into `fetchSalesDocumentsPage`/
+  /// `fetchSalesDocumentsTotals` — meaning a Month filter with NO Year filter
+  /// active silently got narrowed to the current fiscal year anyway, since
+  /// `fn_sales_documents_page`/`_totals` (schema/012) already treat a null
+  /// `p_fiscal_year` as "no year restriction" (`p_fiscal_year is null or
+  /// v.fiscal_year = p_fiscal_year`) — the SQL side was always correct, the
+  /// bug was purely this Dart-side default defeating it before the query
+  /// ever saw a null.
+  ///
+  /// Fixed by only defaulting to the current fiscal year when NEITHER Year
+  /// NOR Month is set at all (a bare, no-filters landing view still shows
+  /// "this year" rather than the client's entire multi-year history by
+  /// default — nobody asked for that to change, and it's the same sane
+  /// default every one of these screens has always opened to). The moment a
+  /// Month filter is set on its own, this returns null — no year
+  /// restriction — so the query sums every fiscal year's rows for that one
+  /// calendar month, exactly as Craig described.
+  int? _effectiveFiscalYear(GlobalFilters filters, int startMonth) {
+    if (filters.fiscalYear != null) return filters.fiscalYear;
+    if (filters.fiscalMonth != null) return null;
+    return fiscalYearFor(DateTime.now(), startMonth: startMonth);
+  }
+
   Future<List<SalesDocument>> _loadPage() {
     final filters = ref.read(globalFiltersProvider);
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     return ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: startMonth),
+          fiscalYear: _effectiveFiscalYear(filters, startMonth),
           fiscalMonth: filters.fiscalMonth,
           categoryCode: filters.category?.code,
           itemCode: filters.item?.code,
@@ -159,7 +185,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     try {
       final totals = await ref.read(salesRepositoryProvider).fetchSalesDocumentsTotals(
             documentKinds: widget.documentKinds,
-            fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: startMonth),
+            fiscalYear: _effectiveFiscalYear(filters, startMonth),
             fiscalMonth: filters.fiscalMonth,
             categoryCode: filters.category?.code,
             itemCode: filters.item?.code,
@@ -335,7 +361,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final allRows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: startMonth),
+          fiscalYear: _effectiveFiscalYear(filters, startMonth),
           fiscalMonth: filters.fiscalMonth,
           categoryCode: filters.category?.code,
           itemCode: filters.item?.code,
