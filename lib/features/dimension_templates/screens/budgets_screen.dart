@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import '../../../core/app_providers.dart';
 import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
@@ -12,6 +14,40 @@ import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
 import '../../../shared/widgets/responsive_data_table.dart';
+
+/// 2026-09-01, Craig, looking at a screenshot of this exact screen: "The
+/// Sales Budget input value is not formatted to 591,080." Every other
+/// number in the app already gets comma-grouped thousands via
+/// formatRand/formatQuantity (formatters.dart) — this TextField was the one
+/// place displaying a raw editable number (a plain `keyboardType:
+/// TextInputType.number` field with no formatter at all), because it's the
+/// one live-editable numeric input in the app rather than a read-only
+/// Text/DataCell. Re-formats to "591,080" on every keystroke as the admin
+/// types; digits are stripped back out again before parsing/saving
+/// (`_MonthTableState._save`), so what's actually persisted is still the
+/// plain numeric value budget_figures.budget_value always was.
+///
+/// Deliberately simple rather than cursor-position-preserving: always
+/// re-collapses to the digits typed so far and places the cursor at the
+/// end. A budget figure is typed once, start to finish, in one sitting —
+/// there's no realistic case here of editing in the middle of an existing
+/// number the way there might be in a general-purpose form field — so the
+/// simpler implementation was not worth trading against a much fussier
+/// mid-string-edit-safe version for a field nobody edits that way.
+class _ThousandsInputFormatter extends TextInputFormatter {
+  static final RegExp _nonDigits = RegExp(r'[^\d]');
+  static final NumberFormat _format = NumberFormat.decimalPattern('en_US');
+
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = newValue.text.replaceAll(_nonDigits, '');
+    if (digits.isEmpty) {
+      return const TextEditingValue(text: '');
+    }
+    final formatted = _format.format(int.parse(digits));
+    return TextEditingValue(text: formatted, selection: TextSelection.collapsed(offset: formatted.length));
+  }
+}
 
 class _BudgetEntityData {
   final List<CodeName> entities;
@@ -280,7 +316,10 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     _months = fiscalMonthOrderFor(startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
     _controllers = {
       for (final month in _months)
-        month: TextEditingController(text: (widget.data.budget[month] ?? 0).toStringAsFixed(0)),
+        // Comma-grouped from the start (e.g. "591,080") to match what
+        // _ThousandsInputFormatter keeps it as on every subsequent keystroke
+        // — see that class's own doc comment.
+        month: TextEditingController(text: _ThousandsInputFormatter._format.format(widget.data.budget[month] ?? 0)),
     };
   }
 
@@ -295,7 +334,11 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   Future<void> _save(String month) async {
     final clientId = widget.clientId;
     if (clientId == null) return;
-    final parsed = num.tryParse(_controllers[month]!.text);
+    // _ThousandsInputFormatter keeps this field's text comma-grouped (e.g.
+    // "591,080") — strip that back out before parsing, since budget_figures
+    // itself still just stores the plain numeric value.
+    final digitsOnly = _controllers[month]!.text.replaceAll(RegExp(r'[^\d]'), '');
+    final parsed = digitsOnly.isEmpty ? 0 : num.tryParse(digitsOnly);
     if (parsed == null) return;
     await ref.read(budgetRepositoryProvider).setBudgetValue(
           clientId: clientId,
@@ -352,6 +395,14 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
                       child: TextField(
                         controller: _controllers[month],
                         keyboardType: TextInputType.number,
+                        // Right-aligned to match the read-only Seasonal
+                        // Forecast column beside it (Craig, 2026-09-01,
+                        // "can you right justify these values as well") —
+                        // DataTable's `numeric: true` column setting only
+                        // right-aligns a plain Text cell automatically, not
+                        // a TextField, so this needed setting explicitly.
+                        textAlign: TextAlign.right,
+                        inputFormatters: [_ThousandsInputFormatter()],
                         decoration: const InputDecoration(isDense: true, prefixText: 'R '),
                         onSubmitted: (_) => _save(month),
                       ),

@@ -387,12 +387,14 @@ class _ClientsTabState extends ConsumerState<_ClientsTab> {
 
     return Row(
       children: [
-        _StatCard(value: '${clients.length}', label: 'Total clients', isDark: isDark),
+        // 2026-09-01, Craig: thousands separators must apply to every
+        // number in the app — these counts were interpolated raw.
+        _StatCard(value: formatQuantity(clients.length), label: 'Total clients', isDark: isDark),
         const SizedBox(width: 12),
-        _StatCard(value: '$active', label: 'Active licenses', isDark: isDark, color: AppColors.positive),
+        _StatCard(value: formatQuantity(active), label: 'Active licenses', isDark: isDark, color: AppColors.positive),
         const SizedBox(width: 12),
         _StatCard(
-          value: '$expiring',
+          value: formatQuantity(expiring),
           label: 'Expiring in 30 days',
           isDark: isDark,
           color: expiring > 0 ? AppColors.caution : null,

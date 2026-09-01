@@ -1332,9 +1332,11 @@ class _LicenseTabState extends ConsumerState<_LicenseTab> {
       children: [
         Expanded(
           child: _statCard(
-            '$usedSeats',
+            // 2026-09-01, Craig: thousands separators must apply to every
+            // number in the app — this count was interpolated raw.
+            formatQuantity(usedSeats),
             'Users used',
-            'of ${license.maxUsers} licensed',
+            'of ${formatQuantity(license.maxUsers)} licensed',
             userPct,
             userPct >= 1.0 ? AppColors.caution : AppColors.teal,
             isDark,
@@ -1402,10 +1404,13 @@ class _LicenseTabState extends ConsumerState<_LicenseTab> {
               ),
               const SizedBox(height: 10),
               if (plan != null) ...[
-                _priceRow('${plan.name} base plan (${plan.baseUsers} users)', plan.basePrice * 12, isDark),
+                // 2026-09-01, Craig: thousands separators must apply to
+                // every number in the app — these counts were interpolated
+                // raw.
+                _priceRow('${plan.name} base plan (${formatQuantity(plan.baseUsers)} users)', plan.basePrice * 12, isDark),
                 if (license.additionalUsers > 0)
                   _priceRow(
-                    '${license.additionalUsers} additional user${license.additionalUsers > 1 ? 's' : ''} × ${formatRand(plan.pricePerAdditionalUser)}/mo',
+                    '${formatQuantity(license.additionalUsers)} additional user${license.additionalUsers > 1 ? 's' : ''} × ${formatRand(plan.pricePerAdditionalUser)}/mo',
                     license.additionalUsers * plan.pricePerAdditionalUser * 12,
                     isDark,
                   ),

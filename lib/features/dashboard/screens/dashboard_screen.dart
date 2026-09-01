@@ -796,10 +796,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         label: 'Quote → Order Conversion',
                         mtdValue: formatPercent(conversionMtd),
                         mtdColor: onSurface,
-                        mtdSubtitle: '${kpis.quoteCountMtd} quotes → ${kpis.orderCountMtd} orders',
+                        // 2026-09-01, Craig: "format all numbers with the
+                        // thousand [separator]... This must apply to all
+                        // numbers in the application" — these counts were
+                        // interpolated raw; wrapped in formatQuantity like
+                        // every other number in the app already is.
+                        mtdSubtitle: '${formatQuantity(kpis.quoteCountMtd)} quotes → ${formatQuantity(kpis.orderCountMtd)} orders',
                         ytdValue: formatPercent(conversionYtd),
                         ytdColor: onSurface,
-                        ytdSubtitle: '${kpis.quoteCountYtd} quotes → ${kpis.orderCountYtd} orders',
+                        ytdSubtitle: '${formatQuantity(kpis.quoteCountYtd)} quotes → ${formatQuantity(kpis.orderCountYtd)} orders',
                       ),
                       ToggleStatCard(
                         label: 'Top 5 Customer Concentration',
@@ -808,17 +813,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         initialPeriod: StatPeriod.ytd,
                         mtdValue: formatPercent(concentrationMtd),
                         mtdColor: concentrationColor(concentrationMtd),
-                        mtdSubtitle: 'of MTD revenue, top ${kpis.top5CustomerCountMtd} accounts',
+                        mtdSubtitle: 'of MTD revenue, top ${formatQuantity(kpis.top5CustomerCountMtd)} accounts',
                         ytdValue: formatPercent(concentrationYtd),
                         ytdColor: concentrationColor(concentrationYtd),
-                        ytdSubtitle: 'of YTD revenue, top ${kpis.top5CustomerCountYtd} accounts',
+                        ytdSubtitle: 'of YTD revenue, top ${formatQuantity(kpis.top5CustomerCountYtd)} accounts',
                       ),
                       ToggleStatCard(
                         label: 'Rep Target Attainment',
-                        mtdValue: kpis.repsTotalMtd == 0 ? '—' : '${kpis.repsAtTargetMtd} of ${kpis.repsTotalMtd}',
+                        mtdValue: kpis.repsTotalMtd == 0 ? '—' : '${formatQuantity(kpis.repsAtTargetMtd)} of ${formatQuantity(kpis.repsTotalMtd)}',
                         mtdColor: repAttainmentColor(kpis.repsAtTargetMtd, kpis.repsTotalMtd),
                         mtdSubtitle: kpis.repsTotalMtd == 0 ? 'no rep targets set for this month' : 'reps at/above target (MTD)',
-                        ytdValue: kpis.repsTotalYtd == 0 ? '—' : '${kpis.repsAtTargetYtd} of ${kpis.repsTotalYtd}',
+                        ytdValue: kpis.repsTotalYtd == 0 ? '—' : '${formatQuantity(kpis.repsAtTargetYtd)} of ${formatQuantity(kpis.repsTotalYtd)}',
                         ytdColor: repAttainmentColor(kpis.repsAtTargetYtd, kpis.repsTotalYtd),
                         ytdSubtitle: kpis.repsTotalYtd == 0 ? 'no rep targets set this year' : 'reps at/above target (YTD)',
                       ),
