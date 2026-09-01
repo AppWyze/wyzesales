@@ -124,30 +124,36 @@ final fiscalYearHistoryYearsProvider = FutureProvider<int>((ref) {
 /// in the window (2023/2024 in Craig's example — this client's data simply
 /// doesn't go back that far) never appears in `yearsWithData`.
 ///
-/// 2026-09-01 correction: the Month picker's greying originally checked ONLY
-/// the current fiscal year's months (`currentYearMonthsWithData`, since
-/// removed) regardless of whether a Year filter was active — Craig caught
-/// that this meant a month like September stayed greyed even with Year 2025
-/// selected (which has real September data), because the check never
-/// actually looked at 2025. `monthsWithDataByYear` fixes this by keying
-/// month-availability per fiscal year; global_filter_bar.dart now checks the
-/// currently-selected Year filter's own months when one is active, falling
-/// back to `currentFiscalYear`'s months only when no Year filter is set —
-/// which is when "hasn't happened yet" is the only sensible reading of
-/// picking a bare month with no year attached.
+/// 2026-09-01 correction #1: the Month picker's greying originally checked
+/// ONLY the current fiscal year's months regardless of whether a Year filter
+/// was active — Craig caught that this meant a month like September stayed
+/// greyed even with Year 2025 selected (which has real September data),
+/// because the check never actually looked at 2025. `monthsWithDataByYear`
+/// keys month-availability per fiscal year so a selected Year's own months
+/// can be checked instead.
+///
+/// 2026-09-01 correction #2, same day: fixing #1 by falling back to the
+/// CURRENT fiscal year's months when no Year filter is active was still
+/// wrong — Craig: "If I only select September then it must not be greyed
+/// out and it must filter on and show data for all of the past septembers."
+/// Selecting a bare month with no Year attached means "this calendar month,
+/// across every year in scope" (matching how the Month filter actually
+/// behaves everywhere else in the app — see global_filter_bar.dart's own
+/// class doc comment), not "this calendar month in the current year only" —
+/// so it should grey out only when NO year in the whole window has that
+/// month's data, not just when the current year doesn't. global_filter_bar
+/// .dart now unions `monthsWithDataByYear` across every year when no Year
+/// filter is set, and checks just the selected year's own months when one
+/// is. (No `currentFiscalYear` field needed here any more — that was only
+/// ever used for the now-removed "current year" fallback.)
 ///
 /// Plain (non-autoDispose) FutureProvider, same convention as
 /// lastDataUpdateProvider/fiscalYearStartMonthProvider above — this changes
 /// at most once a day (when the extract runs), so one shared cached read is
 /// right rather than every screen or filter-bar open refetching it.
 class FiscalDataAvailability {
-  const FiscalDataAvailability({
-    required this.yearsWithData,
-    required this.currentFiscalYear,
-    required this.monthsWithDataByYear,
-  });
+  const FiscalDataAvailability({required this.yearsWithData, required this.monthsWithDataByYear});
   final Set<int> yearsWithData;
-  final int currentFiscalYear;
   final Map<int, Set<String>> monthsWithDataByYear;
 }
 
@@ -165,5 +171,5 @@ final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability
     years.add(row.fiscalYear);
     monthsByYear.putIfAbsent(row.fiscalYear, () => {}).add(fiscalMonthLabelFor(row.month));
   }
-  return FiscalDataAvailability(yearsWithData: years, currentFiscalYear: currentFy, monthsWithDataByYear: monthsByYear);
+  return FiscalDataAvailability(yearsWithData: years, monthsWithDataByYear: monthsByYear);
 });

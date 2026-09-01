@@ -135,20 +135,30 @@ class GlobalFilterBar extends ConsumerWidget {
     if (key == '_month') {
       // 2026-09-01, Craig: "2027 has no data for Sept forward therefore
       // these should be greyed out" — grey out any calendar month with no
-      // rows on record for the RELEVANT fiscal year: whichever Year filter
-      // is currently active, if one is, since a month like September
-      // genuinely does have data for most past years even while the
-      // current year's September is still empty; falling back to the
-      // current (most recent) fiscal year only when no Year filter is set,
-      // since "hasn't happened yet" is only a meaningful reading of a bare
-      // month with no year attached. (Corrected from an earlier version
-      // that checked the current fiscal year unconditionally, which left
-      // September greyed even with Year 2025 selected — caught by Craig
-      // testing the exact Year 2027 + Month combination this now handles.)
-      final referenceYear = filters.fiscalYear ?? availability?.currentFiscalYear;
-      final monthsWithData = (availability == null || referenceYear == null)
+      // rows on record for the RELEVANT scope. With a Year filter active,
+      // "relevant" means that year specifically (Year 2027 + September ->
+      // checked against FY2027 alone, correctly greyed; Year 2025 +
+      // September -> checked against FY2025 alone). With NO Year filter
+      // active, Craig: "If I only select September then it must not be
+      // greyed out and it must filter on and show data for all of the past
+      // septembers" — i.e. a bare month applies across every fiscal year in
+      // the window (matching how the Month filter actually behaves
+      // everywhere else — see class doc comment above), so it's only grey
+      // when NOT ONE year in the whole window has that month's data.
+      //
+      // (This replaces two earlier, both wrong, attempts: checking only the
+      // current fiscal year unconditionally left September greyed even with
+      // Year 2025 selected; falling back to "current fiscal year only" when
+      // no Year was selected still greyed a plain "September" pick even
+      // though older years had real data for it. See
+      // fiscalYearDataAvailabilityProvider's doc comment for the full
+      // history.)
+      final referenceYear = filters.fiscalYear;
+      final monthsWithData = availability == null
           ? null
-          : (availability.monthsWithDataByYear[referenceYear] ?? const <String>{});
+          : referenceYear != null
+              ? (availability.monthsWithDataByYear[referenceYear] ?? const <String>{})
+              : availability.monthsWithDataByYear.values.expand((months) => months).toSet();
       final month = await _pickFromList<String>(
         context,
         title: 'Month',
