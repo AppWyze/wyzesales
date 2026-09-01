@@ -133,7 +133,12 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
   /// a "vs prior FY" variance, alternating per `_fiscalYears`.
   num? _valueForColumn(_YtdRow row, int columnIndex) {
     var position = 1;
-    for (var i = 0; i < _fiscalYears.length; i++) {
+    // Newest fiscal year first (2026-09-01, Craig: "the user having to
+    // scroll to right to view the most recent data") — walked newest to
+    // oldest so column positions match _buildTable's new left-to-right
+    // order; "vs" still compares to _fiscalYears[i-1], the chronologically
+    // prior year, not whichever column sits to its left.
+    for (var i = _fiscalYears.length - 1; i >= 0; i--) {
       if (columnIndex == position) return row.yearValues[_fiscalYears[i]];
       position++;
       if (i > 0) {
@@ -186,8 +191,11 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
 
     num yearTotal(int year) => ytdRows.fold<num>(0, (sum, row) => sum + (row.yearValues[year] ?? 0));
 
+    // Newest fiscal year first — matches the on-screen table (see
+    // _valueForColumn's doc comment) so the export lines up with what's
+    // displayed.
     final totalsRow = <String>['Total'];
-    for (var i = 0; i < _fiscalYears.length; i++) {
+    for (var i = _fiscalYears.length - 1; i >= 0; i--) {
       final current = yearTotal(_fiscalYears[i]);
       totalsRow.add(formatRand(current));
       if (i > 0) totalsRow.add(_varianceLabel(current, yearTotal(_fiscalYears[i - 1])));
@@ -197,7 +205,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     return ExportData(
       headers: [
         'Month',
-        for (var i = 0; i < _fiscalYears.length; i++) ...[
+        for (var i = _fiscalYears.length - 1; i >= 0; i--) ...[
           'FY${_fiscalYears[i]}',
           if (i > 0) 'vs FY${_fiscalYears[i - 1]}',
         ],
@@ -207,7 +215,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
         for (final row in ytdRows)
           [
             row.monthLabel,
-            for (var i = 0; i < _fiscalYears.length; i++) ...[
+            for (var i = _fiscalYears.length - 1; i >= 0; i--) ...[
               formatRand(row.yearValues[_fiscalYears[i]]),
               if (i > 0) _varianceLabel(row.yearValues[_fiscalYears[i]], row.yearValues[_fiscalYears[i - 1]]),
             ],
@@ -235,7 +243,8 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
       pinnedRowCount: 1,
       columns: [
         DataColumn(label: const Text('Month'), onSort: _onSort),
-        for (var i = 0; i < _fiscalYears.length; i++) ...[
+        // Newest fiscal year first — see _valueForColumn's doc comment.
+        for (var i = _fiscalYears.length - 1; i >= 0; i--) ...[
           DataColumn(label: Text('FY${_fiscalYears[i]}'), numeric: true, onSort: _onSort),
           if (i > 0) DataColumn(label: Text('vs FY${_fiscalYears[i - 1]}'), numeric: true, onSort: _onSort),
         ],
@@ -244,7 +253,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
         _totalsRow(context, ytdRows),
         ...ytdRows.map((row) {
           final cells = <DataCell>[DataCell(Text(row.monthLabel))];
-          for (var i = 0; i < _fiscalYears.length; i++) {
+          for (var i = _fiscalYears.length - 1; i >= 0; i--) {
             final current = row.yearValues[_fiscalYears[i]];
             cells.add(DataCell(Text(formatRand(current))));
             if (i > 0) {
@@ -276,7 +285,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     num yearTotal(int year) => ytdRows.fold<num>(0, (sum, row) => sum + (row.yearValues[year] ?? 0));
     const style = TextStyle(fontWeight: FontWeight.bold);
     final cells = <DataCell>[const DataCell(Text('Total', style: style))];
-    for (var i = 0; i < _fiscalYears.length; i++) {
+    for (var i = _fiscalYears.length - 1; i >= 0; i--) {
       final current = yearTotal(_fiscalYears[i]);
       cells.add(DataCell(Text(formatRand(current), style: style)));
       if (i > 0) {

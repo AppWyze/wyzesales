@@ -109,6 +109,10 @@ class GlobalFilterBar extends ConsumerWidget {
     // it's still loading, matching fiscal.dart's pre-feature default exactly
     // (see fiscalMonthOrderFor's doc comment).
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    // null (still loading, or the query hasn't resolved yet) means "don't
+    // grey anything" — see _pickFromList's isEnabled param — rather than
+    // blocking the picker on a check that hasn't finished.
+    final availability = ref.read(fiscalYearDataAvailabilityProvider).valueOrNull;
     if (key == '_year') {
       final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
       final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
@@ -120,12 +124,29 @@ class GlobalFilterBar extends ConsumerWidget {
         // presented (current year at the top).
         options: fiscalYearWindow(currentFy, historyYears).reversed.toList(),
         labelOf: (y) => 'FY$y',
+        // 2026-09-01, Craig: "there is no data for 2023 and 2024" — grey out
+        // and disable any year in the window with zero rows on record (see
+        // fiscalYearDataAvailabilityProvider's doc comment).
+        isEnabled: availability == null ? null : (y) => availability.yearsWithData.contains(y),
       );
       if (year != null) notifier.setFiscalYear(year);
       return;
     }
     if (key == '_month') {
-      final month = await _pickFromList<String>(context, title: 'Month', options: fiscalMonthOrderFor(startMonth: startMonth));
+      final month = await _pickFromList<String>(
+        context,
+        title: 'Month',
+        options: fiscalMonthOrderFor(startMonth: startMonth),
+        // 2026-09-01, Craig: "2027 has no data for Sept forward therefore
+        // these should be greyed out" — grey out any calendar month the
+        // CURRENT fiscal year has no rows for yet (hasn't happened, or
+        // hasn't loaded). This is checked against the current fiscal year
+        // specifically, not whichever Year filter (if any) happens to be
+        // active — Month is one flat list of calendar months shared across
+        // every fiscal year, and "hasn't happened yet" is only a meaningful
+        // idea for the year still in progress.
+        isEnabled: availability == null ? null : (m) => availability.currentYearMonthsWithData.contains(m),
+      );
       if (month != null) notifier.setFiscalMonth(month);
       return;
     }
@@ -140,11 +161,18 @@ class GlobalFilterBar extends ConsumerWidget {
   }
 }
 
+/// `isEnabled` (2026-09-01, Craig: "apply the no data rule shaded grey") —
+/// when provided, an option it returns false for is shown greyed out and
+/// can't be tapped, but stays in the list rather than being hidden, so it's
+/// still obvious that period exists and simply has no data yet. Leave null
+/// (the dimension-entity and Document pickers don't use this) to enable
+/// every option, same as before this param existed.
 Future<T?> _pickFromList<T>(
   BuildContext context, {
   required String title,
   required List<T> options,
   String Function(T)? labelOf,
+  bool Function(T)? isEnabled,
 }) {
   return showDialog<T>(
     context: context,
@@ -153,8 +181,11 @@ Future<T?> _pickFromList<T>(
       children: [
         for (final option in options)
           SimpleDialogOption(
-            onPressed: () => Navigator.of(context).pop(option),
-            child: Text(labelOf == null ? option.toString() : labelOf(option)),
+            onPressed: (isEnabled == null || isEnabled(option)) ? () => Navigator.of(context).pop(option) : null,
+            child: Text(
+              labelOf == null ? option.toString() : labelOf(option),
+              style: (isEnabled == null || isEnabled(option)) ? null : TextStyle(color: Theme.of(context).disabledColor),
+            ),
           ),
       ],
     ),

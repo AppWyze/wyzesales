@@ -91,8 +91,12 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   // _buildTable lays them out in below. Defaults to the current FY,
   // descending — this table's original default before column-click sorting
   // existed (2026-08-26, Craig: "sort ascending or descending order by
-  // clicking on a column header").
-  int _sortColumnIndex = 4;
+  // clicking on a column header"). Column 1 specifically because the fiscal-
+  // year columns are now newest-first (2026-09-01, Craig: "the user having
+  // to scroll to right to view the most recent data") — the current FY's
+  // value column is always the very first column after the dimension name,
+  // regardless of whether the history window is 3 or 5 years.
+  int _sortColumnIndex = 1;
   bool _sortAscending = false;
 
   // True from initState/didUpdateWidget until the next _buildTable call
@@ -214,14 +218,20 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
 
   _ColumnPositions _columnPositions(_SalesByData data, List<DateTime> chronological) {
     var position = 1;
-    var currentFYValue = position;
+    int? currentFYValue;
     int? currentFYVariance;
-    for (var i = 0; i < data.fiscalYears.length; i++) {
-      currentFYValue = position;
+    // Newest fiscal year first (2026-09-01, Craig: "the user having to
+    // scroll to right to view the most recent data") — walked newest to
+    // oldest so the current FY's value/variance columns are always captured
+    // by the `??=` below on the FIRST iteration only, landing them at
+    // positions 1/2 regardless of how many years the history window holds.
+    // Each "vs" variance still compares to fiscalYears[i-1] — the
+    // chronologically PRIOR year — not whichever column sits to its left.
+    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
+      currentFYValue ??= position;
       position++;
-      currentFYVariance = null;
       if (i > 0) {
-        currentFYVariance = position;
+        currentFYVariance ??= position;
         position++;
       }
     }
@@ -237,7 +247,11 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       }
     }
     return _ColumnPositions(
-      currentFYValue: currentFYValue,
+      // data.fiscalYears is never empty in practice (historyYears is always
+      // 3 or 5), so the loop above always sets this on its first iteration —
+      // the `??` fallback is just so the type checker doesn't need
+      // currentFYValue itself to be nullable.
+      currentFYValue: currentFYValue ?? 1,
       currentFYVariance: currentFYVariance,
       latestMonthValue: latestMonthValue,
       latestMonthVariance: latestMonthVariance,
@@ -253,7 +267,11 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   /// Rand amounts, not percentages (see _resolveInitialRank's doc comment).
   List<num? Function(String code)> _columnValueExtractors(_SalesByData data, List<DateTime> chronological) {
     final extractors = <num? Function(String code)>[];
-    for (var i = 0; i < data.fiscalYears.length; i++) {
+    // Newest fiscal year first — see _columnPositions' doc comment. Walking
+    // i from the end down to 0 makes the order extractors are appended in
+    // match the new left-to-right column order exactly; "vs" still compares
+    // to fiscalYears[i-1], the chronologically prior year.
+    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
       final year = data.fiscalYears[i];
       extractors.add((code) => data.yearTotals[code]?[year]);
       if (i > 0) {
@@ -452,7 +470,8 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       pinnedRowCount: 1,
       columns: [
         DataColumn(label: Text(widget.dimension.label), onSort: _onSort),
-        for (var i = 0; i < data.fiscalYears.length; i++) ...[
+        // Newest fiscal year first — see _columnPositions' doc comment.
+        for (var i = data.fiscalYears.length - 1; i >= 0; i--) ...[
           DataColumn(label: Text('FY${data.fiscalYears[i]}'), numeric: true, onSort: _onSort),
           if (i > 0) DataColumn(label: Text('vs FY${data.fiscalYears[i - 1]}'), numeric: true, onSort: _onSort),
         ],
@@ -465,7 +484,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
         _totalsRow(context, data, chronological),
         ...entities.map((code) {
           final cells = <DataCell>[DataCell(Text(data.names[code] ?? code))];
-          for (var i = 0; i < data.fiscalYears.length; i++) {
+          for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
             final current = data.yearTotals[code]?[data.fiscalYears[i]];
             cells.add(DataCell(Text(formatRand(current))));
             if (i > 0) {
@@ -511,7 +530,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
 
     const style = TextStyle(fontWeight: FontWeight.bold);
     final cells = <DataCell>[const DataCell(Text('Total', style: style))];
-    for (var i = 0; i < data.fiscalYears.length; i++) {
+    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
       final current = yearTotal(data.fiscalYears[i]);
       cells.add(DataCell(Text(formatRand(current), style: style)));
       if (i > 0) {
@@ -570,7 +589,10 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
 
     final monthFormat = DateFormat('MMM yy');
     final headers = <String>[widget.dimension.label];
-    for (var i = 0; i < data.fiscalYears.length; i++) {
+    // Newest fiscal year first — matches the on-screen table (see
+    // _columnPositions' doc comment) so the export lines up with what's
+    // displayed.
+    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
       headers.add('FY${data.fiscalYears[i]}');
       if (i > 0) headers.add('vs FY${data.fiscalYears[i - 1]}');
     }
@@ -583,7 +605,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     num monthTotal(DateTime month) => data.entityCodes.fold<num>(0, (sum, code) => sum + (data.monthTotals[code]?[month] ?? 0));
 
     final totalsRow = <String>['Total'];
-    for (var i = 0; i < data.fiscalYears.length; i++) {
+    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
       final current = yearTotal(data.fiscalYears[i]);
       totalsRow.add(formatRand(current));
       if (i > 0) {
@@ -603,7 +625,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     final rows = <List<String>>[totalsRow];
     for (final code in entities) {
       final cells = <String>[data.names[code] ?? code];
-      for (var i = 0; i < data.fiscalYears.length; i++) {
+      for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
         final current = data.yearTotals[code]?[data.fiscalYears[i]];
         cells.add(formatRand(current));
         if (i > 0) {

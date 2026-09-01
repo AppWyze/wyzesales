@@ -6,6 +6,7 @@ import '../data/repositories/platform_admin_repository.dart';
 import '../data/repositories/reference_data_repository.dart';
 import '../data/repositories/sales_repository.dart';
 import '../data/repositories/settings_repository.dart';
+import 'constants/fiscal.dart';
 import 'supabase/supabase_config.dart';
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) => AuthRepository());
@@ -103,4 +104,55 @@ final fiscalYearStartMonthProvider = FutureProvider<int>((ref) {
 /// immediately.
 final fiscalYearHistoryYearsProvider = FutureProvider<int>((ref) {
   return ref.watch(settingsRepositoryProvider).getDataHistoryYears();
+});
+
+/// Which fiscal years (within the client's own history window) actually
+/// have any sales data on record, and which calendar months of the CURRENT
+/// (most recent, possibly still in-progress) fiscal year do — 2026-09-01,
+/// Craig: "Year and Month filters. Can we apply the no data rule shaded
+/// grey. E.g. 2027 has no data for Sept forward therefore these should be
+/// greyed out and there is no data for 2023 and 2024." Backs the global
+/// filter bar's Year/Month "Add filter" pickers (global_filter_bar.dart),
+/// which grey out and disable any option this doesn't list.
+///
+/// Derived from the same `fetchConsolidatedSales` company-wide monthly
+/// rollup YTD Comparative already reads, over the client's actual configured
+/// window (fiscalYearWindow(currentFy, historyYears)) — not a new query or
+/// SQL function, since that view already carries exactly the (fiscal_year,
+/// month) pairs needed and RLS already scopes it to what the signed-in user
+/// can see, same as everywhere else in the app. A fiscal year with zero rows
+/// in the window (2023/2024 in Craig's example — this client's data simply
+/// doesn't go back that far) never appears in `yearsWithData`; a calendar
+/// month of the CURRENT fiscal year that hasn't happened yet (or whose data
+/// hasn't landed yet) never appears in `currentYearMonthsWithData`. Deliberately
+/// NOT used to grey month options for a specific PAST year — the global Month
+/// filter is one flat list of calendar months, independent of any Year
+/// selection, so "this month" is graded only against the one fiscal year
+/// where "hasn't happened yet" is actually a meaningful idea.
+///
+/// Plain (non-autoDispose) FutureProvider, same convention as
+/// lastDataUpdateProvider/fiscalYearStartMonthProvider above — this changes
+/// at most once a day (when the extract runs), so one shared cached read is
+/// right rather than every screen or filter-bar open refetching it.
+class FiscalDataAvailability {
+  const FiscalDataAvailability({required this.yearsWithData, required this.currentYearMonthsWithData});
+  final Set<int> yearsWithData;
+  final Set<String> currentYearMonthsWithData;
+}
+
+final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability>((ref) async {
+  final startMonth = await ref.watch(fiscalYearStartMonthProvider.future);
+  final historyYears = await ref.watch(fiscalYearHistoryYearsProvider.future);
+  final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
+  final window = fiscalYearWindow(currentFy, historyYears);
+
+  final rows = await ref.watch(salesRepositoryProvider).fetchConsolidatedSales(fiscalYears: window);
+
+  final years = <int>{};
+  final currentYearMonths = <String>{};
+  for (final row in rows) {
+    years.add(row.fiscalYear);
+    if (row.fiscalYear == currentFy) currentYearMonths.add(fiscalMonthLabelFor(row.month));
+  }
+  return FiscalDataAvailability(yearsWithData: years, currentYearMonthsWithData: currentYearMonths);
 });

@@ -315,17 +315,19 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final byMonth = _groupByMonth(rows);
     num? valueFor(String month, int fiscalYear) => _valueFor(byMonth, month, fiscalYear);
 
-    // Progressively more prominent toward the current fiscal year — a fading
-    // neutral for every older year, info-blue for the year immediately prior,
-    // brand teal for the current one — so "this year" reads as the important
-    // line rather than all years competing equally for attention. Generated
-    // rather than a fixed 3-element list so a 5-year history window
-    // (fiscalYearHistoryYearsProvider) doesn't index past the end of it.
-    final seriesColors = List<Color>.generate(_fiscalYears.length, (i) {
-      if (i == _fiscalYears.length - 1) return AppColors.teal; // current fiscal year
-      if (i == _fiscalYears.length - 2) return AppColors.info; // immediately prior fiscal year
-      return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.35); // every older year
-    });
+    // A genuinely distinct colour per fiscal year (2026-09-01, Craig: "Line
+    // chart colours. Please can we have a separate colour for each set of
+    // data") — replaces the earlier fading-neutral scheme, which collapsed
+    // every year older than the second-to-last into the same grey and made
+    // them hard to tell apart on a 5-year window. Reuses the exact 5-colour
+    // palette SimplePieChart already uses for other multi-series breakdowns
+    // elsewhere in the app (Dashboard's Top 5 pie), so a fiscal year's colour
+    // here is visually consistent with the same idea of "distinct series"
+    // used there, and 5 is exactly the largest history window this app
+    // offers (Settings > Company, "Data history window"), so it never has to
+    // repeat a colour.
+    const seriesPalette = [AppColors.info, AppColors.positive, AppColors.teal, AppColors.accentPurple, AppColors.caution];
+    final seriesColors = List<Color>.generate(_fiscalYears.length, (i) => seriesPalette[i % seriesPalette.length]);
 
     final series = [
       for (var i = 0; i < _fiscalYears.length; i++)
