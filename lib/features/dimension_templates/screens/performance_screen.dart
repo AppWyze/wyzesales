@@ -154,7 +154,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
           ),
       ref.read(referenceDataRepositoryProvider).namesFor(widget.dimension),
     ]);
-    final rawRows = results[0] as List<DimensionPerformance>;
+    var rawRows = results[0] as List<DimensionPerformance>;
     // effectiveYear == null means the query above wasn't restricted to one
     // fiscal year, so `rawRows` can hold more than one row per entity (one
     // per fiscal year that has data for `effectiveMonth`) — merge before
@@ -163,6 +163,28 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // this is a no-op (every entity already has at most one row) and
     // returns rawRows completely unchanged, so the normal single-period
     // case can never regress from this change.
+    //
+    // 2026-09-01: `fn_dimension_performance_filtered`'s `p_fiscal_year` is a
+    // single nullable int (schema/011), not the int[] the other two
+    // filtered-RPC functions take — so a null year here genuinely means
+    // "every fiscal year with ANY data on record," not "every fiscal year
+    // in the client's configured 3/5-year history window" the way it does
+    // everywhere else in the app (Sales Analysis, Sales By, YTD Comparative,
+    // Dashboard all bound their own multi-year queries to
+    // `fiscalYearWindow`). Left unbounded, an older client's data could
+    // silently pull in far more years than the window setting promises, and
+    // — since `_mergeAcrossYears` below scales R Target by how many years
+    // it merges — an ever-growing, unbounded year count would keep
+    // inflating that scale factor too, not just the actual figures.
+    // Filtered client-side (rather than changing the SQL function's
+    // signature) since this is the only screen with the gap and a plain
+    // `.where` is a much smaller change than a new migration.
+    if (effectiveYear == null) {
+      final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+      final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
+      final window = fiscalYearWindow(currentFy, historyYears).toSet();
+      rawRows = rawRows.where((r) => window.contains(r.fiscalYear)).toList();
+    }
     final rows = effectiveYear == null ? _mergeAcrossYears(rawRows) : rawRows;
     debugPrint('[PerformanceScreen] _load() completed — ${rawRows.length} raw row(s), ${rows.length} after merge');
     return _PerformanceData(rows: rows, names: results[1] as Map<String, String>);
@@ -178,26 +200,38 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   /// ratios isn't the right ratio" reasoning `_totalsRow`'s own doc comment
   /// already gives for %Target/%GP.
   ///
-  /// `targetValue` is deliberately NOT summed across years, unlike the
-  /// actuals above — caught 2026-09-01 when Craig asked "where does it get
-  /// the R Target from" for a bare Month filter. `budget_figures`
-  /// (schema/001) has no `fiscal_year` column at all — its primary key is
-  /// `(client_id, dimension, entity_code, fiscal_month)` — so
-  /// `fn_dimension_performance_filtered`'s join to it
+  /// `targetValue` — two bugs found in this one field, same day, both
+  /// caught by Craig testing rather than found in review.
+  ///
+  /// Bug #1: `budget_figures` (schema/001) has no `fiscal_year` column at
+  /// all — its primary key is `(client_id, dimension, entity_code,
+  /// fiscal_month)` — so `fn_dimension_performance_filtered`'s join to it
   /// (`on b.entity_code = m.entity_code and b.fiscal_month = m.fiscal_month`,
   /// schema/011) returns the exact same single budget figure for every
   /// fiscal year's August row for a given entity, because there IS only one
   /// August target on record per entity, full stop — it isn't set per year.
-  /// Summing it once per matched year (the original version of this method)
-  /// silently multiplied a single real target by however many years
-  /// happened to have August data — e.g. 3 matched years made R Target show
-  /// 3x the actual budget. Fixed to take one representative value instead
-  /// (`entityRows.first.targetValue` — every contributing row already
-  /// carries the identical figure, so "first" isn't an arbitrary pick).
-  /// `targetPercent` is then the summed actual value against that single,
-  /// correct target — i.e. "how does all of August's actuals across every
-  /// year compare to the one standing August target," which is the
-  /// sensible reading given targets aren't year-specific in this app.
+  /// The original version of this method summed that identical figure once
+  /// per matched year, same as the real, genuinely-additive actuals above —
+  /// silently multiplying a single real target by however many years
+  /// happened to have August data (3 matched years made R Target show 3x
+  /// the actual budget).
+  ///
+  /// Bug #2, caught immediately after fixing #1: Craig — "the analysis now
+  /// is rubbish because it is comparing three years august sales with 1
+  /// august target inflating the % target." Taking the single unscaled
+  /// target fixed R Target's own displayed number, but left %Target
+  /// comparing an N-year SUM of actuals against a single year's worth of
+  /// target — the opposite distortion from bug #1, same root cause: R Value
+  /// and R Target were on different bases (N years vs 1) once a bare Month
+  /// filter merges several years together.
+  ///
+  /// Fixed by scaling the single target UP by `periodsCount` — the number
+  /// of fiscal years actually contributing a row for this entity (not a
+  /// fixed constant; an entity with only 2 of the window's 3 years having
+  /// August sales scales by 2, not 3) — so R Target represents "what N
+  /// Augusts were together expected to add up to," on the same N-year basis
+  /// as the now-correctly-summed R Value. %Target then compares like for
+  /// like: actual sum over N years vs target sum over the same N years.
   ///
   /// `contributionPercent` is recomputed too, as this entity's merged
   /// actualValue divided by every merged entity's actualValue summed
@@ -219,11 +253,15 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       final value = entityRows.fold<num>(0, (sum, r) => sum + r.actualValue);
       final quantity = entityRows.fold<num>(0, (sum, r) => sum + r.actualQuantity);
       final profit = entityRows.fold<num>(0, (sum, r) => sum + r.actualProfit);
-      // Not summed — see doc comment above. budget_figures carries no
-      // fiscal_year, so every contributing row already has the identical
-      // target for this entity/month; take it once rather than multiplying
-      // it by the number of matched years.
-      final target = entityRows.first.targetValue;
+      // Scaled, not summed — see doc comment above. budget_figures carries
+      // no fiscal_year, so every contributing row already has the identical
+      // single-period target; multiplying it by periodsCount puts R Target
+      // on the same N-year basis as R Value's genuine sum, rather than
+      // either repeating the same figure N times (bug #1) or leaving it at
+      // 1x against an N-year actual (bug #2).
+      final periodsCount = entityRows.length;
+      final singleTarget = entityRows.first.targetValue;
+      final target = singleTarget == null ? null : singleTarget * periodsCount;
       return DimensionPerformance(
         dimension: entityRows.first.dimension,
         entityCode: entry.key,
