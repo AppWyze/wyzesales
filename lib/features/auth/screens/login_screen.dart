@@ -110,7 +110,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       const Center(child: AppLogo(iconSize: 44, fontSize: 26)),
                       const SizedBox(height: 10),
                       Text(
-                        'Sales & Budget Analysis',
+                        // 2026-09-01, Craig: "can we change this to say
+                        // '360 degree Sales Analysis' or something like
+                        // this."
+                        '360° Sales Analysis',
                         style: Theme.of(context).textTheme.bodyMedium,
                         textAlign: TextAlign.center,
                       ),

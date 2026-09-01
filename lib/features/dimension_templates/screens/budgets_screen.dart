@@ -536,7 +536,21 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     const style = TextStyle(fontWeight: FontWeight.bold);
     return DataRow(cells: [
       const DataCell(Text('Total', style: style)),
-      DataCell(Text(formatRand(totalBudget), style: style)),
+      // Explicit Align, matching the per-month Sales Budget cell above —
+      // 2026-09-01, Craig: the Total figure sat visibly out of line with
+      // the input boxes in the column above it. `DataColumn(numeric: true)`
+      // alone right-aligns a plain Text cell by its own built-in
+      // mechanism, which doesn't land at the same pixel edge as the
+      // explicit `Align` the editable cells now use (added for the "not
+      // right aligned" fix on this same column) — two different alignment
+      // mechanisms on the same column disagreeing with each other, not
+      // fixable by tweaking just one of them. Wrapping this cell in the
+      // identical `Align` pattern puts every row in this column through
+      // the same mechanism, so they land on the same edge. The Seasonal
+      // Forecast total is left as plain Text, unaffected — that whole
+      // column has only ever used plain Text (no editable field, no mixed
+      // mechanisms), so it was never actually misaligned.
+      DataCell(Align(alignment: Alignment.centerRight, child: Text(formatRand(totalBudget), style: style))),
       DataCell(Text(formatRand(totalForecast), style: style)),
       const DataCell(Text('')),
     ]);
