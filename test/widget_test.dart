@@ -1,30 +1,29 @@
-// This is a basic Flutter widget test.
+// 2026-09-01, Craig: `flutter analyze` flagged
+// `test/widget_test.dart:16:35 • creation_with_non_type — The name 'MyApp'
+// isn't a class`. This file was the untouched default `flutter create`
+// counter-app scaffold test (unchanged since the very first commit,
+// 21c7027) — it was never adapted when the app's real root widget was
+// named `WyzeSalesApp`, and it pumps/taps a counter UI ('0', '1', a '+'
+// icon) that has never existed in this app. It was not testing WyzeSales
+// at all; it was dead boilerplate that only started erroring once
+// `MyApp` no longer existed anywhere for `flutter analyze` to resolve.
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
+// Replaced with a real, minimal smoke test: constructing `WyzeSalesApp`
+// and confirming it's a valid `Widget`. Deliberately NOT pumping it
+// through `WidgetTester` — `WyzeSalesApp` renders `appRouter`
+// (app_router.dart), whose redirect logic reads the current Supabase
+// auth session, which throws if `Supabase.initialize()` hasn't run
+// first (it normally runs in `main()`, which a widget test never calls).
+// A real render/navigation smoke test would need a Supabase test double
+// or a fake auth session set up first — worth doing as follow-up work,
+// but out of scope for just clearing this stale analyze error.
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:wyzesales/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
-
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('WyzeSalesApp can be constructed', () {
+    const app = WyzeSalesApp();
+    expect(app, isA<WyzeSalesApp>());
   });
 }

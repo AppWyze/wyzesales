@@ -145,7 +145,7 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
         actionLabel: 'Back to sign in',
         onAction: () async {
           await supabase.auth.signOut();
-          if (mounted) context.go('/login');
+          if (context.mounted) context.go('/login');
         },
       );
     }
