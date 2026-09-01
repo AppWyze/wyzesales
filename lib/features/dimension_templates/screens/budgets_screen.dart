@@ -1,3 +1,4 @@
+import 'package:data_table_2/data_table_2.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -313,6 +314,13 @@ class _MonthTable extends ConsumerStatefulWidget {
 }
 
 class _MonthTableState extends ConsumerState<_MonthTable> {
+  // Shared by the Sales Budget DataColumn2's fixedWidth and every cell's
+  // own sizing in that column (both month rows and the Total row) — see
+  // the fixedWidth column's own doc comment for why this needs to be one
+  // single source of truth rather than three places independently
+  // guessing the same number.
+  static const double _budgetColumnWidth = 150;
+
   late final Map<String, TextEditingController> _controllers;
   // Computed once at mount, same as ytd_comparative_screen.dart's
   // _fiscalYears — this table's row/column ORDER is display-only (every
@@ -435,11 +443,29 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
         Expanded(
           child: ResponsiveDataTable(
             stickyHeader: false,
-            columns: const [
-              DataColumn(label: Text('Month')),
-              DataColumn(label: Text('Sales Budget'), numeric: true),
-              DataColumn(label: Text('Seasonal Forecast'), numeric: true),
-              DataColumn(label: Text('Confidence')),
+            columns: [
+              const DataColumn(label: Text('Month')),
+              // 2026-09-01, Craig, after TWO attempts at this via `Align`
+              // still didn't line the input boxes up with the Total below
+              // them: a plain (non-fixed-width) `DataColumn` lets
+              // `data_table_2` decide how wide the column actually renders
+              // (stretched to fill available space, per
+              // `ResponsiveDataTable`'s own doc comment) — and there was no
+              // way to be certain from here whether a `TextField`-holding
+              // cell and a plain-`Text` cell resolve that stretched width
+              // (and any internal cell padding) identically. Rather than
+              // guess a third time, `DataColumn2(fixedWidth: ...)` (a
+              // `data_table_2` extension already available via
+              // `pubspec.yaml`, just not previously used anywhere in this
+              // app) pins this ONE column to an exact, known pixel width —
+              // removing the ambiguity outright instead of reasoning about
+              // it. `_budgetColumnWidth` below is shared by both this
+              // column and every cell's own `SizedBox` in it, so the
+              // aligning container is provably identical, not just
+              // presumed to be, between the input rows and the Total row.
+              DataColumn2(label: const Text('Sales Budget'), numeric: true, fixedWidth: _budgetColumnWidth),
+              const DataColumn(label: Text('Seasonal Forecast'), numeric: true),
+              const DataColumn(label: Text('Confidence')),
             ],
             rows: [
               ..._months.map((month) {
@@ -447,29 +473,10 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
                   DataCell(Text(month)),
                   DataCell(
                     widget.canEdit
-                        ? Align(
-                            // Wraps the whole input box, not just the text
-                            // inside it — 2026-09-01, Craig: "not right
-                            // aligned" even with the TextField's own
-                            // textAlign already set to
-                            // TextAlign.right. `DataColumn(numeric: true)`
-                            // right-aligns a plain Text CELL by centering
-                            // its layout logic on `Text`/`Number` content;
-                            // a fixed-width custom widget child (this
-                            // SizedBox) isn't guaranteed the same
-                            // treatment, so the 120px box itself could sit
-                            // left-of-center in a column data_table_2 has
-                            // stretched wider than 120px, regardless of
-                            // what's happening inside the box. This Align
-                            // pins the box itself to the cell's right edge;
-                            // TextAlign.right on the TextField (kept below)
-                            // still does its own job of pinning the digits
-                            // to the box's own right edge — together they
-                            // cover both possible causes rather than
-                            // guessing which one it was.
-                            alignment: Alignment.centerRight,
-                            child: SizedBox(
-                              width: 120,
+                        ? SizedBox(
+                            width: _budgetColumnWidth,
+                            child: Align(
+                              alignment: Alignment.centerRight,
                               child: TextField(
                                 controller: _controllers[month],
                                 keyboardType: TextInputType.number,
@@ -536,21 +543,25 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     const style = TextStyle(fontWeight: FontWeight.bold);
     return DataRow(cells: [
       const DataCell(Text('Total', style: style)),
-      // Explicit Align, matching the per-month Sales Budget cell above —
-      // 2026-09-01, Craig: the Total figure sat visibly out of line with
-      // the input boxes in the column above it. `DataColumn(numeric: true)`
-      // alone right-aligns a plain Text cell by its own built-in
-      // mechanism, which doesn't land at the same pixel edge as the
-      // explicit `Align` the editable cells now use (added for the "not
-      // right aligned" fix on this same column) — two different alignment
-      // mechanisms on the same column disagreeing with each other, not
-      // fixable by tweaking just one of them. Wrapping this cell in the
-      // identical `Align` pattern puts every row in this column through
-      // the same mechanism, so they land on the same edge. The Seasonal
-      // Forecast total is left as plain Text, unaffected — that whole
-      // column has only ever used plain Text (no editable field, no mixed
-      // mechanisms), so it was never actually misaligned.
-      DataCell(Align(alignment: Alignment.centerRight, child: Text(formatRand(totalBudget), style: style))),
+      // 2026-09-01, Craig: two rounds of `Align`-based fixes on this column
+      // still didn't line the Total up with the input boxes above it —
+      // reasoning about how `data_table_2` was passing width down to each
+      // cell wasn't getting anywhere, so this stopped guessing and instead
+      // made the space itself unambiguous: the Sales Budget DataColumn2
+      // above is now a genuinely FIXED width (`_budgetColumnWidth`), and
+      // this cell uses the exact same `SizedBox(width: _budgetColumnWidth)`
+      // + `Align(alignment: Alignment.centerRight)` wrapper as the per-month
+      // input cell — same width, same alignment mechanism, both provably
+      // identical rather than each independently trusting the table to
+      // hand them the same space. The Seasonal Forecast total is left as
+      // plain Text, unaffected — that whole column has only ever used
+      // plain Text with no editable field to disagree with.
+      DataCell(
+        SizedBox(
+          width: _budgetColumnWidth,
+          child: Align(alignment: Alignment.centerRight, child: Text(formatRand(totalBudget), style: style)),
+        ),
+      ),
       DataCell(Text(formatRand(totalForecast), style: style)),
       const DataCell(Text('')),
     ]);
