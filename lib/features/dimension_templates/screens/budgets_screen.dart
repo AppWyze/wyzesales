@@ -443,8 +443,8 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
         Expanded(
           child: ResponsiveDataTable(
             stickyHeader: false,
-            columns: [
-              const DataColumn(label: Text('Month')),
+            columns: const [
+              DataColumn(label: Text('Month')),
               // 2026-09-01, Craig, after TWO attempts at this via `Align`
               // still didn't line the input boxes up with the Total below
               // them: a plain (non-fixed-width) `DataColumn` lets
@@ -463,9 +463,9 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
               // column and every cell's own `SizedBox` in it, so the
               // aligning container is provably identical, not just
               // presumed to be, between the input rows and the Total row.
-              DataColumn2(label: const Text('Sales Budget'), numeric: true, fixedWidth: _budgetColumnWidth),
-              const DataColumn(label: Text('Seasonal Forecast'), numeric: true),
-              const DataColumn(label: Text('Confidence')),
+              DataColumn2(label: Text('Sales Budget'), numeric: true, fixedWidth: _budgetColumnWidth),
+              DataColumn(label: Text('Seasonal Forecast'), numeric: true),
+              DataColumn(label: Text('Confidence')),
             ],
             rows: [
               ..._months.map((month) {
@@ -482,7 +482,36 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
                                 keyboardType: TextInputType.number,
                                 textAlign: TextAlign.right,
                                 inputFormatters: [_ThousandsInputFormatter()],
-                                decoration: const InputDecoration(isDense: true, prefixText: 'R '),
+                                // 2026-09-01, Craig: "The Total is still not
+                                // aligned" even after the fixedWidth column
+                                // (attempt #3). The width WAS already
+                                // identical between this cell and the Total
+                                // cell below by that point — what wasn't
+                                // identical is that a bare `TextField`
+                                // doesn't shrink to its text like a `Text`
+                                // widget does: it fills the whole box it's
+                                // given, and then draws its digits inset
+                                // from that box's right edge by
+                                // `InputDecoration.contentPadding`
+                                // (Material's default is non-zero even with
+                                // `isDense: true` — it only shrinks the
+                                // vertical padding, not the horizontal).
+                                // `Align(centerRight)` around a `Text` has
+                                // no such inset — the glyphs sit flush at
+                                // the box edge — so the two rows' widths
+                                // could be pixel-identical while the actual
+                                // digits still sat ~8-12dp apart. Zeroing
+                                // the horizontal content padding here
+                                // removes that inset, so the digits in this
+                                // field and the digits in the Total's plain
+                                // `Text` both sit flush against the same
+                                // `_budgetColumnWidth`-wide box with nothing
+                                // left to differ between them.
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(vertical: 8),
+                                  prefixText: 'R ',
+                                ),
                                 // No longer saves on its own — see
                                 // _saveAll's doc comment. Enter now just
                                 // moves to the next field, so typing
