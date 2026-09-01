@@ -99,7 +99,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return labels[date.month - 1];
   }
 
-  int _effectiveFiscalYear(GlobalFilters filters) => filters.fiscalYear ?? fiscalYearFor(DateTime.now());
+  int _effectiveFiscalYear(GlobalFilters filters) =>
+      filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
 
   String _effectiveFiscalMonth(GlobalFilters filters) => filters.fiscalMonth ?? _currentFiscalMonthLabel(DateTime.now());
 

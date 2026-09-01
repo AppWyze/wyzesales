@@ -135,9 +135,10 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
 
   Future<List<SalesDocument>> _loadPage() {
     final filters = ref.read(globalFiltersProvider);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     return ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now()),
+          fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: startMonth),
           fiscalMonth: filters.fiscalMonth,
           categoryCode: filters.category?.code,
           itemCode: filters.item?.code,
@@ -154,10 +155,11 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
 
   Future<void> _loadTotals() async {
     final filters = ref.read(globalFiltersProvider);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     try {
       final totals = await ref.read(salesRepositoryProvider).fetchSalesDocumentsTotals(
             documentKinds: widget.documentKinds,
-            fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now()),
+            fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: startMonth),
             fiscalMonth: filters.fiscalMonth,
             categoryCode: filters.category?.code,
             itemCode: filters.item?.code,
@@ -330,9 +332,10 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
       );
     }
     final filters = ref.read(globalFiltersProvider);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final allRows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now()),
+          fiscalYear: filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: startMonth),
           fiscalMonth: filters.fiscalMonth,
           categoryCode: filters.category?.code,
           itemCode: filters.item?.code,

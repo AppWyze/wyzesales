@@ -267,12 +267,19 @@ class _MonthTable extends ConsumerStatefulWidget {
 
 class _MonthTableState extends ConsumerState<_MonthTable> {
   late final Map<String, TextEditingController> _controllers;
+  // Computed once at mount, same as ytd_comparative_screen.dart's
+  // _fiscalYears — this table's row/column ORDER is display-only (every
+  // lookup below is keyed by the calendar month label itself, e.g.
+  // widget.data.budget[month], so a different rotation never changes which
+  // value a row shows, only which row it shows first).
+  late final List<String> _months;
 
   @override
   void initState() {
     super.initState();
+    _months = fiscalMonthOrderFor(startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
     _controllers = {
-      for (final month in fiscalMonthOrder)
+      for (final month in _months)
         month: TextEditingController(text: (widget.data.budget[month] ?? 0).toStringAsFixed(0)),
     };
   }
@@ -335,7 +342,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
         DataColumn(label: Text('Confidence')),
       ],
       rows: [
-        ...fiscalMonthOrder.map((month) {
+        ..._months.map((month) {
           return DataRow(cells: [
             DataCell(Text(month)),
             DataCell(
@@ -370,8 +377,8 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   /// for what's actually been recorded. Confidence has no meaningful total
   /// (it's a label, not a number) so that cell is left blank.
   DataRow _totalsRow() {
-    final totalBudget = fiscalMonthOrder.fold<num>(0, (sum, month) => sum + (widget.data.budget[month] ?? 0));
-    final totalForecast = fiscalMonthOrder.fold<num>(0, (sum, month) => sum + (widget.data.forecast[month] ?? 0));
+    final totalBudget = _months.fold<num>(0, (sum, month) => sum + (widget.data.budget[month] ?? 0));
+    final totalForecast = _months.fold<num>(0, (sum, month) => sum + (widget.data.forecast[month] ?? 0));
     const style = TextStyle(fontWeight: FontWeight.bold);
     return DataRow(cells: [
       const DataCell(Text('Total', style: style)),

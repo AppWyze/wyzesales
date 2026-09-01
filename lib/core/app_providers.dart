@@ -74,3 +74,18 @@ final lastDataUpdateProvider = FutureProvider<DateTime?>((ref) async {
   if (rows.isEmpty) return null;
   return DateTime.parse(rows.first['extracted_at'] as String);
 });
+
+/// The signed-in user's client's fiscal year start month
+/// (fiscal_year_settings.start_month, Settings > Company, 2026-09-01) — every
+/// screen that used to assume "fiscal year always starts in March" now reads
+/// this instead of fiscal.dart's old hardcoded default (see fiscalMonthOrderFor's
+/// own doc comment). Plain (non-autoDispose) FutureProvider, same convention
+/// as lastDataUpdateProvider above: this changes rarely (an admin editing one
+/// Settings field), so one shared cached read across every screen is right
+/// rather than each screen refetching independently. Explicitly
+/// `ref.invalidate`d by `_EditCompanyDialog`'s save handler
+/// (settings_screen.dart) so a changed start month takes effect app-wide
+/// immediately, not just on next reload.
+final fiscalYearStartMonthProvider = FutureProvider<int>((ref) {
+  return ref.watch(settingsRepositoryProvider).getFiscalYearStartMonth();
+});

@@ -285,15 +285,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   Future<_KpiData> _loadKpis() async {
     final now = DateTime.now();
-    final currentFiscalYear = fiscalYearFor(now);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final currentFiscalYear = fiscalYearFor(now, startMonth: startMonth);
     final monthStart = firstOfMonth(now);
     final currentMonthLabel = fiscalMonthLabelFor(monthStart);
-    final currentFiscalMonthIndex = fiscalMonthOrder.indexOf(currentMonthLabel);
+    final fiscalMonths = fiscalMonthOrderFor(startMonth: startMonth);
+    final currentFiscalMonthIndex = fiscalMonths.indexOf(currentMonthLabel);
     // Every fiscal month up to and including the current one — the same
     // "has this month actually happened yet" boundary sales_analysis_screen
     // and ytd_comparative_screen already use for their own YTD sums, reused
     // here for Rep Target Attainment's YTD roster/total.
-    final elapsedFiscalMonths = fiscalMonthOrder.sublist(0, currentFiscalMonthIndex + 1).toSet();
+    final elapsedFiscalMonths = fiscalMonths.sublist(0, currentFiscalMonthIndex + 1).toSet();
 
     // Whole-company totals for the Sales/GP tiles — pulled from
     // v_consolidated_sales (the same source Sales Analysis' Graph tab
@@ -494,7 +496,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Future<void> _loadDimension() async {
     final dimension = _dimension;
     try {
-      final currentFy = fiscalYearFor(DateTime.now());
+      final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
       final filters = _dashboardFilters(ref.read(globalFiltersProvider));
       final results = await Future.wait([
         ref.read(salesRepositoryProvider).fetchDimensionMonthlySales(

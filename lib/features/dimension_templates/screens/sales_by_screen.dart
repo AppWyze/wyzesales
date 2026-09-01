@@ -156,7 +156,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   }
 
   Future<_SalesByData> _load() async {
-    final currentFy = fiscalYearFor(DateTime.now());
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
     final fiscalYears = [currentFy - 2, currentFy - 1, currentFy];
     final filters = ref.read(globalFiltersProvider);
 

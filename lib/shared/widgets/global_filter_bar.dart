@@ -105,8 +105,12 @@ class GlobalFilterBar extends ConsumerWidget {
     GlobalFilters filters,
     String key,
   ) async {
+    // .valueOrNull ?? 3 — fiscalYearStartMonthProvider's own fallback while
+    // it's still loading, matching fiscal.dart's pre-feature default exactly
+    // (see fiscalMonthOrderFor's doc comment).
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     if (key == '_year') {
-      final currentFy = fiscalYearFor(DateTime.now());
+      final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
       final year = await _pickFromList<int>(
         context,
         title: 'Year',
@@ -117,7 +121,7 @@ class GlobalFilterBar extends ConsumerWidget {
       return;
     }
     if (key == '_month') {
-      final month = await _pickFromList<String>(context, title: 'Month', options: fiscalMonthOrder);
+      final month = await _pickFromList<String>(context, title: 'Month', options: fiscalMonthOrderFor(startMonth: startMonth));
       if (month != null) notifier.setFiscalMonth(month);
       return;
     }

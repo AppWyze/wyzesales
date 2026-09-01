@@ -32,6 +32,42 @@ class SettingsRepository {
     return Client.fromMap(row);
   }
 
+  /// The signed-in user's client's fiscal year start month
+  /// (fiscal_year_settings.start_month) — a separate table from `clients`
+  /// (schema/001 Section 7), one row per client, primary-keyed on client_id.
+  /// No clientId parameter, same convention as BudgetRepository/
+  /// SalesRepository: RLS (`fiscal_year_settings_select`, schema/006)
+  /// already scopes any read to the caller's own client, and the primary key
+  /// guarantees at most one row comes back either way. Defaults to 3 (March)
+  /// client-side when no row exists yet for this client — mirrors the exact
+  /// same `coalesce(fys.start_month, 3)` schema/001's own v_sales_documents
+  /// already does server-side, so a client that's never touched this setting
+  /// behaves identically to how every client behaved before this feature
+  /// existed.
+  Future<int> getFiscalYearStartMonth() async {
+    final row = await supabase.from('fiscal_year_settings').select('start_month').maybeSingle();
+    return (row?['start_month'] as int?) ?? 3;
+  }
+
+  /// Powers Settings > Company's "Fiscal year starts" field (2026-09-01,
+  /// Craig: "We are assuming that a Client's Financial Year runs from March
+  /// to February but this will not always be the case"). Upserts rather than
+  /// a plain update — a client created before this feature has no
+  /// fiscal_year_settings row at all (schema/001's own join already defaults
+  /// that missing row to March via `coalesce`), so the very first save here
+  /// has to INSERT, not UPDATE a row that doesn't exist; `onConflict:
+  /// 'client_id'` targets that table's own primary key (schema/001), so
+  /// every later save just updates the same row. RLS:
+  /// `fiscal_year_settings_adminuser_upsert`/`_update` (schema/019) — the
+  /// same `is_adminuser()` + `get_my_client_id()` gate `clients_adminuser_
+  /// update` already uses.
+  Future<void> updateFiscalYearStartMonth(String clientId, int startMonth) async {
+    await supabase.from('fiscal_year_settings').upsert(
+      {'client_id': clientId, 'start_month': startMonth},
+      onConflict: 'client_id',
+    );
+  }
+
   /// Joins pricing_plan so License.plan is populated — needed for the
   /// License tab's pricing breakdown (License.discountedMonthly) without a
   /// second round trip.

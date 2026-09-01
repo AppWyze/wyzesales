@@ -58,7 +58,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
   @override
   void initState() {
     super.initState();
-    final currentFy = fiscalYearFor(DateTime.now());
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
     _fiscalYears = [currentFy - 2, currentFy - 1, currentFy];
     _future = ref
         .read(salesRepositoryProvider)
@@ -146,7 +146,8 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
 
   int _compareRows(_YtdRow a, _YtdRow b, int columnIndex) {
     if (columnIndex == 0) {
-      return fiscalMonthOrder.indexOf(a.monthLabel).compareTo(fiscalMonthOrder.indexOf(b.monthLabel));
+      final months = fiscalMonthOrderFor(startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+      return months.indexOf(a.monthLabel).compareTo(months.indexOf(b.monthLabel));
     }
     return (_valueForColumn(a, columnIndex) ?? 0).compareTo(_valueForColumn(b, columnIndex) ?? 0);
   }
@@ -168,7 +169,8 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
       final yearTotals = byMonth.putIfAbsent(label, () => {});
       yearTotals[row.fiscalYear] = (yearTotals[row.fiscalYear] ?? 0) + value;
     }
-    return fiscalMonthOrder.map((label) => _YtdRow(label, byMonth[label] ?? const {})).toList();
+    final months = fiscalMonthOrderFor(startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+    return months.map((label) => _YtdRow(label, byMonth[label] ?? const {})).toList();
   }
 
   String _varianceLabel(num? current, num? previous) {

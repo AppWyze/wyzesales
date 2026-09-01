@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/app_providers.dart';
+import '../../../core/constants/fiscal.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/client.dart';
@@ -284,6 +285,11 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
               child: Text('No client data found.'),
             );
           }
+          // fiscal_year_settings is a separate table from `clients`
+          // (schema/001 Section 7), read via its own provider rather than
+          // folded into the Client model/_future above — see
+          // fiscalYearStartMonthProvider's own doc comment.
+          final startMonthAsync = ref.watch(fiscalYearStartMonthProvider);
           return _card(
             title: 'Company information',
             isDark: isDark,
@@ -300,6 +306,11 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
               _infoRow('City', client.city ?? '—', isDark),
               _infoRow('Country', client.country ?? '—', isDark),
               _infoRow('Postal code', client.postalCode ?? '—', isDark),
+              _infoRow('Fiscal year starts', startMonthAsync.when(
+                data: (m) => fiscalStartMonthName(m),
+                loading: () => '…',
+                error: (_, __) => '—',
+              ), isDark),
             ]),
           );
         },
@@ -346,6 +357,15 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
   late final TextEditingController _postalCodeController;
   bool _isLoading = false;
 
+  // fiscal_year_settings lives in its own table (schema/001 Section 7), not
+  // on `clients` — so unlike every field above, this can't be seeded
+  // synchronously from `widget.client`. Starts at 3 (March, today's
+  // pre-feature default) and gets overwritten once the async read below
+  // resolves — same fallback fiscalYearFor/fiscalMonthOrderFor use elsewhere
+  // while the value is still loading, so this dialog never shows something
+  // inconsistent with the rest of the app mid-load.
+  int _startMonth = 3;
+
   @override
   void initState() {
     super.initState();
@@ -359,6 +379,9 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
     _cityController = TextEditingController(text: widget.client.city ?? '');
     _countryController = TextEditingController(text: widget.client.country ?? '');
     _postalCodeController = TextEditingController(text: widget.client.postalCode ?? '');
+    ref.read(fiscalYearStartMonthProvider.future).then((value) {
+      if (mounted) setState(() => _startMonth = value);
+    });
   }
 
   @override
@@ -394,6 +417,14 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
         'country': _orNull(_countryController),
         'postal_code': _orNull(_postalCodeController),
       });
+      // Separate table/policy from the update above (fiscal_year_settings,
+      // not clients — see updateFiscalYearStartMonth's own doc comment), so
+      // a separate call rather than folded into the map above.
+      await ref.read(settingsRepositoryProvider).updateFiscalYearStartMonth(widget.client.id, _startMonth);
+      // Every screen reading fiscalYearStartMonthProvider (fiscal.dart's
+      // fiscalMonthOrderFor/fiscalYearFor call sites) picks up the new value
+      // on its next rebuild, app-wide, rather than only after a full reload.
+      ref.invalidate(fiscalYearStartMonthProvider);
       // Bare `mounted`, not `context.mounted` — this `context` is
       // `State.context` (no local `context` parameter shadowing it here).
       if (mounted) Navigator.of(context).pop(true);
@@ -445,6 +476,8 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
                     _tf('Country', _countryController, isDark),
                     const SizedBox(height: 10),
                     _tf('Postal code', _postalCodeController, isDark),
+                    const SizedBox(height: 10),
+                    _fiscalStartMonthDropdown(isDark),
                   ],
                 ),
               ),
@@ -453,6 +486,47 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
           ],
         ),
       ),
+    );
+  }
+
+  // schema/001's fiscal_year() defaults an unset start month to March (3),
+  // so 3 is always a real, valid choice here too — not just this dialog's
+  // own loading-state fallback.
+  Widget _fiscalStartMonthDropdown(bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Fiscal year starts',
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+        ),
+        const SizedBox(height: 4),
+        // key: ValueKey(_startMonth) — unlike _levelDropdown above,
+        // _startMonth can change from an EXTERNAL source (the async load in
+        // initState resolving after this widget has already built once, not
+        // just from the user's own selection), and DropdownButtonFormField's
+        // `initialValue` is only read the first time its internal FormField
+        // state is created — a later rebuild passing a new `initialValue`
+        // does NOT by itself update what's displayed. Keying on the value
+        // forces a fresh internal state (and therefore a fresh read of
+        // `initialValue`) every time `_startMonth` changes for any reason,
+        // including the user's own pick — which is a no-op visually there,
+        // since by the time it rebuilds `initialValue` already equals what
+        // they just chose.
+        DropdownButtonFormField<int>(
+          key: ValueKey(_startMonth),
+          initialValue: _startMonth,
+          decoration: const InputDecoration(
+            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            isDense: true,
+          ),
+          style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+          items: [
+            for (var m = 1; m <= 12; m++) DropdownMenuItem(value: m, child: Text(fiscalStartMonthName(m))),
+          ],
+          onChanged: (v) => setState(() => _startMonth = v ?? 3),
+        ),
+      ],
     );
   }
 }

@@ -144,6 +144,11 @@ class _GraphTab extends ConsumerStatefulWidget {
 class _GraphTabState extends ConsumerState<_GraphTab> {
   ValueMeasure _measure = ValueMeasure.rValue;
   late final List<int> _fiscalYears;
+  // Computed once at mount, same as _fiscalYears — this chart's category/
+  // row ORDER is display-only, every lookup below is keyed by the calendar
+  // month label itself (_groupByMonth), so a different rotation never
+  // changes which value a point shows, only which month starts the x-axis.
+  late final List<String> _months;
   late Future<List<ConsolidatedSales>> _future;
 
   // 2026-08-26 (Craig's global cross-dimension filters): same treatment as
@@ -156,10 +161,12 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   @override
   void initState() {
     super.initState();
-    final currentFy = fiscalYearFor(DateTime.now());
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
     // Oldest-to-newest so the chart's series order (and its legend) reads
     // left-to-right the same way the lines do on screen.
     _fiscalYears = [currentFy - 2, currentFy - 1, currentFy];
+    _months = fiscalMonthOrderFor(startMonth: startMonth);
     _future = ref
         .read(salesRepositoryProvider)
         .fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: _graphFilters(ref.read(globalFiltersProvider)));
@@ -273,12 +280,12 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   num? _valueFor(Map<String, Map<int, ConsolidatedSales>> byMonth, String month, int fiscalYear) {
     final row = byMonth[month]?[fiscalYear];
     if (row != null) return _measure == ValueMeasure.rValue ? row.value : row.profit;
-    final currentFiscalMonthIndex = fiscalMonthOrder.indexOf(fiscalMonthLabelFor(DateTime.now()));
+    final currentFiscalMonthIndex = _months.indexOf(fiscalMonthLabelFor(DateTime.now()));
     // _fiscalYears is built as [currentFy - 2, currentFy - 1, currentFy] in
     // initState, so .last is always the current (possibly still-partial)
     // fiscal year — the only one any month could still be "in the future"
     // within.
-    final isStillFuture = fiscalYear == _fiscalYears.last && fiscalMonthOrder.indexOf(month) > currentFiscalMonthIndex;
+    final isStillFuture = fiscalYear == _fiscalYears.last && _months.indexOf(month) > currentFiscalMonthIndex;
     return isStillFuture ? null : 0;
   }
 
@@ -289,7 +296,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     return ExportData(
       headers: ['Month', for (final fy in _fiscalYears) 'FY$fy'],
       rows: [
-        for (final month in fiscalMonthOrder)
+        for (final month in _months)
           [
             month,
             for (final fy in _fiscalYears) _formatOrDash(_valueFor(byMonth, month, fy)),
@@ -321,12 +328,12 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         TrendSeries(
           label: 'FY${_fiscalYears[i]}',
           color: seriesColors[i],
-          values: [for (final month in fiscalMonthOrder) valueFor(month, _fiscalYears[i])],
+          values: [for (final month in _months) valueFor(month, _fiscalYears[i])],
         ),
     ];
 
     return TrendLineChart(
-      categories: fiscalMonthOrder,
+      categories: _months,
       series: series,
       axisValueFormatter: _compactRand,
       detailValueFormatter: (v) => formatRand(v),
