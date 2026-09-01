@@ -89,3 +89,18 @@ final lastDataUpdateProvider = FutureProvider<DateTime?>((ref) async {
 final fiscalYearStartMonthProvider = FutureProvider<int>((ref) {
   return ref.watch(settingsRepositoryProvider).getFiscalYearStartMonth();
 });
+
+/// The signed-in user's client's data history window in fiscal years — 3 or
+/// 5 (fiscal_year_settings.history_years, Settings > Company, 2026-09-01,
+/// schema/020) — every "trailing N fiscal years" screen that used to assume
+/// exactly 3 now reads this instead of a hardcoded literal (see
+/// fiscalYearWindow's own doc comment, fiscal.dart). Same plain
+/// (non-autoDispose) FutureProvider convention as fiscalYearStartMonthProvider
+/// right above, for the same reason: this changes rarely, so one shared
+/// cached read across every screen is right. Explicitly `ref.invalidate`d by
+/// `_EditCompanyDialog`'s save handler (settings_screen.dart) alongside
+/// fiscalYearStartMonthProvider, so a changed window takes effect app-wide
+/// immediately.
+final fiscalYearHistoryYearsProvider = FutureProvider<int>((ref) {
+  return ref.watch(settingsRepositoryProvider).getDataHistoryYears();
+});

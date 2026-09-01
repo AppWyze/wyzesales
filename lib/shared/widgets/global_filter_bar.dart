@@ -111,10 +111,14 @@ class GlobalFilterBar extends ConsumerWidget {
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     if (key == '_year') {
       final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
+      final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
       final year = await _pickFromList<int>(
         context,
         title: 'Year',
-        options: [currentFy, currentFy - 1, currentFy - 2],
+        // Newest first for this dropdown, unlike fiscalYearWindow's own
+        // oldest-first convention — matches how this list has always
+        // presented (current year at the top).
+        options: fiscalYearWindow(currentFy, historyYears).reversed.toList(),
         labelOf: (y) => 'FY$y',
       );
       if (year != null) notifier.setFiscalYear(year);

@@ -89,3 +89,17 @@ String fiscalMonthLabelFor(DateTime date) => DateFormat('MMM').format(date);
 /// wants a human label, not a bare number or the 3-letter abbreviation the
 /// rest of this file works in.
 String fiscalStartMonthName(int startMonth) => DateFormat('MMMM').format(DateTime(2000, startMonth));
+
+/// The client's configured trailing fiscal-year window, oldest year first —
+/// e.g. currentFy=2027, historyYears=3 -> [2025, 2026, 2027]. Replaces the
+/// hardcoded `[currentFy - 2, currentFy - 1, currentFy]` literal every
+/// "trailing N fiscal years" screen (Sales Analysis' Graph tab, Sales By,
+/// YTD Comparative, the global filter bar's Year picker) used to build
+/// directly, now that fiscal_year_settings.history_years (Settings >
+/// Company, 2026-09-01, schema/020, Craig: "either 3 or 5 years of data")
+/// can be 3 or 5, not always 3. `ref.watch(fiscalYearHistoryYearsProvider)
+/// .valueOrNull ?? 3` (app_providers.dart) is the standard way to get
+/// `historyYears` at each of those call sites, same fallback convention
+/// `fiscalYearStartMonthProvider` already established.
+List<int> fiscalYearWindow(int currentFy, int historyYears) =>
+    List<int>.generate(historyYears, (i) => currentFy - (historyYears - 1) + i);

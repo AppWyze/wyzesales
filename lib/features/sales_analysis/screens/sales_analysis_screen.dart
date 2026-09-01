@@ -163,9 +163,10 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     super.initState();
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     // Oldest-to-newest so the chart's series order (and its legend) reads
     // left-to-right the same way the lines do on screen.
-    _fiscalYears = [currentFy - 2, currentFy - 1, currentFy];
+    _fiscalYears = fiscalYearWindow(currentFy, historyYears);
     _months = fiscalMonthOrderFor(startMonth: startMonth);
     _future = ref
         .read(salesRepositoryProvider)
@@ -222,7 +223,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
               runSpacing: 8,
               children: [
                 Text(
-                  'Trailing 3 fiscal years, monthly.',
+                  'Trailing ${_fiscalYears.length} fiscal years, monthly.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 ValueGpToggle(value: _measure, onChanged: (v) => setState(() => _measure = v)),
@@ -281,10 +282,11 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final row = byMonth[month]?[fiscalYear];
     if (row != null) return _measure == ValueMeasure.rValue ? row.value : row.profit;
     final currentFiscalMonthIndex = _months.indexOf(fiscalMonthLabelFor(DateTime.now()));
-    // _fiscalYears is built as [currentFy - 2, currentFy - 1, currentFy] in
-    // initState, so .last is always the current (possibly still-partial)
-    // fiscal year — the only one any month could still be "in the future"
-    // within.
+    // _fiscalYears is built via fiscalYearWindow(currentFy, historyYears) in
+    // initState, which always places the current fiscal year last regardless
+    // of the configured 3- or 5-year window length — so .last is always the
+    // current (possibly still-partial) fiscal year, the only one any month
+    // could still be "in the future" within.
     final isStillFuture = fiscalYear == _fiscalYears.last && _months.indexOf(month) > currentFiscalMonthIndex;
     return isStillFuture ? null : 0;
   }
@@ -303,7 +305,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
           ],
       ],
       fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
-      title: 'WyzeSales — Sales Analysis ($measureLabel, trailing 3 fiscal years)',
+      title: 'WyzeSales — Sales Analysis ($measureLabel, trailing ${_fiscalYears.length} fiscal years)',
     );
   }
 
@@ -314,14 +316,16 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     num? valueFor(String month, int fiscalYear) => _valueFor(byMonth, month, fiscalYear);
 
     // Progressively more prominent toward the current fiscal year — a fading
-    // neutral for the oldest year, brand teal for the current one — so "this
-    // year" reads as the important line rather than three equally-weighted
-    // colours competing for attention.
-    final seriesColors = [
-      Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.35),
-      AppColors.info,
-      AppColors.teal,
-    ];
+    // neutral for every older year, info-blue for the year immediately prior,
+    // brand teal for the current one — so "this year" reads as the important
+    // line rather than all years competing equally for attention. Generated
+    // rather than a fixed 3-element list so a 5-year history window
+    // (fiscalYearHistoryYearsProvider) doesn't index past the end of it.
+    final seriesColors = List<Color>.generate(_fiscalYears.length, (i) {
+      if (i == _fiscalYears.length - 1) return AppColors.teal; // current fiscal year
+      if (i == _fiscalYears.length - 2) return AppColors.info; // immediately prior fiscal year
+      return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.35); // every older year
+    });
 
     final series = [
       for (var i = 0; i < _fiscalYears.length; i++)

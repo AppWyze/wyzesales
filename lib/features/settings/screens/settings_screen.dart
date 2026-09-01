@@ -290,6 +290,7 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
           // folded into the Client model/_future above — see
           // fiscalYearStartMonthProvider's own doc comment.
           final startMonthAsync = ref.watch(fiscalYearStartMonthProvider);
+          final historyYearsAsync = ref.watch(fiscalYearHistoryYearsProvider);
           return _card(
             title: 'Company information',
             isDark: isDark,
@@ -308,6 +309,11 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
               _infoRow('Postal code', client.postalCode ?? '—', isDark),
               _infoRow('Fiscal year starts', startMonthAsync.when(
                 data: (m) => fiscalStartMonthName(m),
+                loading: () => '…',
+                error: (_, __) => '—',
+              ), isDark),
+              _infoRow('Data history window', historyYearsAsync.when(
+                data: (y) => '$y years',
                 loading: () => '…',
                 error: (_, __) => '—',
               ), isDark),
@@ -365,6 +371,10 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
   // while the value is still loading, so this dialog never shows something
   // inconsistent with the rest of the app mid-load.
   int _startMonth = 3;
+  // Same "external async source, not just this dialog's own initialValue"
+  // situation as _startMonth right above — same fallback default (3) too,
+  // matching fiscal_year_settings.history_years' own column default.
+  int _historyYears = 3;
 
   @override
   void initState() {
@@ -381,6 +391,9 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
     _postalCodeController = TextEditingController(text: widget.client.postalCode ?? '');
     ref.read(fiscalYearStartMonthProvider.future).then((value) {
       if (mounted) setState(() => _startMonth = value);
+    });
+    ref.read(fiscalYearHistoryYearsProvider.future).then((value) {
+      if (mounted) setState(() => _historyYears = value);
     });
   }
 
@@ -421,10 +434,14 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
       // not clients — see updateFiscalYearStartMonth's own doc comment), so
       // a separate call rather than folded into the map above.
       await ref.read(settingsRepositoryProvider).updateFiscalYearStartMonth(widget.client.id, _startMonth);
-      // Every screen reading fiscalYearStartMonthProvider (fiscal.dart's
-      // fiscalMonthOrderFor/fiscalYearFor call sites) picks up the new value
-      // on its next rebuild, app-wide, rather than only after a full reload.
+      await ref.read(settingsRepositoryProvider).updateDataHistoryYears(widget.client.id, _historyYears);
+      // Every screen reading fiscalYearStartMonthProvider/
+      // fiscalYearHistoryYearsProvider (fiscal.dart's
+      // fiscalMonthOrderFor/fiscalYearFor/fiscalYearWindow call sites) picks
+      // up the new values on its next rebuild, app-wide, rather than only
+      // after a full reload.
       ref.invalidate(fiscalYearStartMonthProvider);
+      ref.invalidate(fiscalYearHistoryYearsProvider);
       // Bare `mounted`, not `context.mounted` — this `context` is
       // `State.context` (no local `context` parameter shadowing it here).
       if (mounted) Navigator.of(context).pop(true);
@@ -478,6 +495,8 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
                     _tf('Postal code', _postalCodeController, isDark),
                     const SizedBox(height: 10),
                     _fiscalStartMonthDropdown(isDark),
+                    const SizedBox(height: 10),
+                    _dataHistoryWindowDropdown(isDark),
                   ],
                 ),
               ),
@@ -525,6 +544,39 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
             for (var m = 1; m <= 12; m++) DropdownMenuItem(value: m, child: Text(fiscalStartMonthName(m))),
           ],
           onChanged: (v) => setState(() => _startMonth = v ?? 3),
+        ),
+      ],
+    );
+  }
+
+  // schema/020's own check constraint limits this to exactly 3 or 5 — not
+  // an arbitrary 1-N range like the start month above — so this offers only
+  // those two choices, matching Craig's own ask ("either 3 or 5 years").
+  Widget _dataHistoryWindowDropdown(bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Data history window',
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+        ),
+        const SizedBox(height: 4),
+        // key: ValueKey(_historyYears) — same DropdownButtonFormField
+        // external-update quirk as the fiscal start month dropdown above,
+        // see that widget's own doc comment for the full explanation.
+        DropdownButtonFormField<int>(
+          key: ValueKey(_historyYears),
+          initialValue: _historyYears,
+          decoration: const InputDecoration(
+            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            isDense: true,
+          ),
+          style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+          items: const [
+            DropdownMenuItem(value: 3, child: Text('3 years')),
+            DropdownMenuItem(value: 5, child: Text('5 years')),
+          ],
+          onChanged: (v) => setState(() => _historyYears = v ?? 3),
         ),
       ],
     );

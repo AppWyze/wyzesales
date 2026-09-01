@@ -68,6 +68,33 @@ class SettingsRepository {
     );
   }
 
+  /// The signed-in user's client's data history window in fiscal years — 3
+  /// or 5 (fiscal_year_settings.history_years, schema/020). Same table, same
+  /// "no clientId parameter, RLS + primary key already narrow it to one row"
+  /// convention as getFiscalYearStartMonth right above; defaults to 3 for a
+  /// client that's never touched this setting, matching that column's own
+  /// database default exactly.
+  Future<int> getDataHistoryYears() async {
+    final row = await supabase.from('fiscal_year_settings').select('history_years').maybeSingle();
+    return (row?['history_years'] as int?) ?? 3;
+  }
+
+  /// Powers Settings > Company's "Data history window" field (2026-09-01,
+  /// Craig: "either 3 or 5 years of data that we can Add and Edit"). Upserts
+  /// for the same "might be this client's very first save to this table"
+  /// reason updateFiscalYearStartMonth does — see that method's own doc
+  /// comment; the two are independent upserts against the same row rather
+  /// than one combined call so saving one field here never depends on the
+  /// caller also knowing the other's current value (Postgres upsert only
+  /// touches the columns actually present in the payload, on either the
+  /// insert or the update path).
+  Future<void> updateDataHistoryYears(String clientId, int historyYears) async {
+    await supabase.from('fiscal_year_settings').upsert(
+      {'client_id': clientId, 'history_years': historyYears},
+      onConflict: 'client_id',
+    );
+  }
+
   /// Joins pricing_plan so License.plan is populated — needed for the
   /// License tab's pricing breakdown (License.discountedMonthly) without a
   /// second round trip.

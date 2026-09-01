@@ -47,11 +47,12 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
   // 2026-08-26 (Craig's global cross-dimension filters): the 5 dimension
   // filters and the global Month filter both apply here (Month restricts
   // every fiscal-year column's sum down to that one fiscal month, still
-  // compared across the same 3 fiscal years) — Year does NOT, since this
-  // screen's whole point is a fixed 3-fiscal-year comparison window
-  // computed from "today", the same reasoning sales_by_screen.dart flags
-  // for its own FY columns. The ref.listen in build() below tracks the full
-  // filter set so a change on another screen still triggers a refetch here.
+  // compared across the same fiscal-year window) — Year does NOT, since this
+  // screen's whole point is a fixed comparison window (3 or 5 fiscal years,
+  // per the Settings > Company "Data history window" setting) computed from
+  // "today", the same reasoning sales_by_screen.dart flags for its own FY
+  // columns. The ref.listen in build() below tracks the full filter set so a
+  // change on another screen still triggers a refetch here.
 
   GlobalFilters _ytdFilters(GlobalFilters filters) => filters.copyWith(fiscalYear: null);
 
@@ -59,7 +60,8 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
   void initState() {
     super.initState();
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
-    _fiscalYears = [currentFy - 2, currentFy - 1, currentFy];
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
+    _fiscalYears = fiscalYearWindow(currentFy, historyYears);
     _future = ref
         .read(salesRepositoryProvider)
         .fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: _ytdFilters(ref.read(globalFiltersProvider)));

@@ -63,8 +63,9 @@ class SalesByScreen extends ConsumerStatefulWidget {
 }
 
 /// Where a fiscal-year or recent-month's value/variance column sits, once
-/// this data's actual shape (3 fiscal years always, but 0-3 recent months
-/// depending on how much data actually exists) is known — used both to sort
+/// this data's actual shape (the configured 3- or 5-fiscal-year history
+/// window — Settings > Company, "Data history window" — but only 0-3 recent
+/// months depending on how much data actually exists) is known — used both to sort
 /// by whichever column a click lands on, and to resolve a drill-down's rank
 /// mode onto the matching column (2026-08-26).
 class _ColumnPositions {
@@ -157,7 +158,8 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
 
   Future<_SalesByData> _load() async {
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
-    final fiscalYears = [currentFy - 2, currentFy - 1, currentFy];
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
+    final fiscalYears = fiscalYearWindow(currentFy, historyYears);
     final filters = ref.read(globalFiltersProvider);
 
     final rows = await ref.read(salesRepositoryProvider).fetchDimensionMonthlySales(
