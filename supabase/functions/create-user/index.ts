@@ -14,7 +14,12 @@
 // catches the trigger's exception and returns it as a normal error response
 // instead of a raw 500, and cleans up the now-orphaned auth user if the
 // profiles insert was the step that failed.
+//
+// Requires a full-access Supabase key as an Edge Function secret — see
+// _shared/service_key.ts's own doc comment (2026-09-02, prompted by a
+// leaked legacy service_role key).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getServiceKey } from '../_shared/service_key.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -37,7 +42,7 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      getServiceKey(),
     )
 
     const jwt = authHeader.replace('Bearer ', '')

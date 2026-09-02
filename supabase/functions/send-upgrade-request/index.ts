@@ -15,8 +15,11 @@
 // support@wyzesales.com actually exists and is verified with Resend.
 //
 // Requires a RESEND_API_KEY Edge Function secret, same as SeaWyze's
-// equivalent function.
+// equivalent function, plus a full-access Supabase key to look the caller's
+// own profile/license up server-side — see _shared/service_key.ts's own doc
+// comment (2026-09-02, prompted by a leaked legacy service_role key).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getServiceKey } from '../_shared/service_key.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -39,7 +42,7 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      getServiceKey(),
     )
 
     const jwt = authHeader.replace('Bearer ', '')

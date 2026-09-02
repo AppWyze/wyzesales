@@ -7,7 +7,12 @@
 // platform-admin (support) account through this path. Per Craig's decision
 // 8, any adminuser of the same client can delete a user — not just a single
 // top-tier role.
+//
+// Requires a full-access Supabase key as an Edge Function secret — see
+// _shared/service_key.ts's own doc comment (2026-09-02, prompted by a
+// leaked legacy service_role key).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getServiceKey } from '../_shared/service_key.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -30,7 +35,7 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      getServiceKey(),
     )
 
     const jwt = authHeader.replace('Bearer ', '')

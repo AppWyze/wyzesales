@@ -15,13 +15,15 @@
 // function has (see its comments) and same trade-off this project accepted
 // per the design doc (Section 1) rather than solving here.
 //
-// Requires SUPABASE_SERVICE_ROLE_KEY (or the new sb_secret_... key) as an
-// Edge Function secret — this is the one place in the whole app allowed to
-// use it, since creating an auth.users row needs the Admin API, which the
-// Flutter client can never hold (see the security note in
+// Requires a full-access Supabase key as an Edge Function secret (the new
+// SUPABASE_SECRET_KEYS, preferred, or the legacy SUPABASE_SERVICE_ROLE_KEY —
+// see _shared/service_key.ts) — this is one of 4 places in the whole app
+// allowed to use it, since creating an auth.users row needs the Admin API,
+// which the Flutter client can never hold (see the security note in
 // core/supabase/supabase_config.dart and Craig's own question about the
 // sb_secret key — this function is *why* that key exists at all).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getServiceKey } from '../_shared/service_key.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -41,7 +43,7 @@ Deno.serve(async (req) => {
   try {
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      getServiceKey(),
     )
 
     const {
