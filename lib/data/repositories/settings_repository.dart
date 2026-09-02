@@ -1,4 +1,7 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../../core/supabase/supabase_config.dart';
+import '../../core/utils/edge_function_errors.dart';
 import '../models/client.dart';
 import '../models/license.dart';
 import '../models/profile.dart';
@@ -129,17 +132,21 @@ class SettingsRepository {
     String? repCode,
     String? branchCode,
   }) async {
-    final response = await supabase.functions.invoke('create-user', body: {
-      'email': email,
-      'password': password,
-      'name': name,
-      'level': level.name,
-      'contactNumber': contactNumber,
-      'repCode': repCode,
-      'branchCode': branchCode,
-    });
-    if (response.status != 200) {
-      throw Exception((response.data as Map?)?['error'] ?? 'Failed to create user');
+    try {
+      final response = await supabase.functions.invoke('create-user', body: {
+        'email': email,
+        'password': password,
+        'name': name,
+        'level': level.name,
+        'contactNumber': contactNumber,
+        'repCode': repCode,
+        'branchCode': branchCode,
+      });
+      if (response.status != 200) {
+        throw EdgeFunctionError((response.data as Map?)?['error'] as String? ?? 'Failed to create user');
+      }
+    } on FunctionsHttpException catch (e) {
+      throw friendlyEdgeFunctionError(e, fallback: 'Failed to create user');
     }
   }
 
@@ -160,9 +167,13 @@ class SettingsRepository {
   /// cross-client delete, no deleting a platform-admin account) as SeaWyze's
   /// equivalent function, see its own comment.
   Future<void> deleteUser(String userId) async {
-    final response = await supabase.functions.invoke('delete-user', body: {'userId': userId});
-    if (response.status != 200) {
-      throw Exception((response.data as Map?)?['error'] ?? 'Failed to delete user');
+    try {
+      final response = await supabase.functions.invoke('delete-user', body: {'userId': userId});
+      if (response.status != 200) {
+        throw EdgeFunctionError((response.data as Map?)?['error'] as String? ?? 'Failed to delete user');
+      }
+    } on FunctionsHttpException catch (e) {
+      throw friendlyEdgeFunctionError(e, fallback: 'Failed to delete user');
     }
   }
 
@@ -171,9 +182,13 @@ class SettingsRepository {
   /// everything (client, current license, requester) server-side from the
   /// caller's own JWT.
   Future<void> requestUpgrade() async {
-    final response = await supabase.functions.invoke('send-upgrade-request');
-    if (response.status != 200) {
-      throw Exception((response.data as Map?)?['error'] ?? 'Failed to send upgrade request');
+    try {
+      final response = await supabase.functions.invoke('send-upgrade-request');
+      if (response.status != 200) {
+        throw EdgeFunctionError((response.data as Map?)?['error'] as String? ?? 'Failed to send upgrade request');
+      }
+    } on FunctionsHttpException catch (e) {
+      throw friendlyEdgeFunctionError(e, fallback: 'Failed to send upgrade request');
     }
   }
 }

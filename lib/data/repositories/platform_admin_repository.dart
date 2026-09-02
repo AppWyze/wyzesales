@@ -1,4 +1,7 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../../core/supabase/supabase_config.dart';
+import '../../core/utils/edge_function_errors.dart';
 import '../models/client.dart';
 import '../models/license.dart';
 import '../models/pricing_plan.dart';
@@ -91,20 +94,24 @@ class PlatformAdminRepository {
     required int maxUsers,
     num discountPercent = 0,
   }) async {
-    final response = await supabase.functions.invoke('create-client', body: {
-      'clientCode': clientCode,
-      'clientName': clientName,
-      'adminName': adminName,
-      'adminEmail': adminEmail,
-      'adminPassword': adminPassword,
-      'supportPassword': supportPassword,
-      'planId': planId,
-      'maxUsers': maxUsers,
-      'discountPercent': discountPercent,
-    });
-    if (response.status != 200) {
-      throw Exception((response.data as Map?)?['error'] ?? 'Failed to create client');
+    try {
+      final response = await supabase.functions.invoke('create-client', body: {
+        'clientCode': clientCode,
+        'clientName': clientName,
+        'adminName': adminName,
+        'adminEmail': adminEmail,
+        'adminPassword': adminPassword,
+        'supportPassword': supportPassword,
+        'planId': planId,
+        'maxUsers': maxUsers,
+        'discountPercent': discountPercent,
+      });
+      if (response.status != 200) {
+        throw EdgeFunctionError((response.data as Map?)?['error'] as String? ?? 'Failed to create client');
+      }
+      return (response.data as Map)['supportEmail'] as String? ?? '';
+    } on FunctionsHttpException catch (e) {
+      throw friendlyEdgeFunctionError(e, fallback: 'Failed to create client');
     }
-    return (response.data as Map)['supportEmail'] as String? ?? '';
   }
 }
