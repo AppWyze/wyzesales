@@ -56,24 +56,15 @@ void main() {
       expect(fiscalYearFor(DateTime(2026, 7, 1), startMonth: 7), 2027); // rolls into FY2027
     });
 
-    test('KNOWN ISSUE, not yet fixed — flagged 2026-09-02 while writing task #92\'s '
-        'regression tests, reported to Craig for a decision rather than fixed unilaterally: '
-        'a January start month (start_month=1) mislabels every date by one year. '
-        'A Jan-Dec fiscal year should be labelled by ITS OWN calendar year (Jan 2026 -> Dec '
-        '2026 is naturally "FY2026"), but `date.month >= startMonth` is true for every month '
-        'when startMonth is 1, so this always takes the +1 branch and returns date.year + 1 '
-        'unconditionally. This pins TODAY\'S actual (buggy) behaviour deliberately, rather than '
-        'silently asserting the correct one, precisely so this test starts failing — as a '
-        'prompt to update it — the moment this gets fixed. The identical formula also exists '
-        'server-side (docs/schema/001_wyzesales_foundation.sql\'s fiscal_year() SQL function), '
-        'so a real fix needs both sides changed together, not just this Dart mirror.', () {
-      expect(fiscalYearFor(DateTime(2026, 1, 1), startMonth: 1), 2027); // should arguably be 2026
-      expect(fiscalYearFor(DateTime(2026, 12, 31), startMonth: 1), 2027); // should arguably be 2026
-      // No WyzeSales client is currently configured with start_month=1 (every
-      // real client on record started life hardcoded to March, per Section
-      // 48's own history) — so this has not yet mislabelled anyone's real
-      // data. It would the moment a client picked a January fiscal year from
-      // Settings > Company.
+    test('regression guard: a January start month (start_month=1) must label every date '
+        'by ITS OWN calendar year, not one year ahead. Found 2026-09-02 while writing these '
+        'tests, confirmed with Craig, fixed the same day in both this function and its SQL '
+        'twin (schema/022) — a Jan-Dec fiscal year ends in the same year it starts, unlike '
+        'every startMonth from 2-12, where `date.month >= startMonth` being true for every '
+        'month (since every month is >= 1) used to always take the +1 branch unconditionally', () {
+      expect(fiscalYearFor(DateTime(2026, 1, 1), startMonth: 1), 2026);
+      expect(fiscalYearFor(DateTime(2026, 12, 31), startMonth: 1), 2026);
+      expect(fiscalYearFor(DateTime(2027, 1, 1), startMonth: 1), 2027);
     });
   });
 

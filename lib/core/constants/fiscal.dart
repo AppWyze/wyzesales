@@ -48,10 +48,28 @@ List<String> fiscalMonthOrderFor({int startMonth = 3}) {
 }
 
 /// Client-side mirror of the fiscal_year() SQL function (schema/001 Section
-/// 8) — used for "which fiscal year is 'today' in" on the Dashboard/filters.
-/// Whole-DB fiscal year overrides (fiscal_year_settings.override_year) apply
-/// server-side only; this is just for picking sensible default filter values.
+/// 8, corrected by schema/022) — used for "which fiscal year is 'today' in"
+/// on the Dashboard/filters. Whole-DB fiscal year overrides
+/// (fiscal_year_settings.override_year) apply server-side only; this is just
+/// for picking sensible default filter values.
+///
+/// A fiscal year is labelled by the calendar year its LAST month falls in
+/// (e.g. a Mar-start fiscal year running Mar 2025 -> Feb 2026 is "FY2026").
+/// For any startMonth from 2-12 that's `date.year + 1` once the date reaches
+/// startMonth, `date.year` before it — the original, still-correct formula
+/// below. startMonth=1 is the one case that formula got wrong: a Jan-start
+/// fiscal year runs Jan Y -> Dec Y, ending in the SAME year Y it started in,
+/// so it should just be `date.year`, unchanged all the way through. The old
+/// unconditional `date.month >= startMonth ? date.year + 1 : date.year`
+/// treated `date.month >= 1` as always true (every month is >= 1) and so
+/// always took the +1 branch, mislabelling every date under a January fiscal
+/// year one year ahead of where it actually falls. 2026-09-02, caught while
+/// writing task #92's regression tests, confirmed with Craig before fixing
+/// (no client was actually configured with startMonth=1 yet, so nothing live
+/// was mislabelled) — fixed here and in fiscal_year() (schema/022) together,
+/// since this function exists specifically to mirror that SQL one.
 int fiscalYearFor(DateTime date, {int startMonth = 3}) {
+  if (startMonth == 1) return date.year;
   return date.month >= startMonth ? date.year + 1 : date.year;
 }
 
