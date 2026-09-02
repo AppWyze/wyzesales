@@ -1,6 +1,7 @@
 import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/supabase/supabase_config.dart';
+import '../../core/utils/sales_coverage.dart';
 import '../models/consolidated_sales.dart';
 import '../models/dimension_monthly_sales.dart';
 import '../models/dimension_performance.dart';
@@ -136,47 +137,14 @@ class SalesRepository {
     return SalesDocumentTotals.fromMap((rows as List).first as Map<String, dynamic>);
   }
 
-  /// Distinct document counts per document_kind — `fn_document_counts`
-  /// (schema/015). Powers the Dashboard's Quote → Order Conversion KPI tile
-  /// (2026-08-27). Deliberately NOT built on `fetchSalesDocumentsTotals`
-  /// above: that RPC's `total_count` is a line-level `count(*)` (one quote
-  /// with 3 line items counts as 3), while this needs the number of distinct
-  /// QUOTE documents vs distinct SALES ORDER documents raised in a period —
-  /// see fn_document_counts' own header comment.
-  ///
-  /// A document_kind with zero matching documents gets no row back at all
-  /// (a plain SQL `group by` over zero rows produces nothing) rather than a
-  /// row with `doc_count: 0` — expected right at the start of a new month,
-  /// when neither quotes nor orders may have been raised yet. The returned
-  /// map fills every requested kind in with 0 first so callers never need to
-  /// handle a missing key themselves.
-  Future<Map<String, int>> fetchDocumentCounts({
-    required List<String> documentKinds,
-    int? fiscalYear,
-    String? fiscalMonth,
-    String? categoryCode,
-    String? itemCode,
-    String? repCode,
-    String? branchCode,
-    String? customerCode,
-  }) async {
-    final rows = await supabase.rpc('fn_document_counts', params: {
-      'p_document_kinds': documentKinds,
-      'p_fiscal_year': fiscalYear,
-      'p_fiscal_month': fiscalMonth,
-      'p_category': categoryCode,
-      'p_item': itemCode,
-      'p_rep': repCode,
-      'p_branch': branchCode,
-      'p_customer': customerCode,
-    });
-    final counts = <String, int>{for (final kind in documentKinds) kind: 0};
-    for (final row in (rows as List)) {
-      final map = row as Map<String, dynamic>;
-      counts[map['document_kind'] as String] = (map['doc_count'] as num).toInt();
-    }
-    return counts;
-  }
+  /// `fetchDocumentCounts` (`fn_document_counts`, schema/015) was removed
+  /// 2026-09-02, task #93/#103 — its only caller was the Dashboard's Quote →
+  /// Order Conversion KPI tile, itself replaced by the Sales Coverage tile
+  /// (`fetchSalesHistory` below) for the same reason Quote/Sales Order
+  /// Analysis were removed entirely: see Wyzesales_Rebuild_Decisions.md
+  /// Section 55. `fn_document_counts` itself is left in place in Supabase —
+  /// there's no cost to an unused SQL function, and dropping it isn't
+  /// necessary for anything this cleanup needed.
 
   /// Shared param map for both `fn_sales_documents_page` and
   /// `fn_sales_documents_totals` (schema/012) — the two functions take
@@ -317,6 +285,25 @@ class SalesRepository {
       'p_filter_branch': filters.branch?.code,
     });
     return (rows as List).map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r as Map<String, dynamic>)).toList();
+  }
+
+  /// Raw inputs for the "% Coverage Needed" calc (task #93/#101,
+  /// core/utils/sales_coverage.dart) — `fn_dimension_sales_history`
+  /// (schema/023). Pass `dimension.dbValue` to get every entity's own
+  /// trailing-window active-months + total-revenue, or the literal string
+  /// `'company'` to get the single company-wide fallback row (entity_code
+  /// `'ALL'`) that same function returns for that dimension value (see
+  /// v_dimension_monthly_sales' own 'company' branch, schema/002).
+  /// `fiscalYears` should be the client's configured trailing history window
+  /// (`fiscalYearWindow(currentFy, historyYears)`, fiscal.dart) — this is a
+  /// standalone historical baseline, deliberately independent of whatever
+  /// period Performance Analysis currently has filtered.
+  Future<List<EntitySalesHistory>> fetchSalesHistory({required String dimension, required List<int> fiscalYears}) async {
+    final rows = await supabase.rpc('fn_dimension_sales_history', params: {
+      'p_dimension': dimension,
+      'p_fiscal_years': fiscalYears,
+    });
+    return (rows as List).map<EntitySalesHistory>((r) => EntitySalesHistory.fromMap(r as Map<String, dynamic>)).toList();
   }
 
   /// True when `filters` carries anything a plain single-dimension rollup

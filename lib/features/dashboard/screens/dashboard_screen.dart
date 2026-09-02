@@ -6,6 +6,7 @@ import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
+import '../../../core/utils/sales_coverage.dart';
 import '../../../data/models/budget_figure.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../data/models/dimension_monthly_sales.dart';
@@ -98,12 +99,22 @@ class _KpiData {
   final num companyTargetMtd;
   final num companyTargetYtd;
 
-  // Quote → Order Conversion — DISTINCT document counts, not a sum of line
-  // values (see SalesRepository.fetchDocumentCounts' doc comment).
-  final int quoteCountMtd;
-  final int orderCountMtd;
-  final int quoteCountYtd;
-  final int orderCountYtd;
+  // Sales Coverage (task #93/#103, replaced the Quote → Order Conversion
+  // tile 2026-09-02 — see Wyzesales_Rebuild_Decisions.md Section 55 for why:
+  // quotes/sales orders are never reliably captured anywhere in WCSA's data,
+  // not even in their own daily-use IQRetail application). `companyActualMtd`
+  // /`companyActualYtd`/`companyTargetMtd`/`companyTargetYtd` above already
+  // carry everything needed for the Gap side of the calc; this adds only the
+  // one extra number the Gap doesn't already give: the company's own average
+  // monthly revenue over its trailing history window
+  // (fn_dimension_sales_history, schema/023), which the % Coverage Needed
+  // math divides the Gap by. `elapsedMonthsYtd` is how many fiscal months of
+  // the current year have actually elapsed — YTD's Gap covers that many
+  // months at once, so the YTD calc scales the average by this count rather
+  // than treating it as if it were a single month's Gap (Craig, 2026-09-02,
+  // confirming how to scale YTD: "Multiply average by elapsed months").
+  final num companyAvgRevenuePerPeriod;
+  final int elapsedMonthsYtd;
 
   // Top 5 Customer Concentration.
   final num top5CustomerValueMtd;
@@ -143,10 +154,8 @@ class _KpiData {
     required this.companyActualYtd,
     required this.companyTargetMtd,
     required this.companyTargetYtd,
-    required this.quoteCountMtd,
-    required this.orderCountMtd,
-    required this.quoteCountYtd,
-    required this.orderCountYtd,
+    required this.companyAvgRevenuePerPeriod,
+    required this.elapsedMonthsYtd,
     required this.top5CustomerValueMtd,
     required this.totalCustomerValueMtd,
     required this.top5CustomerCountMtd,
@@ -307,28 +316,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final filters = _dashboardFilters(ref.read(globalFiltersProvider));
     final salesRepo = ref.read(salesRepositoryProvider);
 
+    // Sales Coverage's company-wide historical average — trailing 3/5-year
+    // window, same `fiscalYearWindow` convention Performance Analysis uses
+    // for the identical per-entity calc (core/utils/sales_coverage.dart).
+    // Deliberately NOT narrowed by `filters` — like companyActualMtd/
+    // companyTargetMtd above, this tile is whole-company (see _KpiData's own
+    // doc comment on why Revenue/Rep Target Attainment stay whole-company).
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
+    final historyWindow = fiscalYearWindow(currentFiscalYear, historyYears);
+
     final results = await Future.wait([
       salesRepo.fetchConsolidatedSales(fiscalYears: [currentFiscalYear], filters: filters),
       _fetchWholeCompanyTarget(currentFiscalYear, monthStart),
-      salesRepo.fetchDocumentCounts(
-        documentKinds: const ['quote', 'sales_order'],
-        fiscalYear: currentFiscalYear,
-        categoryCode: filters.category?.code,
-        itemCode: filters.item?.code,
-        repCode: filters.salesPerson?.code,
-        branchCode: filters.branch?.code,
-        customerCode: filters.customer?.code,
-      ),
-      salesRepo.fetchDocumentCounts(
-        documentKinds: const ['quote', 'sales_order'],
-        fiscalYear: currentFiscalYear,
-        fiscalMonth: currentMonthLabel,
-        categoryCode: filters.category?.code,
-        itemCode: filters.item?.code,
-        repCode: filters.salesPerson?.code,
-        branchCode: filters.branch?.code,
-        customerCode: filters.customer?.code,
-      ),
+      salesRepo.fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
       salesRepo.fetchDimensionMonthlySales(
         dimension: SalesDimension.customer,
         fiscalYears: [currentFiscalYear],
@@ -385,15 +385,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     final consolidatedRows = results[0] as List<ConsolidatedSales>;
     final wholeCompanyTarget = results[1] as _WholeCompanyTarget;
-    final documentCountsYtd = results[2] as Map<String, int>;
-    final documentCountsMtd = results[3] as Map<String, int>;
-    final customerMonthlyRows = results[4] as List<DimensionMonthlySales>;
-    final repBudgetRows = results[5] as List<BudgetFigure>;
-    final repMonthlyRows = results[6] as List<DimensionMonthlySales>;
-    final invoiceTotalsMtd = results[7] as SalesDocumentTotals;
-    final creditNoteTotalsMtd = results[8] as SalesDocumentTotals;
-    final invoiceTotalsYtd = results[9] as SalesDocumentTotals;
-    final creditNoteTotalsYtd = results[10] as SalesDocumentTotals;
+    final companyHistoryRows = results[2] as List<EntitySalesHistory>;
+    final companyAvgRevenuePerPeriod = companyHistoryRows.isEmpty ? 0 : companyHistoryRows.first.avgRevenuePerPeriod;
+    final customerMonthlyRows = results[3] as List<DimensionMonthlySales>;
+    final repBudgetRows = results[4] as List<BudgetFigure>;
+    final repMonthlyRows = results[5] as List<DimensionMonthlySales>;
+    final invoiceTotalsMtd = results[6] as SalesDocumentTotals;
+    final creditNoteTotalsMtd = results[7] as SalesDocumentTotals;
+    final invoiceTotalsYtd = results[8] as SalesDocumentTotals;
+    final creditNoteTotalsYtd = results[9] as SalesDocumentTotals;
 
     num salesMtd = 0, profitMtd = 0, salesYtd = 0, profitYtd = 0;
     for (final row in consolidatedRows) {
@@ -472,10 +472,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       companyActualYtd: wholeCompanyTarget.actualYtd,
       companyTargetMtd: wholeCompanyTarget.targetMtd,
       companyTargetYtd: wholeCompanyTarget.targetYtd,
-      quoteCountMtd: documentCountsMtd['quote'] ?? 0,
-      orderCountMtd: documentCountsMtd['sales_order'] ?? 0,
-      quoteCountYtd: documentCountsYtd['quote'] ?? 0,
-      orderCountYtd: documentCountsYtd['sales_order'] ?? 0,
+      companyAvgRevenuePerPeriod: companyAvgRevenuePerPeriod,
+      elapsedMonthsYtd: elapsedFiscalMonths.length,
       top5CustomerValueMtd: top5Sum(customerMtdTotals),
       totalCustomerValueMtd: totalSum(customerMtdTotals),
       top5CustomerCountMtd: customerMtdTotals.length < 5 ? customerMtdTotals.length : 5,
@@ -704,16 +702,28 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               final gpMarginYtd = ratioPercent(kpis.profitYtd, kpis.salesYtd);
               Color gpMarginColor(num? percent) => percent == null ? neutralMuted : (percent >= 0 ? AppColors.positive : AppColors.negative);
 
-              // Quote → Order Conversion is a same-period count (distinct
-              // quote documents vs distinct sales-order documents raised in
-              // the same period), not a matched per-quote conversion rate —
-              // there's no field linking a specific quote to the order it
-              // becomes. That caveat used to be printed under the KPI row;
-              // Craig had it removed 2026-08-28. Still documented in
-              // Wyzesales_Rebuild_Decisions.md (Section 27/28) for anyone
-              // who needs the full explanation.
-              final conversionMtd = ratioPercent(kpis.orderCountMtd, kpis.quoteCountMtd);
-              final conversionYtd = ratioPercent(kpis.orderCountYtd, kpis.quoteCountYtd);
+              // Sales Coverage (task #93/#103, replaced Quote → Order
+              // Conversion 2026-09-02 — see Wyzesales_Rebuild_Decisions.md
+              // Section 55). Same Gap-over-average-revenue-per-period idea
+              // as Performance Analysis' per-entity "% Coverage Needed"
+              // column (core/utils/sales_coverage.dart), but this tile is
+              // already whole-company, so there's no entity/company
+              // fallback to decide — only the MTD-vs-YTD period-count
+              // scaling, since a YTD Gap covers more than one month's worth
+              // of shortfall (Craig, 2026-09-02, confirming how to scale
+              // YTD: "Multiply average by elapsed months").
+              String coverageText(num gap, int periods) {
+                if (gap <= 0) return 'On Target';
+                final expected = kpis.companyAvgRevenuePerPeriod * periods;
+                if (expected <= 0) return '—';
+                return formatPercent((gap / expected) * 100);
+              }
+
+              final coverageGapMtd = kpis.companyTargetMtd - kpis.companyActualMtd;
+              final coverageGapYtd = kpis.companyTargetYtd - kpis.companyActualYtd;
+              final coverageMtdText = coverageText(coverageGapMtd, 1);
+              final coverageYtdText = coverageText(coverageGapYtd, kpis.elapsedMonthsYtd);
+              Color coverageColor(num gap) => gap <= 0 ? AppColors.positive : AppColors.caution;
 
               // Top 5 Customer Concentration — 40% is a starting-point
               // "worth keeping an eye on" threshold, not a hard business
@@ -813,18 +823,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         ytdSubtitle: '${formatRand(kpis.profitYtd)} of ${formatRand(kpis.salesYtd)} sales (YTD)',
                       ),
                       ToggleStatCard(
-                        label: 'Quote → Order Conversion',
-                        mtdValue: formatPercent(conversionMtd),
-                        mtdColor: onSurface,
-                        // 2026-09-01, Craig: "format all numbers with the
-                        // thousand [separator]... This must apply to all
-                        // numbers in the application" — these counts were
-                        // interpolated raw; wrapped in formatQuantity like
-                        // every other number in the app already is.
-                        mtdSubtitle: '${formatQuantity(kpis.quoteCountMtd)} quotes → ${formatQuantity(kpis.orderCountMtd)} orders',
-                        ytdValue: formatPercent(conversionYtd),
-                        ytdColor: onSurface,
-                        ytdSubtitle: '${formatQuantity(kpis.quoteCountYtd)} quotes → ${formatQuantity(kpis.orderCountYtd)} orders',
+                        label: 'Sales Coverage',
+                        mtdValue: coverageMtdText,
+                        mtdColor: coverageColor(coverageGapMtd),
+                        mtdSubtitle: coverageGapMtd <= 0
+                            ? '${formatRand(coverageGapMtd.abs())} above target (MTD)'
+                            : '${formatRand(coverageGapMtd)} gap to target (MTD)',
+                        ytdValue: coverageYtdText,
+                        ytdColor: coverageColor(coverageGapYtd),
+                        ytdSubtitle: coverageGapYtd <= 0
+                            ? '${formatRand(coverageGapYtd.abs())} above target (YTD)'
+                            : '${formatRand(coverageGapYtd)} gap to target (YTD)',
                       ),
                       ToggleStatCard(
                         label: 'Top 5 Customer Concentration',

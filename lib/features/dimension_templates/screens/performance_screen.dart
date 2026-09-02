@@ -6,6 +6,7 @@ import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/performance_rollup.dart';
+import '../../../core/utils/sales_coverage.dart';
 import '../../../data/models/dimension_performance.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
@@ -16,7 +17,23 @@ import '../../../shared/widgets/responsive_data_table.dart';
 class _PerformanceData {
   final List<DimensionPerformance> rows;
   final Map<String, String> names;
-  const _PerformanceData({required this.rows, required this.names});
+  // R Gap / % Coverage Needed (task #93/#102) — raw inputs from
+  // fn_dimension_sales_history (schema/023), keyed by entity_code for
+  // `ownHistory` (one row per entity in this dimension) and a single
+  // always-present-or-null row for `companyHistory` (the <3-active-months
+  // fallback target). See core/utils/sales_coverage.dart for why this data
+  // is fetched raw and turned into a display figure here in Dart, not in SQL.
+  final Map<String, EntitySalesHistory> ownHistory;
+  final EntitySalesHistory? companyHistory;
+
+  const _PerformanceData({required this.rows, required this.names, required this.ownHistory, this.companyHistory});
+
+  CoverageResult coverageFor(DimensionPerformance row) => computeCoverage(
+        targetValue: row.targetValue,
+        actualValue: row.actualValue,
+        own: ownHistory[row.entityCode],
+        company: companyHistory,
+      );
 }
 
 /// %Contribution, R Value, R Target, %Target, R Profit, %GP, Quantity — one
@@ -24,6 +41,11 @@ class _PerformanceData {
 /// (Wyzesales_Screens_and_Recommendations.md Section 1). Almost no
 /// client-side math: v_dimension_performance (schema/002 Section 3) already
 /// computes all three ratios in SQL.
+///
+/// R Gap and % Coverage Needed (task #93/#102, added 2026-09-02) are the two
+/// exceptions — see core/utils/sales_coverage.dart's doc comment for the
+/// formula and Wyzesales_Rebuild_Decisions.md Section 55 for why this
+/// replaced the originally-planned quote/order lifecycle tracking entirely.
 class PerformanceScreen extends ConsumerStatefulWidget {
   const PerformanceScreen({super.key, required this.dimension});
 
@@ -146,6 +168,16 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       'salesPerson=${filters.salesPerson?.code}, category=${filters.category?.code}, '
       'customer=${filters.customer?.code}, item=${filters.item?.code}, branch=${filters.branch?.code})',
     );
+    // currentFy/historyYears computed up front (not just inside the
+    // effectiveYear==null branch below) because the coverage history fetch
+    // needs the same trailing window regardless of whether a specific Year
+    // is filtered — an entity's historical average is a standalone baseline,
+    // not something that should shrink to one year just because Performance
+    // Analysis itself is currently viewing one year (see schema/023's own
+    // header comment on this same point).
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
+    final historyWindow = fiscalYearWindow(currentFy, historyYears);
     final results = await Future.wait([
       ref.read(salesRepositoryProvider).fetchDimensionPerformance(
             dimension: widget.dimension,
@@ -154,8 +186,13 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             filters: filters,
           ),
       ref.read(referenceDataRepositoryProvider).namesFor(widget.dimension),
+      ref.read(salesRepositoryProvider).fetchSalesHistory(dimension: widget.dimension.dbValue, fiscalYears: historyWindow),
+      ref.read(salesRepositoryProvider).fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
     ]);
     var rawRows = results[0] as List<DimensionPerformance>;
+    final ownHistory = {for (final h in results[2] as List<EntitySalesHistory>) h.entityCode: h};
+    final companyHistoryRows = results[3] as List<EntitySalesHistory>;
+    final companyHistory = companyHistoryRows.isEmpty ? null : companyHistoryRows.first;
     // effectiveYear == null means the query above wasn't restricted to one
     // fiscal year, so `rawRows` can hold more than one row per entity (one
     // per fiscal year that has data for `effectiveMonth`) — merge before
@@ -180,15 +217,18 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // Filtered client-side (rather than changing the SQL function's
     // signature) since this is the only screen with the gap and a plain
     // `.where` is a much smaller change than a new migration.
-    final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
     if (effectiveYear == null) {
-      final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
-      final window = fiscalYearWindow(currentFy, historyYears).toSet();
+      final window = historyWindow.toSet();
       rawRows = rawRows.where((r) => window.contains(r.fiscalYear)).toList();
     }
     final rows = effectiveYear == null ? mergeAcrossYears(rawRows, currentFy) : rawRows;
     debugPrint('[PerformanceScreen] _load() completed — ${rawRows.length} raw row(s), ${rows.length} after merge');
-    return _PerformanceData(rows: rows, names: results[1] as Map<String, String>);
+    return _PerformanceData(
+      rows: rows,
+      names: results[1] as Map<String, String>,
+      ownHistory: ownHistory,
+      companyHistory: companyHistory,
+    );
   }
 
   void _refetch() {
@@ -285,10 +325,14 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       case 4:
         return (a.targetPercent ?? 0).compareTo(b.targetPercent ?? 0);
       case 5:
-        return a.actualProfit.compareTo(b.actualProfit);
+        return (data.coverageFor(a).rGap ?? 0).compareTo(data.coverageFor(b).rGap ?? 0);
       case 6:
-        return a.gpPercent.compareTo(b.gpPercent);
+        return (data.coverageFor(a).coveragePercent ?? 0).compareTo(data.coverageFor(b).coveragePercent ?? 0);
       case 7:
+        return a.actualProfit.compareTo(b.actualProfit);
+      case 8:
+        return a.gpPercent.compareTo(b.gpPercent);
+      case 9:
         return a.actualQuantity.compareTo(b.actualQuantity);
       default:
         return 0;
@@ -302,45 +346,79 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     });
   }
 
+  /// "% Coverage Needed" cell text — see core/utils/sales_coverage.dart's
+  /// CoverageResult doc comment for what each of the three non-percentage
+  /// states means. The trailing `*` on a fallback figure is explained by the
+  /// italic caption `_buildTable` renders below the table whenever any row
+  /// uses it (Craig, 2026-09-02: this "must be flagged/visible in the UI
+  /// when this fallback is used").
+  String _coverageText(CoverageResult coverage) {
+    if (coverage.onTarget) return 'On Target';
+    if (coverage.insufficientData) return '—';
+    final pct = formatPercent(coverage.coveragePercent);
+    return coverage.usedFallback ? '$pct *' : pct;
+  }
+
   Widget _buildTable(BuildContext context, _PerformanceData data) {
     final rows = [...data.rows]..sort((a, b) {
       final cmp = _compareRows(a, b, data, _sortColumnIndex);
       return _sortAscending ? cmp : -cmp;
     });
-    return ResponsiveDataTable(
-      sortColumnIndex: _sortColumnIndex,
-      sortAscending: _sortAscending,
-      // Totals is rows[0] only when there's at least one row (see the
-      // `if (rows.isNotEmpty) _totalsRow(...)` below) — pinning follows the
-      // same condition, otherwise there'd be nothing there to freeze
-      // (2026-08-27, Craig: "lock the Headers and Totals so we don't lose
-      // them when scrolling down").
-      pinnedRowCount: rows.isNotEmpty ? 1 : 0,
-      columns: [
-        DataColumn(label: Text(widget.dimension.label), onSort: _onSort),
-        DataColumn(label: const Text('% Contribution'), numeric: true, onSort: _onSort),
-        DataColumn(label: const Text('R Value'), numeric: true, onSort: _onSort),
-        DataColumn(label: const Text('R Target'), numeric: true, onSort: _onSort),
-        DataColumn(label: const Text('% Target'), numeric: true, onSort: _onSort),
-        DataColumn(label: const Text('R Profit'), numeric: true, onSort: _onSort),
-        DataColumn(label: const Text('% GP'), numeric: true, onSort: _onSort),
-        DataColumn(label: const Text('Quantity'), numeric: true, onSort: _onSort),
-      ],
-      rows: [
-        if (rows.isNotEmpty) _totalsRow(context, rows),
-        ...rows.map((row) {
-          final gpColor = row.actualProfit < 0 ? Theme.of(context).colorScheme.error : null;
-          return DataRow(cells: [
-            DataCell(Text(data.names[row.entityCode] ?? row.entityCode)),
-            DataCell(Text(formatPercent(row.contributionPercent))),
-            DataCell(Text(formatRand(row.actualValue))),
-            DataCell(Text(formatRand(row.targetValue))),
-            DataCell(Text(formatPercent(row.targetPercent))),
-            DataCell(Text(formatRand(row.actualProfit), style: TextStyle(color: gpColor))),
-            DataCell(Text(formatPercent(row.gpPercent), style: TextStyle(color: gpColor))),
-            DataCell(Text(formatQuantity(row.actualQuantity))),
-          ]);
-        }),
+    final anyFallback = rows.any((r) => data.coverageFor(r).usedFallback);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: ResponsiveDataTable(
+            sortColumnIndex: _sortColumnIndex,
+            sortAscending: _sortAscending,
+            // Totals is rows[0] only when there's at least one row (see the
+            // `if (rows.isNotEmpty) _totalsRow(...)` below) — pinning follows
+            // the same condition, otherwise there'd be nothing there to
+            // freeze (2026-08-27, Craig: "lock the Headers and Totals so we
+            // don't lose them when scrolling down").
+            pinnedRowCount: rows.isNotEmpty ? 1 : 0,
+            columns: [
+              DataColumn(label: Text(widget.dimension.label), onSort: _onSort),
+              DataColumn(label: const Text('% Contribution'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('R Value'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('R Target'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('% Target'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('R Gap'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('% Coverage Needed'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('R Profit'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('% GP'), numeric: true, onSort: _onSort),
+              DataColumn(label: const Text('Quantity'), numeric: true, onSort: _onSort),
+            ],
+            rows: [
+              if (rows.isNotEmpty) _totalsRow(context, rows, data),
+              ...rows.map((row) {
+                final coverage = data.coverageFor(row);
+                final gpColor = row.actualProfit < 0 ? Theme.of(context).colorScheme.error : null;
+                return DataRow(cells: [
+                  DataCell(Text(data.names[row.entityCode] ?? row.entityCode)),
+                  DataCell(Text(formatPercent(row.contributionPercent))),
+                  DataCell(Text(formatRand(row.actualValue))),
+                  DataCell(Text(formatRand(row.targetValue))),
+                  DataCell(Text(formatPercent(row.targetPercent))),
+                  DataCell(Text(formatRand(coverage.rGap))),
+                  DataCell(Text(_coverageText(coverage))),
+                  DataCell(Text(formatRand(row.actualProfit), style: TextStyle(color: gpColor))),
+                  DataCell(Text(formatPercent(row.gpPercent), style: TextStyle(color: gpColor))),
+                  DataCell(Text(formatQuantity(row.actualQuantity))),
+                ]);
+              }),
+            ],
+          ),
+        ),
+        if (anyFallback)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              '* using company-wide average — under 3 months of this entity\'s own sales history',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+            ),
+          ),
       ],
     );
   }
@@ -357,7 +435,16 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   /// of figure — each is a ratio specific to one entity — so those two are
   /// recomputed from the totalled Rand columns instead (a correct weighted
   /// average, not a simple average of every entity's own percentage).
-  DataRow _totalsRow(BuildContext context, List<DimensionPerformance> rows) {
+  ///
+  /// R Gap totals the same way (totalTarget - totalValue, a plain sum — Gap
+  /// is already additive, unlike a percentage). % Coverage Needed for the
+  /// Total row treats the summed figures as the company's own — passing
+  /// `data.companyHistory` as BOTH `own` and `company` to computeCoverage,
+  /// so the <3-active-months fallback never fires here (a real client's
+  /// company-wide history essentially always clears that bar once it has any
+  /// sales on record) and the result is simply the company's own coverage
+  /// figure for this period, not any one entity's.
+  DataRow _totalsRow(BuildContext context, List<DimensionPerformance> rows, _PerformanceData data) {
     final totalContribution = rows.fold<num>(0, (sum, r) => sum + (r.contributionPercent ?? 0));
     final totalValue = rows.fold<num>(0, (sum, r) => sum + r.actualValue);
     final totalTarget = rows.fold<num>(0, (sum, r) => sum + (r.targetValue ?? 0));
@@ -365,6 +452,12 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     final totalQuantity = rows.fold<num>(0, (sum, r) => sum + r.actualQuantity);
     final totalTargetPercent = totalTarget == 0 ? null : (totalValue / totalTarget) * 100;
     final totalGpPercent = totalValue == 0 ? null : (totalProfit / totalValue) * 100;
+    final totalCoverage = computeCoverage(
+      targetValue: totalTarget == 0 ? null : totalTarget,
+      actualValue: totalValue,
+      own: data.companyHistory,
+      company: data.companyHistory,
+    );
     const style = TextStyle(fontWeight: FontWeight.bold);
     final gpColor = totalProfit < 0 ? Theme.of(context).colorScheme.error : null;
     return DataRow(
@@ -375,6 +468,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
         DataCell(Text(formatRand(totalValue), style: style)),
         DataCell(Text(formatRand(totalTarget), style: style)),
         DataCell(Text(formatPercent(totalTargetPercent), style: style)),
+        DataCell(Text(formatRand(totalCoverage.rGap), style: style)),
+        DataCell(Text(_coverageText(totalCoverage), style: style)),
         DataCell(Text(formatRand(totalProfit), style: style.copyWith(color: gpColor))),
         DataCell(Text(formatPercent(totalGpPercent), style: style.copyWith(color: gpColor))),
         DataCell(Text(formatQuantity(totalQuantity), style: style)),
@@ -382,13 +477,13 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     );
   }
 
-  /// Same 8 columns as _buildTable, same totals-row weighted-ratio
+  /// Same 10 columns as _buildTable, same totals-row weighted-ratio
   /// recomputation as _totalsRow (see that method's own doc comment for why
-  /// %Target/%GP aren't simply averaged) — built from whatever `_future`
-  /// already resolved to, since this screen (unlike DocumentAnalysisView)
-  /// holds its full per-dimension result set in memory rather than one
-  /// paginated page, so there's no extra "fetch everything" fetch needed
-  /// here.
+  /// %Target/%GP aren't simply averaged, and how the Total row's own R Gap/%
+  /// Coverage Needed are derived) — built from whatever `_future` already
+  /// resolved to, since this screen (unlike DocumentAnalysisView) holds its
+  /// full per-dimension result set in memory rather than one paginated page,
+  /// so there's no extra "fetch everything" fetch needed here.
   Future<ExportData> _buildExportData() async {
     final data = await _future;
     final rows = data.rows;
@@ -398,6 +493,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       'R Value',
       'R Target',
       '% Target',
+      'R Gap',
+      '% Coverage Needed',
       'R Profit',
       '% GP',
       'Quantity',
@@ -411,24 +508,35 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       final totalQuantity = rows.fold<num>(0, (sum, r) => sum + r.actualQuantity);
       final totalTargetPercent = totalTarget == 0 ? null : (totalValue / totalTarget) * 100;
       final totalGpPercent = totalValue == 0 ? null : (totalProfit / totalValue) * 100;
+      final totalCoverage = computeCoverage(
+        targetValue: totalTarget == 0 ? null : totalTarget,
+        actualValue: totalValue,
+        own: data.companyHistory,
+        company: data.companyHistory,
+      );
       dataRows.add([
         'Total',
         formatPercent(totalContribution),
         formatRand(totalValue),
         formatRand(totalTarget),
         formatPercent(totalTargetPercent),
+        formatRand(totalCoverage.rGap),
+        _coverageText(totalCoverage),
         formatRand(totalProfit),
         formatPercent(totalGpPercent),
         formatQuantity(totalQuantity),
       ]);
     }
     for (final row in rows) {
+      final coverage = data.coverageFor(row);
       dataRows.add([
         data.names[row.entityCode] ?? row.entityCode,
         formatPercent(row.contributionPercent),
         formatRand(row.actualValue),
         formatRand(row.targetValue),
         formatPercent(row.targetPercent),
+        formatRand(coverage.rGap),
+        _coverageText(coverage),
         formatRand(row.actualProfit),
         formatPercent(row.gpPercent),
         formatQuantity(row.actualQuantity),
