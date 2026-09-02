@@ -111,3 +111,87 @@ List<DimensionPerformance> mergeAcrossYears(List<DimensionPerformance> rawRows, 
     );
   }).toList();
 }
+
+/// Collapses possibly-several-per-entity rows (one per fiscal MONTH within a
+/// single fiscal year) into one row per entity — the whole-year counterpart
+/// to `mergeAcrossYears` above, needed once a Year-only filter (no Month) is
+/// selected on Performance Analysis.
+///
+/// 2026-09-02: Craig noticed a Year-only filter (e.g. "Year = 2027") showed
+/// no data at all. Root cause was `_effectiveFiscalMonth` in
+/// `performance_screen.dart` defaulting to TODAY's calendar month whenever
+/// Month wasn't explicitly set — regardless of whether a Year filter WAS
+/// set — so "Year 2027" silently became "Year 2027 + (today's month)," which
+/// can easily have no data yet if today's fiscal month has barely started.
+/// Fixed by only defaulting the month when NEITHER Year nor Month is set,
+/// same "only default when totally unfiltered" rule `_effectiveFiscalYear`
+/// already followed for the symmetric case (a bare Month filter). That fix
+/// alone makes a Year-only filter return one row PER FISCAL MONTH per
+/// entity, which needed this new aggregation step — confirmed with Craig
+/// before building: "Yes" to summing the whole year's totals per entity,
+/// same shape as every other column on this screen.
+///
+/// The additive ACTUAL measures sum exactly like `mergeAcrossYears`, and
+/// `gpPercent`/`contributionPercent` are recomputed the same way (a ratio of
+/// ratios isn't the right ratio; contribution is each entity's merged
+/// actualValue over every merged entity's actualValue). `targetValue` is
+/// genuinely simpler here than in `mergeAcrossYears`: `budget_figures`/
+/// `sales_forecast` are keyed by `(dimension, entity_code, fiscal_month)` —
+/// no `fiscal_year` column — so DIFFERENT fiscal months within the SAME year
+/// legitimately carry DIFFERENT targets (December's target isn't February's).
+/// There's no "one target repeated N times" trap to correct for the way
+/// merging the SAME month across several YEARS had (see `mergeAcrossYears`'s
+/// own doc comment for that history) — each contributing row already carries
+/// its own distinct, correctly-resolved (budget-or-forecast, schema/021)
+/// target, so the year's target is simply the sum of whichever months
+/// actually contributed a row.
+///
+/// A month that hasn't happened yet within the CURRENT fiscal year (e.g.
+/// filtering "Year 2027" while only partway through it) never produces a row
+/// to sum in the first place — `v_dimension_performance`/
+/// `fn_dimension_performance_filtered` are both driven FROM the actual-sales
+/// rollup (`v_dimension_monthly_sales`), left-joined to budget/forecast, so a
+/// month with zero recorded sales has no row at all regardless of whether a
+/// target was configured for it. That's an existing characteristic of this
+/// screen's data (an entity with a target but literally zero sales in a
+/// given month is already invisible for that single month today), not
+/// something newly introduced by this aggregation — it just means "future,
+/// not-yet-reached months contribute nothing to either side" falls out for
+/// free, with no separate "how many months have elapsed" bookkeeping needed
+/// inside this function itself (that bookkeeping does still matter for
+/// scoring the RESULT — see `computeCoverage`'s `periods` parameter and
+/// `performance_screen.dart`'s own `_load()` for how many months a Year
+/// filter's Gap is measured against).
+List<DimensionPerformance> mergeAcrossMonths(List<DimensionPerformance> rawRows) {
+  final byEntity = <String, List<DimensionPerformance>>{};
+  for (final row in rawRows) {
+    byEntity.putIfAbsent(row.entityCode, () => []).add(row);
+  }
+  final grandTotalValue = rawRows.fold<num>(0, (sum, r) => sum + r.actualValue);
+  return byEntity.entries.map((entry) {
+    final entityRows = entry.value;
+    final value = entityRows.fold<num>(0, (sum, r) => sum + r.actualValue);
+    final quantity = entityRows.fold<num>(0, (sum, r) => sum + r.actualQuantity);
+    final profit = entityRows.fold<num>(0, (sum, r) => sum + r.actualProfit);
+    num? target;
+    for (final r in entityRows) {
+      if (r.targetValue != null) target = (target ?? 0) + r.targetValue!;
+    }
+    return DimensionPerformance(
+      dimension: entityRows.first.dimension,
+      entityCode: entry.key,
+      fiscalYear: entityRows.first.fiscalYear,
+      // Not displayed or exported anywhere on this screen (same as
+      // `mergeAcrossYears`'s own fiscalMonth field) — kept as one of the
+      // contributing months purely so this remains a real value.
+      fiscalMonth: entityRows.first.fiscalMonth,
+      actualValue: value,
+      actualQuantity: quantity,
+      actualProfit: profit,
+      gpPercent: value == 0 ? 0 : (profit / value) * 100,
+      targetValue: target,
+      targetPercent: (target == null || target == 0) ? null : (value / target) * 100,
+      contributionPercent: grandTotalValue == 0 ? null : (value / grandTotalValue) * 100,
+    );
+  }).toList();
+}

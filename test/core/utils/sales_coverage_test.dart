@@ -98,5 +98,54 @@ void main() {
       expect(result.insufficientData, true);
       expect(result.coveragePercent, isNull);
     });
+
+    // `periods` — added 2026-09-02 for the Year-only-filter fix
+    // (performance_screen.dart's `_load()`): a Gap spanning several fiscal
+    // months (a whole year, or a partial YTD year) needs to be measured
+    // against that many months of average revenue, not one.
+    group('periods', () {
+      test('defaults to 1 — unchanged behaviour for every pre-existing (single-month) call site', () {
+        const own = EntitySalesHistory(entityCode: 'REP_EST', activeMonths: 36, totalValue: 2160000); // R60,000/month
+        final result = computeCoverage(targetValue: 90000, actualValue: 60000, own: own, company: own);
+        expect(result.coveragePercent, closeTo(50, 0.001)); // 30,000 gap / (60,000 * 1) * 100
+      });
+
+      test('scales the average by the given number of periods (a full year, 12 periods)', () {
+        // Own average R60,000/month; a whole year's Gap of R360,000 measured
+        // against 12 months of average (R720,000) is exactly 50% — the same
+        // shape as the Dashboard's own YTD tile ("avg x elapsed months").
+        const own = EntitySalesHistory(entityCode: 'REP_EST', activeMonths: 36, totalValue: 2160000);
+        final result = computeCoverage(targetValue: 1080000, actualValue: 720000, own: own, company: own, periods: 12);
+        expect(result.rGap, 360000);
+        expect(result.coveragePercent, closeTo(50, 0.001));
+      });
+
+      test('scales the average for a partial (elapsed-months-so-far) year the same way', () {
+        // 6 elapsed fiscal months, R60,000/month own average -> R360,000
+        // denominator; a R180,000 Gap is 50%.
+        const own = EntitySalesHistory(entityCode: 'REP_EST', activeMonths: 36, totalValue: 2160000);
+        final result = computeCoverage(targetValue: 540000, actualValue: 360000, own: own, company: own, periods: 6);
+        expect(result.rGap, 180000);
+        expect(result.coveragePercent, closeTo(50, 0.001));
+      });
+
+      test('a fallback average is scaled by periods the same way an own average is', () {
+        const own = EntitySalesHistory(entityCode: 'REP_NEW', activeMonths: 1, totalValue: 40000);
+        const company = EntitySalesHistory(entityCode: 'ALL', activeMonths: 36, totalValue: 9000000); // R250,000/month
+        final result = computeCoverage(targetValue: 3720000, actualValue: 3000000, own: own, company: company, periods: 12);
+        expect(result.usedFallback, true);
+        expect(result.rGap, 720000);
+        expect(result.coveragePercent, closeTo(24, 0.001)); // 720,000 / (250,000 * 12) * 100
+      });
+
+      test('onTarget/insufficientData results are unaffected by periods (no average involved)', () {
+        const own = EntitySalesHistory(entityCode: 'REP_EST', activeMonths: 36, totalValue: 2160000);
+        final atTarget = computeCoverage(targetValue: 60000, actualValue: 75000, own: own, company: own, periods: 12);
+        expect(atTarget.onTarget, true);
+
+        final noTarget = computeCoverage(targetValue: null, actualValue: 50000, own: own, company: own, periods: 12);
+        expect(noTarget.insufficientData, true);
+      });
+    });
   });
 }

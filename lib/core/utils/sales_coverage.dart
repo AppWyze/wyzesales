@@ -82,7 +82,9 @@ class CoverageResult {
   });
 }
 
-/// Computes R Gap and % Coverage Needed for one DimensionPerformance row.
+/// Computes R Gap and % Coverage Needed for one DimensionPerformance row (or
+/// one row already aggregated across several months by `mergeAcrossMonths`
+/// — see `periods` below).
 ///
 /// `own` is this entity's own fn_dimension_sales_history row (null if it has
 /// no history at all yet — e.g. a brand-new rep who hasn't sold anything).
@@ -90,6 +92,18 @@ class CoverageResult {
 /// called with dimension='company') — should in practice always be present
 /// once any client has any sales on record at all, but handled as
 /// nullable/zero regardless rather than assumed.
+///
+/// `periods` — how many months' worth of average revenue the Gap should be
+/// measured against. Defaults to 1 (a single fiscal month's Gap against one
+/// month's average — every original call site). A Year filter on Performance
+/// Analysis (2026-09-02, Craig noticing a Year-only filter returned no data,
+/// then confirming the fix should sum the whole year per entity) produces a
+/// Gap spanning several months at once, so it needs to be measured against
+/// that many months of average revenue, not one — the exact same reasoning
+/// already applied to the Dashboard's YTD coverage tile (`avg × elapsed
+/// months`, Craig: "Multiply average by elapsed months"). `avg` itself is
+/// still a single month's figure (`EntitySalesHistory.avgRevenuePerPeriod`)
+/// either way; only the multiplier changes.
 ///
 /// Worked examples (confirmed with Craig, 2026-09-02):
 ///  - Brand-new rep, 1 active month of own history -> falls back to company
@@ -102,6 +116,7 @@ CoverageResult computeCoverage({
   required num actualValue,
   required EntitySalesHistory? own,
   required EntitySalesHistory? company,
+  int periods = 1,
 }) {
   if (targetValue == null) {
     return const CoverageResult(onTarget: false, usedFallback: false, insufficientData: true);
@@ -114,7 +129,7 @@ CoverageResult computeCoverage({
 
   final useFallback = own == null || own.activeMonths < kMinActiveMonthsForOwnAverage;
   final source = useFallback ? company : own;
-  final avg = source?.avgRevenuePerPeriod ?? 0;
+  final avg = (source?.avgRevenuePerPeriod ?? 0) * periods;
 
   if (source == null || avg <= 0) {
     return CoverageResult(rGap: gap, onTarget: false, usedFallback: useFallback, insufficientData: true);

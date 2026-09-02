@@ -201,4 +201,128 @@ void main() {
       expect(merged.single.targetValue, rows.single.targetValue);
     });
   });
+
+  group('mergeAcrossMonths — Year-only-filter fix (2026-09-02)', () {
+    // Craig: "it does not recognise a only year filter. i.e. If I input Year
+    // = 2027 it will show no data." — root cause was `_effectiveFiscalMonth`
+    // defaulting to today's calendar month even when Year alone was set;
+    // once fixed, a Year-only filter returns one row per entity PER FISCAL
+    // MONTH, which this function collapses into one whole-year row per
+    // entity. Confirmed with Craig: "Yes" to summing the whole year's
+    // totals per entity, same shape as every other column.
+    test('sums the additive measures across every contributing month for one entity', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 50000, actualQuantity: 10, actualProfit: 15000, targetValue: 60000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 40000, actualQuantity: 8, actualProfit: 12000, targetValue: 45000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'May', actualValue: 60000, actualQuantity: 12, actualProfit: 18000, targetValue: 55000),
+      ];
+
+      final merged = mergeAcrossMonths(rows);
+
+      expect(merged, hasLength(1));
+      final r = merged.single;
+      expect(r.actualValue, 150000);
+      expect(r.actualQuantity, 30);
+      expect(r.actualProfit, 45000);
+      // Unlike mergeAcrossYears, each month genuinely carries its own
+      // distinct target (budget_figures has no fiscal_year column at all —
+      // it's keyed per fiscal_month — so different months legitimately have
+      // different targets) — the year's target is simply their sum, no
+      // "single value repeated N times" correction needed.
+      expect(r.targetValue, 160000);
+    });
+
+    test('a month with no target on file contributes nothing to the summed target, '
+        'never a null+num crash', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 50000, targetValue: 60000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 40000, targetValue: null),
+      ];
+
+      final merged = mergeAcrossMonths(rows);
+
+      expect(merged.single.targetValue, 60000);
+    });
+
+    test('no target on file for ANY contributing month -> merged targetValue and '
+        'targetPercent are both null, not zero', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 50000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 40000),
+      ];
+
+      final merged = mergeAcrossMonths(rows);
+
+      expect(merged.single.targetValue, isNull);
+      expect(merged.single.targetPercent, isNull);
+    });
+
+    test('a not-yet-elapsed month within the current year never produces a row to sum in '
+        'the first place — this function only ever sees the months that DID contribute a row, '
+        'so a partial (YTD) year sums correctly with no extra bookkeeping here', () {
+      // Only Mar/Apr have data (May onward hasn't happened yet this fiscal
+      // year) — mergeAcrossMonths just sums whatever it's given.
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 50000, targetValue: 60000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 40000, targetValue: 45000),
+      ];
+
+      final merged = mergeAcrossMonths(rows);
+
+      expect(merged.single.actualValue, 90000);
+      expect(merged.single.targetValue, 105000);
+    });
+
+    test('gpPercent is recomputed from the SUMMED Rand figures, not averaged across months', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 100000, actualProfit: 40000), // 40%
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 50000, actualProfit: 5000), // 10%
+      ];
+
+      final merged = mergeAcrossMonths(rows);
+
+      final expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not the naive 25% average
+      expect(merged.single.gpPercent, closeTo(expectedGpPercent, 0.0001));
+    });
+
+    test('actualValue of zero across every merged month -> gpPercent is 0, not a divide-by-zero crash', () {
+      final rows = [_row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 0, actualProfit: 0)];
+
+      final merged = mergeAcrossMonths(rows);
+
+      expect(merged.single.gpPercent, 0);
+    });
+
+    test('multiple entities merge independently — one entity\'s months never leak into another\'s sum', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 100000, targetValue: 150000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 120000, targetValue: 150000),
+        _row(entityCode: 'R02', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 10000, targetValue: 20000),
+        _row(entityCode: 'R02', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 15000, targetValue: 20000),
+      ];
+
+      final merged = mergeAcrossMonths(rows);
+      final byCode = {for (final r in merged) r.entityCode: r};
+
+      expect(merged, hasLength(2));
+      expect(byCode['R01']!.actualValue, 220000);
+      expect(byCode['R02']!.actualValue, 25000);
+    });
+
+    test('contributionPercent is recomputed as this entity\'s merged actual over the '
+        'GRAND TOTAL merged actual across every entity, not any single month\'s total', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 60000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 60000), // R01 merged total: 120000
+        _row(entityCode: 'R02', fiscalYear: 2027, fiscalMonth: 'Mar', actualValue: 30000),
+        _row(entityCode: 'R02', fiscalYear: 2027, fiscalMonth: 'Apr', actualValue: 30000), // R02 merged total: 60000
+      ];
+
+      final merged = mergeAcrossMonths(rows);
+      final byCode = {for (final r in merged) r.entityCode: r};
+
+      expect(byCode['R01']!.contributionPercent, closeTo(120000 / 180000 * 100, 0.0001));
+      expect(byCode['R02']!.contributionPercent, closeTo(60000 / 180000 * 100, 0.0001));
+    });
+  });
 }

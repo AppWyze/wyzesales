@@ -28,12 +28,28 @@ class _PerformanceData {
   final EntitySalesHistory? companyHistory;
 
   // Whether the filtered period is the one currently in progress right now
-  // (today's fiscal year AND fiscal month) — see `_load()`'s own comment on
-  // how this is decided, and `_coverageText`'s doc comment for why it
-  // matters. 2026-09-02, Craig, looking at a closed FY2027/August: "I don't
-  // think it can say % Coverage Needed for a past period as this makes no
-  // sense. You cannot catch it up."
+  // — for a Month grain, today's fiscal year AND fiscal month; for a Year
+  // grain (see `isYearGrain` below), just today's fiscal year, since the
+  // year itself isn't over yet. See `_load()`'s own comment on exactly how
+  // this is decided, and `_coverageText`'s doc comment for why it matters.
+  // 2026-09-02, Craig, looking at a closed FY2027/August: "I don't think it
+  // can say % Coverage Needed for a past period as this makes no sense. You
+  // cannot catch it up."
   final bool isLivePeriod;
+
+  // True when this is a Year-only filter (`mergeAcrossMonths` in
+  // performance_rollup.dart, task #93 follow-up, 2026-09-02) rather than one
+  // specific fiscal month (optionally merged across years). Only changes
+  // what `_coverageColumnLabel` calls the past-period column — "% Below Avg
+  // Year" reads better than "% Below Avg Month" once the row is actually a
+  // whole year's totals, per Craig's own suggestion.
+  final bool isYearGrain;
+
+  // How many months' worth of average revenue the Gap should be measured
+  // against — 1 for a single fiscal month (the original, still-default
+  // case), or however many months a Year filter's row actually sums (see
+  // `_load()`). Passed straight through to `computeCoverage`'s `periods`.
+  final int coveragePeriods;
 
   const _PerformanceData({
     required this.rows,
@@ -41,6 +57,8 @@ class _PerformanceData {
     required this.ownHistory,
     this.companyHistory,
     required this.isLivePeriod,
+    this.isYearGrain = false,
+    this.coveragePeriods = 1,
   });
 
   CoverageResult coverageFor(DimensionPerformance row) => computeCoverage(
@@ -48,6 +66,7 @@ class _PerformanceData {
         actualValue: row.actualValue,
         own: ownHistory[row.entityCode],
         company: companyHistory,
+        periods: coveragePeriods,
       );
 }
 
@@ -158,7 +177,26 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
   }
 
-  String _effectiveFiscalMonth(GlobalFilters filters) => filters.fiscalMonth ?? _currentFiscalMonthLabel(DateTime.now());
+  /// 2026-09-02, Craig: "it does not recognise a only year filter. i.e. If I
+  /// input Year = 2027 it will show no data." Same bug class as
+  /// `_effectiveFiscalYear` above, mirrored: this used to default straight to
+  /// TODAY's calendar month whenever Month wasn't explicitly set — even when
+  /// a Year filter WAS explicitly set on its own — so "Year 2027" silently
+  /// became "Year 2027 + (today's fiscal month)," which can easily have
+  /// little or no data if today's fiscal month has barely started (Craig hit
+  /// this on 2026-09-02, day 2 of September). Fixed the same way: only
+  /// default to the current fiscal month when NEITHER Year nor Month is set.
+  /// A Year-only filter now returns null here, so `fetchDimensionPerformance`
+  /// (which already treats a null `fiscalMonth` as "every fiscal month",
+  /// same as it always has for `fiscalYear`) can return one row per entity
+  /// PER FISCAL MONTH within that year — `_load` below collapses those into
+  /// a single merged row per entity via `mergeAcrossMonths`
+  /// (core/utils/performance_rollup.dart) when that happens.
+  String? _effectiveFiscalMonth(GlobalFilters filters) {
+    if (filters.fiscalMonth != null) return filters.fiscalMonth;
+    if (filters.fiscalYear != null) return null;
+    return _currentFiscalMonthLabel(DateTime.now());
+  }
 
   Future<_PerformanceData> _load() async {
     final filters = ref.read(globalFiltersProvider);
@@ -190,7 +228,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // not something that should shrink to one year just because Performance
     // Analysis itself is currently viewing one year (see schema/023's own
     // header comment on this same point).
-    final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
     final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     final historyWindow = fiscalYearWindow(currentFy, historyYears);
     final results = await Future.wait([
@@ -236,22 +275,74 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       final window = historyWindow.toSet();
       rawRows = rawRows.where((r) => window.contains(r.fiscalYear)).toList();
     }
-    final rows = effectiveYear == null ? mergeAcrossYears(rawRows, currentFy) : rawRows;
+
+    // Three distinct shapes `rawRows` can arrive in, each needing its own
+    // merge (or none) before this reaches _buildTable/_totalsRow/
+    // _buildExportData, all three of which assume exactly one row per
+    // entity:
+    //  - Year-only filter (`effectiveMonth == null`, new 2026-09-02, Craig:
+    //    "it does not recognise a only year filter") — one row per entity
+    //    PER FISCAL MONTH within that year. `mergeAcrossMonths`
+    //    (core/utils/performance_rollup.dart) collapses those into one
+    //    whole-year row per entity — confirmed with Craig: "Yes" to summing
+    //    the whole year's totals per entity, same shape as every other
+    //    column.
+    //  - Bare-Month filter (`effectiveYear == null`) — one row per entity
+    //    PER FISCAL YEAR that has data for that month. `mergeAcrossYears`
+    //    collapses those (task #92/#93, see that function's own doc
+    //    comment).
+    //  - Both set (the normal single-period case) — already exactly one row
+    //    per entity, no merge needed.
+    final bool isYearGrain = effectiveMonth == null;
+    final List<DimensionPerformance> rows;
+    if (isYearGrain) {
+      rows = mergeAcrossMonths(rawRows);
+    } else if (effectiveYear == null) {
+      rows = mergeAcrossYears(rawRows, currentFy);
+    } else {
+      rows = rawRows;
+    }
     debugPrint('[PerformanceScreen] _load() completed — ${rawRows.length} raw row(s), ${rows.length} after merge');
 
     // Is the filtered period the one actually still in progress right now?
     // Craig, 2026-09-02, looking at a closed FY2027/August row: "I don't
     // think it can say % Coverage Needed for a past period as this makes no
-    // sense. You cannot catch it up." Only true when BOTH the effective
-    // month is today's own fiscal month AND (no Year is pinned, or the
-    // pinned Year is this fiscal year) — a specific past Year+Month, or the
-    // current Year with an earlier Month, are both fully closed and get the
+    // sense. You cannot catch it up." For a Year-only (year-grain) filter, a
+    // year isn't over until its last day regardless of which month within it
+    // — so it's live purely based on whether the pinned year is the current
+    // fiscal year (Craig, confirming this design, 2026-09-02: "if it is the
+    // current year then we are also looking at % Coverage Needed"). For a
+    // Month-grain filter, live requires BOTH the effective month to be
+    // today's own fiscal month AND (no Year is pinned, or the pinned Year is
+    // this fiscal year) — a specific past Year+Month, or the current Year
+    // with an earlier Month, are both fully closed and get the
     // backward-looking label instead (`_coverageText`'s doc comment has the
     // full reasoning, including why a bare Month filter spanning several
     // years is still correctly "live" whenever the current year's own
     // occurrence of that month hasn't finished yet).
     final currentMonthLabel = _currentFiscalMonthLabel(DateTime.now());
-    final isLivePeriod = effectiveMonth == currentMonthLabel && (effectiveYear == null || effectiveYear == currentFy);
+    final isLivePeriod = isYearGrain
+        ? effectiveYear == currentFy
+        : effectiveMonth == currentMonthLabel && (effectiveYear == null || effectiveYear == currentFy);
+
+    // How many months' worth of average revenue a Year-grain Gap should be
+    // measured against — every elapsed fiscal month if this is the current,
+    // still-open fiscal year, or the full 12 for a year that's entirely in
+    // the past. Same "avg × elapsed months" reasoning as the Dashboard's own
+    // YTD coverage tile (Craig: "Multiply average by elapsed months"). Not
+    // meaningful outside the Year-grain branch, so left at the
+    // `_PerformanceData` default of 1 (a single month's Gap against one
+    // month's average) for both Month-grain cases.
+    int coveragePeriods = 1;
+    if (isYearGrain) {
+      if (effectiveYear == currentFy) {
+        final fiscalMonths = fiscalMonthOrderFor(startMonth: startMonth);
+        final currentFiscalMonthIndex = fiscalMonths.indexOf(currentMonthLabel);
+        coveragePeriods = currentFiscalMonthIndex + 1;
+      } else {
+        coveragePeriods = 12;
+      }
+    }
 
     return _PerformanceData(
       rows: rows,
@@ -259,6 +350,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       ownHistory: ownHistory,
       companyHistory: companyHistory,
       isLivePeriod: isLivePeriod,
+      isYearGrain: isYearGrain,
+      coveragePeriods: coveragePeriods,
     );
   }
 
@@ -380,13 +473,20 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   /// Column header for the "R Gap" pair's second column — "% Coverage
   /// Needed" only when `isLivePeriod` (the filtered period is still
   /// actually in progress, so there's genuinely still time to close the
-  /// gap); otherwise "% Below Avg Month," a purely descriptive, backward-
-  /// looking framing for a period that's already closed. Craig, 2026-09-02,
-  /// on seeing a closed FY2027/August row labelled "% Coverage Needed": "I
-  /// don't think it can say % Coverage Needed for a past period as this
-  /// makes no sense. You cannot catch it up." — confirmed "% Below Avg
-  /// Month" as the past-period wording.
-  String _coverageColumnLabel(bool isLivePeriod) => isLivePeriod ? '% Coverage Needed' : '% Below Avg Month';
+  /// gap); otherwise a purely descriptive, backward-looking framing for a
+  /// period that's already closed — "% Below Avg Month" for a Month-grain
+  /// view, or "% Below Avg Year" for a Year-only (year-grain) view. Craig,
+  /// 2026-09-02, on seeing a closed FY2027/August row labelled "% Coverage
+  /// Needed": "I don't think it can say % Coverage Needed for a past period
+  /// as this makes no sense. You cannot catch it up." — confirmed "% Below
+  /// Avg Month" as the past-period wording, then, once a Year-only filter's
+  /// own past-period case came up, "% Below Avg Year" as its counterpart
+  /// (same reasoning, different noun — a live current year still just says
+  /// "% Coverage Needed," no year-specific wording needed there).
+  String _coverageColumnLabel(bool isLivePeriod, bool isYearGrain) {
+    if (isLivePeriod) return '% Coverage Needed';
+    return isYearGrain ? '% Below Avg Year' : '% Below Avg Month';
+  }
 
   /// The coverage cell's own text — see core/utils/sales_coverage.dart's
   /// CoverageResult doc comment for what each of the three non-percentage
@@ -449,7 +549,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
               DataColumn(label: const Text('R Target'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('% Target'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Gap'), numeric: true, onSort: _onSort),
-              DataColumn(label: Text(_coverageColumnLabel(data.isLivePeriod)), numeric: true, onSort: _onSort),
+              DataColumn(label: Text(_coverageColumnLabel(data.isLivePeriod, data.isYearGrain)), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Profit'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('% GP'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('Quantity'), numeric: true, onSort: _onSort),
@@ -522,6 +622,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       actualValue: totalValue,
       own: data.companyHistory,
       company: data.companyHistory,
+      periods: data.coveragePeriods,
     );
     const style = TextStyle(fontWeight: FontWeight.bold);
     final gpColor = totalProfit < 0 ? Theme.of(context).colorScheme.error : null;
@@ -560,7 +661,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       'R Target',
       '% Target',
       'R Gap',
-      _coverageColumnLabel(data.isLivePeriod),
+      _coverageColumnLabel(data.isLivePeriod, data.isYearGrain),
       'R Profit',
       '% GP',
       'Quantity',
@@ -579,6 +680,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
         actualValue: totalValue,
         own: data.companyHistory,
         company: data.companyHistory,
+        periods: data.coveragePeriods,
       );
       dataRows.add([
         'Total',
