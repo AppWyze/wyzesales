@@ -132,19 +132,13 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
     _debounce = Timer(const Duration(milliseconds: 300), () => _runSearch(value));
   }
 
-  /// invoice/credit_note both land on Sales Analysis (its Table tab, which
-  /// is the default tab now anyway) — the two document kinds Sales
-  /// Analysis' DocumentAnalysisView is scoped to.
-  String _routeForDocumentKind(String documentKind) {
-    switch (documentKind) {
-      case 'quote':
-        return '/quote-analysis';
-      case 'sales_order':
-        return '/sales-order-analysis';
-      default:
-        return '/sales-analysis';
-    }
-  }
+  /// Every document kind lands on Sales Analysis (its Table tab, which is
+  /// the default tab anyway). Quote Analysis and Sales Order Analysis
+  /// (which this used to route 'quote'/'sales_order' results to) were
+  /// removed 2026-09-02 — task #93, Wyzesales_Rebuild_Decisions.md Section
+  /// 55 — so a quote/sales-order document match, on the rare row that
+  /// exists at all, now lands here too rather than a dead route.
+  String _routeForDocumentKind(String documentKind) => '/sales-analysis';
 
   Future<void> _runSearch(String value) async {
     final refRepo = ref.read(referenceDataRepositoryProvider);

@@ -5,9 +5,7 @@ import '../../core/constants/fiscal.dart';
 import '../../features/auth/screens/login_screen.dart';
 import '../../features/auth/screens/reset_password_screen.dart';
 import '../../features/dashboard/screens/dashboard_screen.dart';
-import '../../features/quote_analysis/screens/quote_analysis_screen.dart';
 import '../../features/sales_analysis/screens/sales_analysis_screen.dart';
-import '../../features/sales_order_analysis/screens/sales_order_analysis_screen.dart';
 import '../../features/ytd_comparative/screens/ytd_comparative_screen.dart';
 import '../../features/dimension_templates/screens/budgets_screen.dart';
 import '../../features/dimension_templates/screens/performance_screen.dart';
@@ -71,8 +69,19 @@ final GoRouter appRouter = GoRouter(
     // itself, same as every other screen reads its own global filters.
     GoRoute(path: '/sales-analysis', builder: (context, state) => const SalesAnalysisScreen()),
     GoRoute(path: '/ytd-comparative', builder: (context, state) => const YtdComparativeScreen()),
-    GoRoute(path: '/quote-analysis', builder: (context, state) => const QuoteAnalysisScreen()),
-    GoRoute(path: '/sales-order-analysis', builder: (context, state) => const SalesOrderAnalysisScreen()),
+    // Quote Analysis and Sales Order Analysis (routes '/quote-analysis',
+    // '/sales-order-analysis') were removed 2026-09-02 — task #93. Not
+    // renamed/redirected: WCSA's daily-use IQRetail application has only
+    // ever pulled quotes/sales orders from company code 002, which never
+    // actually holds any (they live in the per-branch CPT/DBN/JHB
+    // databases instead, never wired into any extract) — meaning these
+    // screens showed close to nothing in practice, and Craig's own
+    // experience is that a lot of companies' real quoting happens outside
+    // any system (Excel/Word) regardless, so there's no confidence a fixed
+    // extraction would even be reliable. See
+    // Wyzesales_Rebuild_Decisions.md Section 55 for the full reasoning and
+    // what replaced this (R Gap / % Coverage Needed on Performance
+    // Analysis, built on actual-sales-vs-target data instead).
     GoRoute(
       path: '/sales-by/:dimension',
       // ?highlight=<entity code> — set by the Dashboard's pie-chart

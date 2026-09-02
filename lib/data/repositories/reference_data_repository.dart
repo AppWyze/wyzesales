@@ -136,9 +136,21 @@ class ReferenceDataRepository {
   /// client-side down to 6 distinct documents, matching the per-dimension
   /// cap searchAllDimensions already uses, rather than trying to express
   /// "distinct" in the query itself.
+  ///
+  /// Scoped to invoice/credit_note — 2026-09-02, task #93: Quote Analysis
+  /// and Sales Order Analysis were removed (Wyzesales_Rebuild_Decisions.md
+  /// Section 55), and Sales Analysis (the only screen a document result can
+  /// still land on) only ever shows those two kinds anyway. Surfacing a
+  /// quote/sales-order document match here would route to a screen that
+  /// silently shows nothing for it.
   Future<List<DocumentSearchResult>> searchDocuments(String query) async {
     if (query.trim().isEmpty) return [];
-    final rows = await supabase.from('v_sales_documents').select('document, document_kind').ilike('document', '%$query%').limit(50);
+    final rows = await supabase
+        .from('v_sales_documents')
+        .select('document, document_kind')
+        .inFilter('document_kind', ['invoice', 'credit_note'])
+        .ilike('document', '%$query%')
+        .limit(50);
     final seen = <String>{};
     final results = <DocumentSearchResult>[];
     for (final r in rows) {

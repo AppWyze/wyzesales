@@ -256,14 +256,10 @@ class _Sidebar extends StatelessWidget {
                 const _NavSectionLabel('Analysis'),
                 _NavTile(icon: Icons.show_chart, label: 'Sales Analysis', route: '/sales-analysis', currentRoute: currentRoute, isDrawer: isDrawer),
                 _NavTile(icon: Icons.calendar_view_month, label: 'YTD Comparative', route: '/ytd-comparative', currentRoute: currentRoute, isDrawer: isDrawer),
-                _NavTile(icon: Icons.request_quote_outlined, label: 'Quote Analysis', route: '/quote-analysis', currentRoute: currentRoute, isDrawer: isDrawer),
-                _NavTile(
-                  icon: Icons.receipt_long_outlined,
-                  label: 'Sales Order Analysis',
-                  route: '/sales-order-analysis',
-                  currentRoute: currentRoute,
-                  isDrawer: isDrawer,
-                ),
+                // Quote Analysis / Sales Order Analysis tiles removed
+                // 2026-09-02 — task #93, see Wyzesales_Rebuild_Decisions.md
+                // Section 55 (no reliable quote/order data source; WCSA's
+                // own daily-use app has never had any either).
                 // Sales By / Performance / Budgets used to list one nav tile
                 // per dimension (5 apiece) that all opened the same
                 // parameterized screen — Craig pointed out that's pointless
