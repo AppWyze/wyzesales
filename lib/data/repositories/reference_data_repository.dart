@@ -87,9 +87,27 @@ class ReferenceDataRepository {
     }
   }
 
+  /// 2026-09-02, schema/024: `v_sales_documents` now coalesces an
+  /// unattributed line's Sales Person/Branch/Category code to the literal
+  /// 'UNASSIGNED' rather than leaving it null (Craig, checking whether
+  /// Revenue reconciles across every dimension: "Yes please" to hardening
+  /// this). That sentinel deliberately never appears in `sales_reps`/
+  /// `branches`/`categories`, so on its own it would just fall back to
+  /// showing the raw code (Sales by/Performance's own `data.names[code] ??
+  /// code`) — functional, but a bit rough. Injected here, not in
+  /// `entitiesFor` itself, so it shows up wherever a row's own label is
+  /// looked up (Sales by, Performance) WITHOUT also appearing as a pickable
+  /// entity in Budgets' entity list (`entitiesFor` is what that screen
+  /// queries directly) — there's nothing meaningful to set a target against
+  /// for "sales with no rep/branch/category attached." Customer and Item are
+  /// deliberately excluded: `sales_document_facts.account_code`/`.item_code`
+  /// are NOT NULL, so this sentinel can never actually occur on either.
   Future<Map<String, String>> namesFor(SalesDimension dimension) async {
     final list = await entitiesFor(dimension);
-    return {for (final c in list) c.code: c.displayLabel};
+    final names = {for (final c in list) c.code: c.displayLabel};
+    const canBeUnassigned = {SalesDimension.salesPerson, SalesDimension.branch, SalesDimension.category};
+    if (canBeUnassigned.contains(dimension)) names['UNASSIGNED'] = 'Unassigned';
+    return names;
   }
 
   /// Which `dimension` entity codes have at least one matching row under

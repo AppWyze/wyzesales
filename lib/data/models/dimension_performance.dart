@@ -35,7 +35,10 @@ class DimensionPerformance {
   factory DimensionPerformance.fromMap(Map<String, dynamic> map) {
     return DimensionPerformance(
       dimension: map['dimension'] as String,
-      entityCode: map['entity_code'] as String,
+      // See DimensionMonthlySales.fromMap's matching comment — same
+      // defense-in-depth fallback, same 'UNASSIGNED' sentinel schema/024
+      // now guarantees at the source (2026-09-02).
+      entityCode: (map['entity_code'] as String?) ?? 'UNASSIGNED',
       fiscalYear: map['fiscal_year'] as int,
       fiscalMonth: map['fiscal_month'] as String,
       actualValue: map['actual_value'] as num,
