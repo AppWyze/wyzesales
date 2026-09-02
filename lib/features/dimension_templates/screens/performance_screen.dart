@@ -27,7 +27,21 @@ class _PerformanceData {
   final Map<String, EntitySalesHistory> ownHistory;
   final EntitySalesHistory? companyHistory;
 
-  const _PerformanceData({required this.rows, required this.names, required this.ownHistory, this.companyHistory});
+  // Whether the filtered period is the one currently in progress right now
+  // (today's fiscal year AND fiscal month) — see `_load()`'s own comment on
+  // how this is decided, and `_coverageText`'s doc comment for why it
+  // matters. 2026-09-02, Craig, looking at a closed FY2027/August: "I don't
+  // think it can say % Coverage Needed for a past period as this makes no
+  // sense. You cannot catch it up."
+  final bool isLivePeriod;
+
+  const _PerformanceData({
+    required this.rows,
+    required this.names,
+    required this.ownHistory,
+    this.companyHistory,
+    required this.isLivePeriod,
+  });
 
   CoverageResult coverageFor(DimensionPerformance row) => computeCoverage(
         targetValue: row.targetValue,
@@ -224,11 +238,27 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     }
     final rows = effectiveYear == null ? mergeAcrossYears(rawRows, currentFy) : rawRows;
     debugPrint('[PerformanceScreen] _load() completed — ${rawRows.length} raw row(s), ${rows.length} after merge');
+
+    // Is the filtered period the one actually still in progress right now?
+    // Craig, 2026-09-02, looking at a closed FY2027/August row: "I don't
+    // think it can say % Coverage Needed for a past period as this makes no
+    // sense. You cannot catch it up." Only true when BOTH the effective
+    // month is today's own fiscal month AND (no Year is pinned, or the
+    // pinned Year is this fiscal year) — a specific past Year+Month, or the
+    // current Year with an earlier Month, are both fully closed and get the
+    // backward-looking label instead (`_coverageText`'s doc comment has the
+    // full reasoning, including why a bare Month filter spanning several
+    // years is still correctly "live" whenever the current year's own
+    // occurrence of that month hasn't finished yet).
+    final currentMonthLabel = _currentFiscalMonthLabel(DateTime.now());
+    final isLivePeriod = effectiveMonth == currentMonthLabel && (effectiveYear == null || effectiveYear == currentFy);
+
     return _PerformanceData(
       rows: rows,
       names: results[1] as Map<String, String>,
       ownHistory: ownHistory,
       companyHistory: companyHistory,
+      isLivePeriod: isLivePeriod,
     );
   }
 
@@ -347,14 +377,28 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     });
   }
 
-  /// "% Coverage Needed" cell text — see core/utils/sales_coverage.dart's
+  /// Column header for the "R Gap" pair's second column — "% Coverage
+  /// Needed" only when `isLivePeriod` (the filtered period is still
+  /// actually in progress, so there's genuinely still time to close the
+  /// gap); otherwise "% Below Avg Month," a purely descriptive, backward-
+  /// looking framing for a period that's already closed. Craig, 2026-09-02,
+  /// on seeing a closed FY2027/August row labelled "% Coverage Needed": "I
+  /// don't think it can say % Coverage Needed for a past period as this
+  /// makes no sense. You cannot catch it up." — confirmed "% Below Avg
+  /// Month" as the past-period wording.
+  String _coverageColumnLabel(bool isLivePeriod) => isLivePeriod ? '% Coverage Needed' : '% Below Avg Month';
+
+  /// The coverage cell's own text — see core/utils/sales_coverage.dart's
   /// CoverageResult doc comment for what each of the three non-percentage
-  /// states means. The trailing `*` on a fallback figure is explained by the
-  /// italic caption `_buildTable` renders below the table whenever any row
-  /// uses it (Craig, 2026-09-02: this "must be flagged/visible in the UI
-  /// when this fallback is used").
-  String _coverageText(CoverageResult coverage) {
-    if (coverage.onTarget) return 'On Target';
+  /// states means. "On Target" only applies to a still-open period (there's
+  /// a real target left to hit); a closed period that met its target says
+  /// "Met Target" instead, matching the same live/past distinction
+  /// `_coverageColumnLabel` makes for the header. The trailing `*` on a
+  /// fallback figure is explained by the italic caption `_buildTable`
+  /// renders below the table whenever any row uses it (Craig, 2026-09-02:
+  /// this "must be flagged/visible in the UI when this fallback is used").
+  String _coverageText(CoverageResult coverage, bool isLivePeriod) {
+    if (coverage.onTarget) return isLivePeriod ? 'On Target' : 'Met Target';
     if (coverage.insufficientData) return '—';
     final pct = formatPercent(coverage.coveragePercent);
     return coverage.usedFallback ? '$pct *' : pct;
@@ -405,7 +449,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
               DataColumn(label: const Text('R Target'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('% Target'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Gap'), numeric: true, onSort: _onSort),
-              DataColumn(label: const Text('% Coverage Needed'), numeric: true, onSort: _onSort),
+              DataColumn(label: Text(_coverageColumnLabel(data.isLivePeriod)), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Profit'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('% GP'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('Quantity'), numeric: true, onSort: _onSort),
@@ -423,7 +467,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                   DataCell(Text(formatRand(row.targetValue))),
                   DataCell(Text(formatPercent(row.targetPercent))),
                   DataCell(Text(formatRand(coverage.rGap), style: TextStyle(color: coverageColor))),
-                  DataCell(Text(_coverageText(coverage), style: TextStyle(color: coverageColor))),
+                  DataCell(Text(_coverageText(coverage, data.isLivePeriod), style: TextStyle(color: coverageColor))),
                   DataCell(Text(formatRand(row.actualProfit), style: TextStyle(color: gpColor))),
                   DataCell(Text(formatPercent(row.gpPercent), style: TextStyle(color: gpColor))),
                   DataCell(Text(formatQuantity(row.actualQuantity))),
@@ -491,7 +535,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
         DataCell(Text(formatRand(totalTarget), style: style)),
         DataCell(Text(formatPercent(totalTargetPercent), style: style)),
         DataCell(Text(formatRand(totalCoverage.rGap), style: style.copyWith(color: coverageColor))),
-        DataCell(Text(_coverageText(totalCoverage), style: style.copyWith(color: coverageColor))),
+        DataCell(Text(_coverageText(totalCoverage, data.isLivePeriod), style: style.copyWith(color: coverageColor))),
         DataCell(Text(formatRand(totalProfit), style: style.copyWith(color: gpColor))),
         DataCell(Text(formatPercent(totalGpPercent), style: style.copyWith(color: gpColor))),
         DataCell(Text(formatQuantity(totalQuantity), style: style)),
@@ -516,7 +560,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       'R Target',
       '% Target',
       'R Gap',
-      '% Coverage Needed',
+      _coverageColumnLabel(data.isLivePeriod),
       'R Profit',
       '% GP',
       'Quantity',
@@ -543,7 +587,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
         formatRand(totalTarget),
         formatPercent(totalTargetPercent),
         formatRand(totalCoverage.rGap),
-        _coverageText(totalCoverage),
+        _coverageText(totalCoverage, data.isLivePeriod),
         formatRand(totalProfit),
         formatPercent(totalGpPercent),
         formatQuantity(totalQuantity),
@@ -558,7 +602,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
         formatRand(row.targetValue),
         formatPercent(row.targetPercent),
         formatRand(coverage.rGap),
-        _coverageText(coverage),
+        _coverageText(coverage, data.isLivePeriod),
         formatRand(row.actualProfit),
         formatPercent(row.gpPercent),
         formatQuantity(row.actualQuantity),
