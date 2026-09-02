@@ -19,7 +19,7 @@
 // _shared/service_key.ts's own doc comment (2026-09-02, prompted by a
 // leaked legacy service_role key).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { getServiceKey } from '../_shared/service_key.ts'
+import { getServiceKey, getServiceKeySource } from '../_shared/service_key.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -60,8 +60,22 @@ Deno.serve(async (req) => {
       .eq('id', callingUser.id)
       .single()
     if (callerProfileError || !callerProfile) {
+      // TEMPORARY DIAGNOSTIC (2026-09-02) — surfacing the real PostgREST
+      // error and which service-key branch was live, to pin down why the
+      // wyzesales_edge cutover is failing this lookup. Remove this debug
+      // block (revert to the plain 'Caller has no profile' error) once
+      // that's resolved — see _shared/service_key.ts's own comment.
       return new Response(
-        JSON.stringify({ error: 'Caller has no profile' }),
+        JSON.stringify({
+          error: 'Caller has no profile',
+          debug: {
+            keySource: getServiceKeySource(),
+            pgMessage: callerProfileError?.message ?? null,
+            pgCode: callerProfileError?.code ?? null,
+            pgDetails: callerProfileError?.details ?? null,
+            pgHint: callerProfileError?.hint ?? null,
+          },
+        }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }

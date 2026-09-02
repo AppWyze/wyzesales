@@ -33,13 +33,23 @@
 // CLI does NOT try to deploy as its own function.
 const SECRET_KEY_NAME = 'wyzesales_edge'
 
-export function getServiceKey(): string {
+// 2026-09-02, diagnostic addition: the "Caller has no profile" 403s Craig
+// hit while testing the wyzesales_edge cutover gave zero information about
+// *why* the profile lookup failed. getServiceKeySource() reports which
+// branch getServiceKey() actually took — 'secret_keys' | 'legacy' | 'none'
+// — without ever exposing any part of the key itself, so callers (see
+// create-user/index.ts's temporary debug block) can report which key was
+// live at the moment of a failure. Remove both this and that debug block
+// once the wyzesales_edge cutover is confirmed working end-to-end.
+export type ServiceKeySource = 'secret_keys' | 'legacy' | 'none'
+
+function resolveServiceKey(): { key: string; source: ServiceKeySource } {
   const secretKeysRaw = Deno.env.get('SUPABASE_SECRET_KEYS')
   if (secretKeysRaw) {
     try {
       const parsed = JSON.parse(secretKeysRaw)
       const value = parsed?.[SECRET_KEY_NAME]
-      if (typeof value === 'string' && value) return value
+      if (typeof value === 'string' && value) return { key: value, source: 'secret_keys' }
     } catch {
       // Malformed SUPABASE_SECRET_KEYS — fall through to the legacy key
       // below rather than throwing, so a bad secret value degrades to the
@@ -47,5 +57,14 @@ export function getServiceKey(): string {
       // of breaking every admin action in the app outright.
     }
   }
-  return Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  const legacy = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  return { key: legacy, source: legacy ? 'legacy' : 'none' }
+}
+
+export function getServiceKey(): string {
+  return resolveServiceKey().key
+}
+
+export function getServiceKeySource(): ServiceKeySource {
+  return resolveServiceKey().source
 }
