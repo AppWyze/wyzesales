@@ -19,11 +19,33 @@
 // _shared/service_key.ts's own doc comment (2026-09-02, prompted by a
 // leaked legacy service_role key).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { getServiceKey, getServiceKeySource } from '../_shared/service_key.ts'
+import { getServiceKey } from '../_shared/service_key.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+// Craig, 2026-09-02: hit this raw ("insert or update on table \"profiles\"
+// violates foreign key constraint \"profiles_client_id_rep_code_fkey\"")
+// while testing and rightly pointed out it's meaningless to whoever's
+// adding a user. schema/001 ties profiles.rep_code to sales_reps and
+// profiles.branch_code to branches, both scoped by client_id — so a typo'd
+// or not-yet-synced code trips one of exactly these two named constraints
+// (Postgres's own auto-naming: <table>_<fk columns>_fkey). Translate just
+// those two into plain language; anything else (e.g. the seat-limit
+// trigger's own message, already written to be user-facing) passes through
+// unchanged rather than being second-guessed here.
+function friendlyProfileInsertError(err: { message: string; code?: string }): string {
+  if (err.code === '23503') {
+    if (err.message.includes('profiles_client_id_rep_code_fkey')) {
+      return 'That rep code does not exist for this client. Check the Sales Reps list and try again.'
+    }
+    if (err.message.includes('profiles_client_id_branch_code_fkey')) {
+      return 'That branch code does not exist for this client. Check the Branches list and try again.'
+    }
+  }
+  return err.message
 }
 
 Deno.serve(async (req) => {
@@ -60,22 +82,8 @@ Deno.serve(async (req) => {
       .eq('id', callingUser.id)
       .single()
     if (callerProfileError || !callerProfile) {
-      // TEMPORARY DIAGNOSTIC (2026-09-02) — surfacing the real PostgREST
-      // error and which service-key branch was live, to pin down why the
-      // wyzesales_edge cutover is failing this lookup. Remove this debug
-      // block (revert to the plain 'Caller has no profile' error) once
-      // that's resolved — see _shared/service_key.ts's own comment.
       return new Response(
-        JSON.stringify({
-          error: 'Caller has no profile',
-          debug: {
-            keySource: getServiceKeySource(),
-            pgMessage: callerProfileError?.message ?? null,
-            pgCode: callerProfileError?.code ?? null,
-            pgDetails: callerProfileError?.details ?? null,
-            pgHint: callerProfileError?.hint ?? null,
-          },
-        }),
+        JSON.stringify({ error: 'Caller has no profile' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }
@@ -128,12 +136,13 @@ Deno.serve(async (req) => {
 
     if (profileError) {
       await supabase.auth.admin.deleteUser(authData.user.id)
-      // profileError.message here is the seat-limit trigger's own message
-      // when that's what tripped ("Seat limit reached: ...") — surfaced
-      // as-is rather than a generic failure, since it's already written to
-      // be shown to whoever's adding the user.
+      // profileError.message is the seat-limit trigger's own message when
+      // that's what tripped ("Seat limit reached: ...") — already written
+      // to be shown to whoever's adding the user, so it passes through
+      // untouched. A rep-code/branch-code foreign key miss instead gets
+      // translated to plain language — see friendlyProfileInsertError.
       return new Response(
-        JSON.stringify({ error: profileError.message }),
+        JSON.stringify({ error: friendlyProfileInsertError(profileError) }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }
