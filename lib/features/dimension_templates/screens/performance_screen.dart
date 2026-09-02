@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/app_providers.dart';
 import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/performance_rollup.dart';
 import '../../../core/utils/sales_coverage.dart';
@@ -359,6 +360,25 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return coverage.usedFallback ? '$pct *' : pct;
   }
 
+  /// Color for the R Gap / % Coverage Needed cells (both share one color per
+  /// row) — Craig, 2026-09-02, asking for these to be colored "to make them
+  /// more understandable," e.g. "Johan Botha should be green, Mark Fischer I
+  /// guess should be red." Confirmed thresholds (AskUserQuestion): On Target
+  /// or under 25% coverage needed is green (a small ask relative to a
+  /// typical month), 25-50% is amber (a meaningful chunk of a typical month),
+  /// over 50% is red (more than half a typical month's revenue still
+  /// needed). `insufficientData` (no target set, or no usable average even
+  /// after falling back to the company) gets the same neutral/muted color
+  /// every other tile in this app uses for "nothing meaningful to show."
+  Color _coverageColor(BuildContext context, CoverageResult coverage) {
+    if (coverage.insufficientData) return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
+    if (coverage.onTarget) return AppColors.positive;
+    final pct = coverage.coveragePercent ?? 0;
+    if (pct < 25) return AppColors.positive;
+    if (pct <= 50) return AppColors.caution;
+    return AppColors.negative;
+  }
+
   Widget _buildTable(BuildContext context, _PerformanceData data) {
     final rows = [...data.rows]..sort((a, b) {
       final cmp = _compareRows(a, b, data, _sortColumnIndex);
@@ -394,6 +414,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
               if (rows.isNotEmpty) _totalsRow(context, rows, data),
               ...rows.map((row) {
                 final coverage = data.coverageFor(row);
+                final coverageColor = _coverageColor(context, coverage);
                 final gpColor = row.actualProfit < 0 ? Theme.of(context).colorScheme.error : null;
                 return DataRow(cells: [
                   DataCell(Text(data.names[row.entityCode] ?? row.entityCode)),
@@ -401,8 +422,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                   DataCell(Text(formatRand(row.actualValue))),
                   DataCell(Text(formatRand(row.targetValue))),
                   DataCell(Text(formatPercent(row.targetPercent))),
-                  DataCell(Text(formatRand(coverage.rGap))),
-                  DataCell(Text(_coverageText(coverage))),
+                  DataCell(Text(formatRand(coverage.rGap), style: TextStyle(color: coverageColor))),
+                  DataCell(Text(_coverageText(coverage), style: TextStyle(color: coverageColor))),
                   DataCell(Text(formatRand(row.actualProfit), style: TextStyle(color: gpColor))),
                   DataCell(Text(formatPercent(row.gpPercent), style: TextStyle(color: gpColor))),
                   DataCell(Text(formatQuantity(row.actualQuantity))),
@@ -460,6 +481,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     );
     const style = TextStyle(fontWeight: FontWeight.bold);
     final gpColor = totalProfit < 0 ? Theme.of(context).colorScheme.error : null;
+    final coverageColor = _coverageColor(context, totalCoverage);
     return DataRow(
       color: WidgetStatePropertyAll(Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.04)),
       cells: [
@@ -468,8 +490,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
         DataCell(Text(formatRand(totalValue), style: style)),
         DataCell(Text(formatRand(totalTarget), style: style)),
         DataCell(Text(formatPercent(totalTargetPercent), style: style)),
-        DataCell(Text(formatRand(totalCoverage.rGap), style: style)),
-        DataCell(Text(_coverageText(totalCoverage), style: style)),
+        DataCell(Text(formatRand(totalCoverage.rGap), style: style.copyWith(color: coverageColor))),
+        DataCell(Text(_coverageText(totalCoverage), style: style.copyWith(color: coverageColor))),
         DataCell(Text(formatRand(totalProfit), style: style.copyWith(color: gpColor))),
         DataCell(Text(formatPercent(totalGpPercent), style: style.copyWith(color: gpColor))),
         DataCell(Text(formatQuantity(totalQuantity), style: style)),

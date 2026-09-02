@@ -719,11 +719,28 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 return formatPercent((gap / expected) * 100);
               }
 
+              // Same 3-tier thresholds as Performance Analysis' % Coverage
+              // Needed column (see `_coverageColor`'s doc comment in
+              // performance_screen.dart for the full reasoning) — kept in
+              // sync deliberately, so "green"/"amber"/"red" mean the same
+              // thing everywhere in the app rather than this one tile using
+              // a coarser 2-tier scale. Craig, 2026-09-02, confirming the
+              // cutoffs: On Target or under 25% is green, 25-50% is amber,
+              // over 50% is red.
+              Color coverageColor(num gap, int periods) {
+                if (gap <= 0) return AppColors.positive;
+                final expected = kpis.companyAvgRevenuePerPeriod * periods;
+                if (expected <= 0) return neutralMuted;
+                final pct = (gap / expected) * 100;
+                if (pct < 25) return AppColors.positive;
+                if (pct <= 50) return AppColors.caution;
+                return AppColors.negative;
+              }
+
               final coverageGapMtd = kpis.companyTargetMtd - kpis.companyActualMtd;
               final coverageGapYtd = kpis.companyTargetYtd - kpis.companyActualYtd;
               final coverageMtdText = coverageText(coverageGapMtd, 1);
               final coverageYtdText = coverageText(coverageGapYtd, kpis.elapsedMonthsYtd);
-              Color coverageColor(num gap) => gap <= 0 ? AppColors.positive : AppColors.caution;
 
               // Top 5 Customer Concentration — 40% is a starting-point
               // "worth keeping an eye on" threshold, not a hard business
@@ -825,12 +842,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       ToggleStatCard(
                         label: 'Sales Coverage',
                         mtdValue: coverageMtdText,
-                        mtdColor: coverageColor(coverageGapMtd),
+                        mtdColor: coverageColor(coverageGapMtd, 1),
                         mtdSubtitle: coverageGapMtd <= 0
                             ? '${formatRand(coverageGapMtd.abs())} above target (MTD)'
                             : '${formatRand(coverageGapMtd)} gap to target (MTD)',
                         ytdValue: coverageYtdText,
-                        ytdColor: coverageColor(coverageGapYtd),
+                        ytdColor: coverageColor(coverageGapYtd, kpis.elapsedMonthsYtd),
                         ytdSubtitle: coverageGapYtd <= 0
                             ? '${formatRand(coverageGapYtd.abs())} above target (YTD)'
                             : '${formatRand(coverageGapYtd)} gap to target (YTD)',
