@@ -29,7 +29,10 @@ class GlobalFilterBar extends ConsumerWidget {
     final notifier = ref.read(globalFiltersProvider.notifier);
 
     final chips = <Widget>[
-      for (final dimension in SalesDimension.values)
+      // `filterable`, not `values` — excludes `company` (2026-09-02, Section
+      // 57), which is never a global filter target in the first place; see
+      // `SalesDimension.filterable`'s own doc comment.
+      for (final dimension in SalesDimension.filterable)
         if (filters.forDimension(dimension) != null)
           _RemovableChip(
             label: '${dimension.label}: ${filters.forDimension(dimension)!.label}',
@@ -75,7 +78,11 @@ class GlobalFilterBar extends ConsumerWidget {
             width: 160,
             hint: const Text('Add filter'),
             items: [
-              for (final dimension in SalesDimension.values)
+              // `filterable`, not `values` — "Company" isn't something you
+              // can narrow everything down to (it already means "no
+              // narrowing at all"), so it's deliberately not offered here
+              // (2026-09-02, Section 57; see SalesDimension.filterable).
+              for (final dimension in SalesDimension.filterable)
                 DropdownMenuItem<String?>(value: dimension.dbValue, child: Text(dimension.label)),
               const DropdownMenuItem<String?>(value: '_year', child: Text('Year')),
               const DropdownMenuItem<String?>(value: '_month', child: Text('Month')),

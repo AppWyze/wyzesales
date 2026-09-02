@@ -85,6 +85,14 @@ class GlobalFilters {
         return item;
       case SalesDimension.branch:
         return branch;
+      // 2026-09-02: `company` has no field of its own here at all — see
+      // `SalesDimension.filterable`'s doc comment (fiscal.dart) for why it's
+      // never actually offered anywhere a global filter TARGET is picked
+      // (GlobalFilterBar, the top-bar entity search). This arm only exists
+      // to satisfy the switch's exhaustiveness check and should never
+      // actually be reached.
+      case SalesDimension.company:
+        return null;
     }
   }
 
@@ -136,6 +144,12 @@ class GlobalFiltersNotifier extends StateNotifier<GlobalFilters> {
       SalesDimension.customer => state.copyWith(customer: selection),
       SalesDimension.item => state.copyWith(item: selection),
       SalesDimension.branch => state.copyWith(branch: selection),
+      // See `forDimension`'s matching arm above — `company` is never
+      // actually passed here by anything in the UI (GlobalFilterBar and the
+      // top-bar search both iterate `SalesDimension.filterable`, which
+      // excludes it), so this is a same-state no-op purely to satisfy
+      // exhaustiveness.
+      SalesDimension.company => state,
     };
   }
 

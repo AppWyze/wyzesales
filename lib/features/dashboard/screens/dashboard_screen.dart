@@ -970,7 +970,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         BoxedDropdown<SalesDimension>(
                           value: _dimension,
                           width: 160,
-                          items: SalesDimension.values.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
+                          // `filterable`, not `values` — this picker ranks
+                          // entities WITHIN a dimension (Top 5 reps, Top 5
+                          // branches, etc.); "Company" has only ever one
+                          // entity, nothing to rank (2026-09-02, Section 57;
+                          // the Dashboard's own KPI tiles above already cover
+                          // whole-company figures).
+                          items: SalesDimension.filterable.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
                           onChanged: _onDimensionChanged,
                         ),
                         BoxedDropdown<_RankMode>(

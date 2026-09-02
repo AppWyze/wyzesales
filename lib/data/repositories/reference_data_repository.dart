@@ -71,6 +71,19 @@ class ReferenceDataRepository {
         return categories(search: search);
       case SalesDimension.branch:
         return branches(search: search);
+      // 2026-09-02: `company` has no reference-data table of its own (there's
+      // only ever one "entity" — the whole company) — so unlike the other 5
+      // branches above, this doesn't query anything. Returns the single
+      // synthetic row `v_dimension_monthly_sales`/budget_figures/
+      // sales_forecast already use for it (schema/002/001: `entity_code =
+      // 'ALL'`), letting `namesFor`/Budgets' entity list work for `company`
+      // with no special-casing needed at either call site. `search` isn't
+      // wired to anything here, but this is harmless in practice —
+      // `searchAllDimensions` below deliberately excludes `company` (via
+      // `SalesDimension.filterable`) from the only call site that ever
+      // passes a real search term.
+      case SalesDimension.company:
+        return Future.value(const [CodeName(code: 'ALL', name: 'Company')]);
     }
   }
 
@@ -91,7 +104,7 @@ class ReferenceDataRepository {
   /// active — so callers can tell "don't grey anything out" apart from "grey
   /// out, but this particular call happened to match everything."
   Future<Set<String>?> filterOptionCodes(SalesDimension dimension, GlobalFilters filters) async {
-    final hasOtherEntityFilter = SalesDimension.values.any((d) => d != dimension && filters.forDimension(d) != null);
+    final hasOtherEntityFilter = SalesDimension.filterable.any((d) => d != dimension && filters.forDimension(d) != null);
     if (!hasOtherEntityFilter && filters.fiscalYear == null && filters.fiscalMonth == null) return null;
 
     final rows = await supabase.rpc('fn_dimension_filter_options', params: {
@@ -117,11 +130,20 @@ class ReferenceDataRepository {
   /// results page.
   Future<List<DimensionSearchResult>> searchAllDimensions(String query) async {
     if (query.trim().isEmpty) return [];
-    final byDimension = await Future.wait(SalesDimension.values.map((d) => entitiesFor(d, search: query)));
+    // `filterable`, not `values` — 2026-09-02, once `company` became a real
+    // SalesDimension (Section 57): picking a search result calls
+    // `notifier.setDimension(result.dimension, ...)` (top_bar_search.dart),
+    // the exact same global-filter mechanism GlobalFilterBar's "Add filter"
+    // dropdown uses — and `company` is deliberately excluded from that
+    // everywhere else (`SalesDimension.filterable`'s own doc comment), so
+    // it's excluded from this search too rather than surfacing a result that
+    // would silently do nothing when picked.
+    const dimensions = SalesDimension.filterable;
+    final byDimension = await Future.wait(dimensions.map((d) => entitiesFor(d, search: query)));
     final results = <DimensionSearchResult>[];
-    for (var i = 0; i < SalesDimension.values.length; i++) {
+    for (var i = 0; i < dimensions.length; i++) {
       for (final entity in byDimension[i].take(6)) {
-        results.add(DimensionSearchResult(dimension: SalesDimension.values[i], entity: entity));
+        results.add(DimensionSearchResult(dimension: dimensions[i], entity: entity));
       }
     }
     return results;

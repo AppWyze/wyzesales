@@ -2,16 +2,37 @@ import 'package:intl/intl.dart';
 
 /// The five report dimensions collapsed from 15 near-duplicate screens in the
 /// old app into 3 parameterized templates (Sales by / Budgets / Performance)
-/// — see Wyzesales_Screens_and_Recommendations.md Section 3. 'company' exists
-/// in the schema (budget_figures/sales_forecast/v_dimension_monthly_sales all
-/// allow it) but isn't wired into a picker here yet — still an open question
-/// in Wyzesales_Rebuild_Decisions.md whether it's needed on any screen.
+/// — see Wyzesales_Screens_and_Recommendations.md Section 3 — plus `company`,
+/// a 6th "dimension" wired in 2026-09-02 (Wyzesales_Rebuild_Decisions.md
+/// Section 57). Craig, looking at Performance Analysis' dimension switcher:
+/// "We can see all Dimensions except a Company wide Dimension???" `company`
+/// had already existed at the schema level from day one
+/// (budget_figures/sales_forecast/v_dimension_monthly_sales all allow it,
+/// producing a single `entity_code = 'ALL'` row — the whole-company total,
+/// no further breakdown) but was never exposed as a selectable option
+/// anywhere in the UI.
+///
+/// `company` is deliberately placed LAST, not first — `SalesDimension.values
+/// .first` is used a few places (app_shell.dart's nav "quick" routes) to mean
+/// "the default/first real breakdown dimension," which must stay
+/// `salesPerson`, unchanged from before this was added.
+///
+/// `company` is ONLY valid as something to VIEW (the Sales by / Budgets /
+/// Performance dimension switchers, which all iterate `values` directly) —
+/// it is deliberately excluded from anywhere this enum is used as something
+/// to FILTER BY or RANK entities within (GlobalFilterBar's chips/"Add
+/// filter" dropdown, the top-bar's cross-dimension entity search, the
+/// Dashboard's ranking breakdown picker) via `SalesDimension.filterable`
+/// below — "Company" isn't one of several entities you could narrow down to,
+/// it already means "no narrowing at all," and there's nothing to rank
+/// within a single whole-company total.
 enum SalesDimension {
   salesPerson('sales_person', 'Sales Person'),
   category('category', 'Category'),
   customer('customer', 'Customer'),
   item('item', 'Item'),
-  branch('branch', 'Branch');
+  branch('branch', 'Branch'),
+  company('company', 'Company');
 
   const SalesDimension(this.dbValue, this.label);
 
@@ -19,6 +40,16 @@ enum SalesDimension {
   /// / v_dimension_monthly_sales.dimension — must match schema/001 and 002.
   final String dbValue;
   final String label;
+
+  /// The 5 dimensions that make sense as a global filter TARGET (pick one
+  /// specific entity to narrow everything down to) or as something to RANK
+  /// entities within — excludes `company`. See this enum's own doc comment
+  /// for the full reasoning. Used by GlobalFilterBar (its filter chips and
+  /// "Add filter" dropdown), the top-bar's cross-dimension entity search,
+  /// and the Dashboard's ranking breakdown picker — everywhere else
+  /// (Sales by / Budgets / Performance's own dimension switchers) wants
+  /// `values` directly, since those DO want to offer a Company-wide view.
+  static const List<SalesDimension> filterable = [salesPerson, category, customer, item, branch];
 }
 
 /// All 12 calendar month abbreviations in plain calendar (Jan->Dec) order —

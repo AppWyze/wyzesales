@@ -120,4 +120,47 @@ void main() {
       expect(fiscalStartMonthName(12), 'December');
     });
   });
+
+  // 2026-09-02, Craig: "We can see all Dimensions except a Company wide
+  // Dimension???" — `company` added as a 6th SalesDimension
+  // (Wyzesales_Rebuild_Decisions.md Section 57). These guard the two
+  // properties every other file in the app relies on without re-checking:
+  // `company` must stay LAST (app_shell.dart's nav routes use `values.first`
+  // to mean "the default real breakdown dimension," which must stay
+  // `salesPerson`), and `filterable` must exclude it (GlobalFilterBar, the
+  // top-bar search, and the Dashboard's ranking picker all rely on this to
+  // never offer "Company" as something to filter by or rank within).
+  group('SalesDimension — company (task, 2026-09-02, Section 57)', () {
+    test('company is a real, selectable dimension with the schema\'s exact db value', () {
+      expect(SalesDimension.company.dbValue, 'company');
+      expect(SalesDimension.company.label, 'Company');
+    });
+
+    test('company is the LAST value — values.first must stay salesPerson '
+        '(app_shell.dart\'s nav "quick" routes depend on this)', () {
+      expect(SalesDimension.values.first, SalesDimension.salesPerson);
+      expect(SalesDimension.values.last, SalesDimension.company);
+    });
+
+    test('filterable holds exactly the original 5 dimensions, excluding company', () {
+      expect(SalesDimension.filterable, hasLength(5));
+      expect(SalesDimension.filterable, isNot(contains(SalesDimension.company)));
+      expect(
+        SalesDimension.filterable,
+        containsAll([
+          SalesDimension.salesPerson,
+          SalesDimension.category,
+          SalesDimension.customer,
+          SalesDimension.item,
+          SalesDimension.branch,
+        ]),
+      );
+    });
+
+    test('values (used by the Sales by / Budgets / Performance dimension switchers) '
+        'includes all 6, company included', () {
+      expect(SalesDimension.values, hasLength(6));
+      expect(SalesDimension.values, contains(SalesDimension.company));
+    });
+  });
 }
