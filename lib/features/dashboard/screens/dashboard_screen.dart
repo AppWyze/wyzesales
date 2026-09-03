@@ -6,6 +6,7 @@ import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
+import '../../../core/utils/dimension_ranking.dart';
 import '../../../core/utils/sales_coverage.dart';
 import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/budget_figure.dart';
@@ -579,6 +580,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     return measure == ValueMeasure.rValue ? period.value : period.profit;
   }
 
+  DimensionRankMode _toDimensionRankMode(_RankMode mode) {
+    switch (mode) {
+      case _RankMode.top5:
+        return DimensionRankMode.top5;
+      case _RankMode.bottom5:
+        return DimensionRankMode.bottom5;
+      case _RankMode.diminishing5:
+        return DimensionRankMode.diminishing5;
+      case _RankMode.growth5:
+        return DimensionRankMode.growth5;
+    }
+  }
+
   List<PieSlice> _pickSlices({
     required Map<String, _EntityPeriod> current,
     required Map<String, _EntityPeriod> previous,
@@ -587,47 +601,25 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // 2026-09-01, Craig, testing on 1 September with no data loaded yet
     // for the brand-new fiscal month: "This is incorrect as we have no
     // MTD data for September yet" — the MTD pie's legend was showing 5
-    // real customer names, each next to R0, which reads as "these are
-    // this month's top 5 customers" when the real situation is simpler
-    // and more important: there is no data for this period AT ALL yet
-    // (the extract hasn't run for September). Root cause: with `current`
-    // completely empty, every rank mode's sort compares `_valueOf(current
-    // [x])` values that are all 0 — a no-op that just preserves whatever
-    // order the union Set below happened to produce — so `.take(5)`
-    // silently surfaced 5 arbitrary PREVIOUS-month customer codes as if
-    // they still applied this month. Checked here, before the deliberate
-    // union logic below (which handles a genuinely different case — see
-    // its own comment): a period with zero rows on record isn't "every
-    // customer declined to zero," it's "we don't have this period's data
-    // yet," and none of the four rank modes has anything real to show for
-    // that. Returning no slices lets SimplePieChart's own "No data for the
-    // current filters" fallback say the honest thing instead.
+    // real customer names, each next to R0. Checked here before handing
+    // off to `rankEntityCodes` (core/utils/dimension_ranking.dart), which
+    // now also covers the same bug's smaller sibling — "we have SOME
+    // current-period entities, just fewer than 5" — see that file's own
+    // doc comment for the 2026-09-03 follow-up report ("where does five
+    // customers come from???") this was split out to fix.
     if (current.isEmpty) return const [];
 
-    // Union, not just current.keys — an entity that had activity last
-    // period but none this period (dropped to zero) is exactly the kind of
-    // thing "Diminishing 5" should be able to surface, not silently omit.
-    final codes = <String>{...current.keys, ...previous.keys}.toList();
+    final currentValues = current.map((code, period) => MapEntry(code, _valueOf(period, _measure)));
+    final previousValues = previous.map((code, period) => MapEntry(code, _valueOf(period, _measure)));
 
-    num delta(String code) => _valueOf(current[code], _measure) - _valueOf(previous[code], _measure);
+    final codes = rankEntityCodes(
+      current: currentValues,
+      previous: previousValues,
+      mode: _toDimensionRankMode(_rankMode),
+    );
 
-    switch (_rankMode) {
-      case _RankMode.top5:
-        codes.sort((a, b) => _valueOf(current[b], _measure).compareTo(_valueOf(current[a], _measure)));
-        break;
-      case _RankMode.bottom5:
-        codes.sort((a, b) => _valueOf(current[a], _measure).compareTo(_valueOf(current[b], _measure)));
-        break;
-      case _RankMode.diminishing5:
-        codes.sort((a, b) => delta(a).compareTo(delta(b))); // most negative delta (biggest decline) first
-        break;
-      case _RankMode.growth5:
-        codes.sort((a, b) => delta(b).compareTo(delta(a))); // most positive delta (biggest growth) first
-        break;
-    }
-
-    return codes.take(5).map((code) {
-      return PieSlice(label: names[code] ?? code, entityCode: code, rawValue: _valueOf(current[code], _measure));
+    return codes.map((code) {
+      return PieSlice(label: names[code] ?? code, entityCode: code, rawValue: currentValues[code] ?? 0);
     }).toList();
   }
 
