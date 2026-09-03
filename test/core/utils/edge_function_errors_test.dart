@@ -12,13 +12,16 @@ void main() {
 
   group('friendlyEdgeFunctionError', () {
     test('unwraps the {"error": "..."} body out of a FunctionsHttpException', () {
-      final e = FunctionsHttpException(403, {'error': 'That rep code does not exist for this client.'});
+      final e = FunctionsHttpException(
+        status: 403,
+        details: {'error': 'That rep code does not exist for this client.'},
+      );
       final result = friendlyEdgeFunctionError(e, fallback: 'Failed to create user');
       expect(result.toString(), 'That rep code does not exist for this client.');
     });
 
     test('falls back when details has no error string (unexpected shape)', () {
-      final e = FunctionsHttpException(500, {'somethingElse': true});
+      final e = FunctionsHttpException(status: 500, details: {'somethingElse': true});
       final result = friendlyEdgeFunctionError(e, fallback: 'Failed to create user');
       expect(result.toString(), 'Failed to create user');
     });
