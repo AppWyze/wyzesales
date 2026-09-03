@@ -1,3 +1,4 @@
+import '../../data/models/profile.dart';
 import '../constants/fiscal.dart';
 import '../filters/global_filters.dart';
 
@@ -92,4 +93,31 @@ num? deriveProportionalTarget({
 num? resolveTarget({required num? budgetValue, required num? forecastValue}) {
   if (budgetValue != null && budgetValue != 0) return budgetValue;
   return forecastValue;
+}
+
+/// The dimension + entity to use for a "nothing filtered" Target lookup —
+/// Sales Analysis' default (0-dimension-filter) view and the Dashboard's
+/// Revenue Target Attainment tile, scoped to the VIEWER'S OWN access level
+/// rather than always the whole company. Craig, 2026-09-03, after seeing a
+/// plain 'user' login's Dashboard tile compare their own personal revenue
+/// against the entire company's target: "The dashboard must be specific.
+/// i.e. User sees only their info. RegUsers sees their branch and Admin
+/// sees everything" — extended, on his confirmation, to Sales Analysis'
+/// own default view too, so neither screen shows a non-admin login a target
+/// that isn't theirs to see.
+///
+/// adminuser/superuser (and a null profile, e.g. mid-load) keep the
+/// original whole-company behaviour every login saw before this existed.
+/// reguser/user fall back to 'ALL' if their own branch_code/rep_code is
+/// somehow unset — schema/001 doesn't make either mandatory for every
+/// level, so this stays null-safe rather than assuming they're always
+/// present.
+({SalesDimension dimension, String entityCode}) defaultTargetScope(Profile? profile) {
+  if (profile?.level == UserLevel.reguser) {
+    return (dimension: SalesDimension.branch, entityCode: profile?.branchCode ?? 'ALL');
+  }
+  if (profile?.level == UserLevel.user) {
+    return (dimension: SalesDimension.salesPerson, entityCode: profile?.repCode ?? 'ALL');
+  }
+  return (dimension: SalesDimension.company, entityCode: 'ALL');
 }

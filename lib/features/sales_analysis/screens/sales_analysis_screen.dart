@@ -239,8 +239,17 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       final dimCount = activeDimensionFilterCount(filters);
 
       if (dimCount <= 1) {
-        final dimension = single?.dimension ?? SalesDimension.company;
-        final entityCode = single?.selection.code ?? 'ALL';
+        // Nothing filtered: default to the VIEWER'S OWN scope, not always
+        // the whole company — Craig, 2026-09-03: "The dashboard must be
+        // specific. i.e. User sees only their info. RegUsers sees their
+        // branch and Admin sees everything," confirmed to apply here too.
+        // A real single-dimension filter (`single != null`) always wins
+        // regardless of level — the picker dialogs themselves already only
+        // ever offer entities schema/018's RLS lets this login see, so
+        // there's nothing further to scope there.
+        final defaultScope = defaultTargetScope(ref.read(sessionProvider).value);
+        final dimension = single?.dimension ?? defaultScope.dimension;
+        final entityCode = single?.selection.code ?? defaultScope.entityCode;
         final byMonth = await _fetchTargetByMonth(
           dimension: dimension,
           entityCode: entityCode,
@@ -249,6 +258,15 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         return (bars: [for (final m in _months) byMonth[m]], isEstimated: false);
       }
 
+      // 2+ filters stacked: the proportional-share formula below is
+      // inherently a whole-company calculation (this combination's share OF
+      // the whole company), so it deliberately does NOT use
+      // defaultTargetScope — there's no "my own" analogue of "the whole
+      // company's actual/target" to substitute. For a non-admin login this
+      // resolves to null (schema/018 doesn't grant User/RegUser the
+      // 'company' dimension), which deriveProportionalTarget already
+      // degrades gracefully from — no estimated bar, rather than inventing
+      // a personal baseline Craig hasn't asked for.
       final companyTargetByMonth = await _fetchTargetByMonth(
         dimension: SalesDimension.company,
         entityCode: 'ALL',

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wyzesales/core/constants/fiscal.dart';
 import 'package:wyzesales/core/filters/global_filters.dart';
 import 'package:wyzesales/core/utils/target_overlay.dart';
+import 'package:wyzesales/data/models/profile.dart';
 
 /// 2026-09-03 (Wyzesales_Rebuild_Decisions.md — Sales Analysis's Target
 /// overlay): pure logic only, no Supabase/Riverpod dependency, mirroring
@@ -125,6 +126,49 @@ void main() {
         'to attach it to', () {
       expect(resolveTarget(budgetValue: null, forecastValue: null), isNull);
       expect(resolveTarget(budgetValue: 0, forecastValue: null), isNull);
+    });
+  });
+
+  group('defaultTargetScope', () {
+    Profile profileWith({required UserLevel level, String? repCode, String? branchCode}) => Profile(
+          id: 'p1',
+          clientId: 'c1',
+          name: 'Test',
+          email: 'test@example.com',
+          level: level,
+          repCode: repCode,
+          branchCode: branchCode,
+        );
+
+    test('adminuser always gets the whole company, regardless of their own rep/branch code', () {
+      final scope = defaultTargetScope(profileWith(level: UserLevel.adminuser, repCode: 'R01', branchCode: 'JHB'));
+      expect(scope.dimension, SalesDimension.company);
+      expect(scope.entityCode, 'ALL');
+    });
+
+    test('reguser gets their own branch — Craig, 2026-09-03: "RegUsers sees their branch"', () {
+      final scope = defaultTargetScope(profileWith(level: UserLevel.reguser, branchCode: 'CPT'));
+      expect(scope.dimension, SalesDimension.branch);
+      expect(scope.entityCode, 'CPT');
+    });
+
+    test('user gets their own rep code — Craig: "User sees only their info"', () {
+      final scope = defaultTargetScope(profileWith(level: UserLevel.user, repCode: 'R03'));
+      expect(scope.dimension, SalesDimension.salesPerson);
+      expect(scope.entityCode, 'R03');
+    });
+
+    test('a null profile (e.g. mid-load) falls back to whole-company, same as every login saw '
+        'before this existed', () {
+      final scope = defaultTargetScope(null);
+      expect(scope.dimension, SalesDimension.company);
+      expect(scope.entityCode, 'ALL');
+    });
+
+    test('reguser/user with no branch_code/rep_code of their own fall back to \'ALL\' rather than '
+        'a null entity_code — schema/001 doesn\'t make either mandatory for every level', () {
+      expect(defaultTargetScope(profileWith(level: UserLevel.reguser)).entityCode, 'ALL');
+      expect(defaultTargetScope(profileWith(level: UserLevel.user)).entityCode, 'ALL');
     });
   });
 }

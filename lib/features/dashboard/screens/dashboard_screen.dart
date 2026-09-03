@@ -7,6 +7,7 @@ import '../../../core/filters/global_filters.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/sales_coverage.dart';
+import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/budget_figure.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../data/models/dimension_monthly_sales.dart';
@@ -254,20 +255,38 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     _loadDimension();
   }
 
-  /// Whole-company Actual (v_consolidated_sales) vs Target (budget_figures,
-  /// dimension='company') numbers, computed once per Dashboard load/refresh
-  /// and read by the KPI row's Revenue Target Attainment tile
-  /// (`_KpiData.companyActualMtd`/etc.). Used to be called a second time by
-  /// a separate `_loadTargetChart` method, kept in sync as a shared
-  /// fetch+compute helper so the two independently-timed loaders (the KPI
-  /// row and the "Actual Revenue vs Sales Target" bar chart underneath it)
-  /// never disagreed — that chart was removed 2026-08-28 (Section 32 of
+  /// Actual (v_consolidated_sales) vs Target (budget_figures) numbers for
+  /// the KPI row's Revenue Target Attainment tile (`_KpiData.companyActualMtd`
+  /// /etc. — field names kept even though this is no longer always
+  /// whole-company, see below, to avoid a wider rename across every reader
+  /// of `_KpiData`). Used to be called a second time by a separate
+  /// `_loadTargetChart` method, kept in sync as a shared fetch+compute
+  /// helper so the two independently-timed loaders (the KPI row and the
+  /// "Actual Revenue vs Sales Target" bar chart underneath it) never
+  /// disagreed — that chart was removed 2026-08-28 (Section 32 of
   /// Wyzesales_Rebuild_Decisions.md), so this is back down to the one
   /// caller and the one round trip its name always implied.
+  ///
+  /// The TARGET side used to always be dimension='company' regardless of
+  /// who was looking — Craig, 2026-09-03, once a plain 'user' login showed
+  /// "R 8,780 of R 0 target": schema/018 (2026-09-01) already hides the
+  /// 'company' dimension from User/RegUser, silently breaking this tile for
+  /// every non-admin login since it shipped. Rather than widening access to
+  /// the literal whole-company figure, Craig's answer was "The dashboard
+  /// must be specific. i.e. User sees only their info. RegUsers sees their
+  /// branch and Admin sees everything" — so the target now comes from
+  /// `defaultTargetScope` (core/utils/target_overlay.dart, shared with Sales
+  /// Analysis' own default-view fix), which resolves to the CALLER'S own
+  /// rep/branch/company target depending on their profile level. The ACTUAL
+  /// side needed no change at all — `fetchConsolidatedSales` already reads
+  /// an RLS-scoped view, so it was always naturally "my own visible revenue"
+  /// for a User, "my branch's" for a RegUser, and the true company total
+  /// only for an Admin; only the target side was ever hardcoded.
   Future<_WholeCompanyTarget> _fetchWholeCompanyTarget(int currentFiscalYear, DateTime monthStart) async {
+    final scope = defaultTargetScope(ref.read(sessionProvider).value);
     final results = await Future.wait([
       ref.read(salesRepositoryProvider).fetchConsolidatedSales(fiscalYears: [currentFiscalYear]),
-      ref.read(budgetRepositoryProvider).fetchBudget(dimension: 'company'),
+      ref.read(budgetRepositoryProvider).fetchBudget(dimension: scope.dimension.dbValue, entityCode: scope.entityCode),
     ]);
     final consolidatedRows = results[0] as List<ConsolidatedSales>;
     final budgetRows = results[1] as List<BudgetFigure>;
