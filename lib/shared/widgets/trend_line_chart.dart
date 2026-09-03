@@ -38,6 +38,10 @@ class TrendLineChart extends StatefulWidget {
     required this.series,
     required this.axisValueFormatter,
     required this.detailValueFormatter,
+    this.targetBars,
+    this.targetLabel,
+    this.targetColor,
+    this.targetTooltip,
   });
 
   final List<String> categories;
@@ -48,6 +52,33 @@ class TrendLineChart extends StatefulWidget {
 
   /// Full-precision form for the hover/tap detail row (e.g. "R 1 234 567").
   final String Function(num) detailValueFormatter;
+
+  /// 2026-09-03, Craig — Sales Analysis's Graph tab: a light overlay bar per
+  /// category showing Target, drawn behind the series lines. One entry per
+  /// `categories` index, same as a `TrendSeries.values` list; `null` means
+  /// no bar for that category (no target could be sourced or derived for
+  /// it — see `core/utils/target_overlay.dart`), not a bar of height zero.
+  /// Left null entirely to render no overlay at all (the chart's original,
+  /// bars-free appearance).
+  final List<num?>? targetBars;
+
+  /// Legend text for the overlay (e.g. "Target (FY2029)" or "Estimated
+  /// Target (FY2029)" — see the caller for when each applies). Ignored if
+  /// [targetBars] is null.
+  final String? targetLabel;
+
+  /// Fill colour for the overlay bars — should be a LIGHT/muted colour so
+  /// the bars read as a backdrop, not competing with the bold series
+  /// lines drawn on top of them. Defaults to a neutral light grey if
+  /// omitted.
+  final Color? targetColor;
+
+  /// Optional explanatory text shown on long-press/hover of the legend
+  /// entry — Craig, 2026-09-03: when the overlay is a derived estimate
+  /// rather than a real entered target, that shouldn't be silently
+  /// indistinguishable from one. Leave null for a real target, which needs
+  /// no extra explanation.
+  final String? targetTooltip;
 
   @override
   State<TrendLineChart> createState() => _TrendLineChartState();
@@ -107,6 +138,21 @@ class _TrendLineChartState extends State<TrendLineChart> {
                                 '${s.label}  ${widget.detailValueFormatter(s.values[activeIndex]!)}',
                                 style: textTheme.bodyMedium?.copyWith(color: s.color, fontWeight: FontWeight.w600),
                               ),
+                          // Target overlay's own value alongside the series
+                          // values at the hovered point — same treatment as
+                          // any other series here, just sourced from
+                          // targetBars/targetLabel instead of a TrendSeries.
+                          if (widget.targetBars != null &&
+                              widget.targetLabel != null &&
+                              activeIndex < widget.targetBars!.length &&
+                              widget.targetBars![activeIndex] != null)
+                            Text(
+                              '${widget.targetLabel}  ${widget.detailValueFormatter(widget.targetBars![activeIndex]!)}',
+                              style: textTheme.bodyMedium?.copyWith(
+                                color: widget.targetColor ?? Colors.grey,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -133,6 +179,8 @@ class _TrendLineChartState extends State<TrendLineChart> {
                       gridColor: gridColor,
                       axisTextColor: axisTextColor,
                       axisValueFormatter: widget.axisValueFormatter,
+                      targetBars: widget.targetBars,
+                      targetColor: widget.targetColor ?? Colors.grey.withValues(alpha: 0.3),
                     ),
                   ),
                 ),
@@ -154,10 +202,38 @@ class _TrendLineChartState extends State<TrendLineChart> {
                   Text(s.label, style: textTheme.bodyMedium),
                 ],
               ),
+            // A small rounded-rect swatch, not a circle like the line
+            // series above — visually signals "this legend entry is a bar,
+            // not a line" at a glance, matching how the overlay itself is
+            // actually drawn. Wrapped in a Tooltip only when targetTooltip
+            // is supplied (the derived-estimate case) — a real target needs
+            // no extra explanation, so Tooltip(message: '') is avoided
+            // entirely rather than shown as a no-op hover.
+            if (widget.targetBars != null && widget.targetLabel != null)
+              _buildTargetLegendEntry(textTheme),
           ],
         ),
       ],
     );
+  }
+
+  Widget _buildTargetLegendEntry(TextTheme textTheme) {
+    final row = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: widget.targetColor ?? Colors.grey.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(widget.targetLabel!, style: textTheme.bodyMedium),
+      ],
+    );
+    return widget.targetTooltip == null ? row : Tooltip(message: widget.targetTooltip!, child: row);
   }
 }
 
@@ -168,6 +244,8 @@ class _TrendLinePainter extends CustomPainter {
   final Color gridColor;
   final Color axisTextColor;
   final String Function(num) axisValueFormatter;
+  final List<num?>? targetBars;
+  final Color targetColor;
 
   _TrendLinePainter({
     required this.categories,
@@ -176,6 +254,8 @@ class _TrendLinePainter extends CustomPainter {
     required this.gridColor,
     required this.axisTextColor,
     required this.axisValueFormatter,
+    this.targetBars,
+    this.targetColor = Colors.grey,
   });
 
   @override
@@ -196,6 +276,16 @@ class _TrendLinePainter extends CustomPainter {
         if (d < minValue) minValue = d;
         if (d > maxValue) maxValue = d;
       }
+    }
+    // Target bars count toward the scale too — a target notably above or
+    // below the actual-revenue lines should still be visible in full,
+    // rather than getting clipped against a range sized only for the
+    // lines.
+    for (final v in targetBars ?? const <num?>[]) {
+      if (v == null) continue;
+      final d = v.toDouble();
+      if (d < minValue) minValue = d;
+      if (d > maxValue) maxValue = d;
     }
     if (maxValue == minValue) maxValue = minValue + 1;
     final range = maxValue - minValue;
@@ -227,6 +317,31 @@ class _TrendLinePainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: _leftMargin - 8);
       label.paint(canvas, Offset(plotLeft - 8 - label.width, y - label.height / 2));
+    }
+
+    // Target overlay bars (2026-09-03, Craig — Sales Analysis's Graph tab),
+    // drawn after gridlines but before the series lines/markers, so the
+    // bars read as a backdrop and the actual-revenue lines stay the
+    // topmost, primary layer. Each bar spans from the zero line to its
+    // target value — not from the padded chart bottom — so a chart whose
+    // range dips negative (a month with more credit notes than invoices)
+    // still draws the bar the intuitive way, rather than from whatever the
+    // y-axis happens to be padded down to.
+    final bars = targetBars;
+    if (bars != null && categories.isNotEmpty) {
+      final barPaint = Paint()..color = targetColor;
+      final avgSpacing = categories.length > 1 ? plotWidth / (categories.length - 1) : plotWidth;
+      final barWidth = (avgSpacing * 0.5).clamp(4.0, 40.0);
+      final zeroY = yFor(0);
+      for (var i = 0; i < categories.length; i++) {
+        final value = i < bars.length ? bars[i] : null;
+        if (value == null) continue;
+        final x = xFor(i);
+        final valueY = yFor(value);
+        final top = valueY < zeroY ? valueY : zeroY;
+        final bottom = valueY < zeroY ? zeroY : valueY;
+        canvas.drawRect(Rect.fromLTRB(x - barWidth / 2, top, x + barWidth / 2, bottom), barPaint);
+      }
     }
 
     // Hover guide line, drawn under the series lines so markers stay on top.
@@ -297,7 +412,9 @@ class _TrendLinePainter extends CustomPainter {
   bool shouldRepaint(covariant _TrendLinePainter oldDelegate) {
     return oldDelegate.hoverIndex != hoverIndex ||
         oldDelegate.series != series ||
-        oldDelegate.categories != categories;
+        oldDelegate.categories != categories ||
+        oldDelegate.targetBars != targetBars ||
+        oldDelegate.targetColor != targetColor;
   }
 }
 

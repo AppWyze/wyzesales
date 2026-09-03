@@ -6,6 +6,7 @@ import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
+import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
@@ -129,6 +130,33 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
   }
 }
 
+/// Everything one load of the Graph tab needs: the actual-revenue rows
+/// (unchanged from before) plus the current fiscal year's Target overlay
+/// bars (2026-09-03) — bundled into one object/one Future rather than two
+/// separately-tracked futures, since the target bars are themselves derived
+/// FROM the actual-revenue rows in the 2+-filter case (see
+/// _GraphTabState._loadTargetBars) and always need to be ready at the same
+/// time the chart itself is built.
+class _GraphData {
+  final List<ConsolidatedSales> rows;
+
+  /// One entry per fiscal month (`_months` order), for the CURRENT fiscal
+  /// year only — Craig, 2026-09-03: "we are only doing this for the
+  /// current fiscal year. No point in doing this for prior years agreed?"
+  /// Null throughout when the target fetch itself failed (see
+  /// _loadTargetBars) so a Budgets/Performance hiccup degrades to "no
+  /// overlay" rather than breaking the whole chart.
+  final List<num?> targetBars;
+
+  /// True when `targetBars` is a derived, proportional estimate (2+
+  /// dimension filters active at once — see core/utils/target_overlay.dart)
+  /// rather than a real entered Budgets figure. Drives both the legend
+  /// label and the bars' own visual treatment.
+  final bool targetIsEstimated;
+
+  const _GraphData({required this.rows, required this.targetBars, required this.targetIsEstimated});
+}
+
 class _GraphTab extends ConsumerStatefulWidget {
   const _GraphTab({this.onExportReady});
 
@@ -149,7 +177,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   // month label itself (_groupByMonth), so a different rotation never
   // changes which value a point shows, only which month starts the x-axis.
   late final List<String> _months;
-  late Future<List<ConsolidatedSales>> _future;
+  late Future<_GraphData> _future;
 
   // 2026-08-26 (Craig's global cross-dimension filters): same treatment as
   // ytd_comparative_screen.dart, which reads the exact same view — the 5
@@ -168,18 +196,85 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // left-to-right the same way the lines do on screen.
     _fiscalYears = fiscalYearWindow(currentFy, historyYears);
     _months = fiscalMonthOrderFor(startMonth: startMonth);
-    _future = ref
-        .read(salesRepositoryProvider)
-        .fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: _graphFilters(ref.read(globalFiltersProvider)));
+    _future = _load(ref.read(globalFiltersProvider));
     widget.onExportReady?.call(_buildExportData);
   }
 
   void _refetch() {
     setState(() {
-      _future = ref
-          .read(salesRepositoryProvider)
-          .fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: _graphFilters(ref.read(globalFiltersProvider)));
+      _future = _load(ref.read(globalFiltersProvider));
     });
+  }
+
+  Future<_GraphData> _load(GlobalFilters filters) async {
+    final repo = ref.read(salesRepositoryProvider);
+    final rows = await repo.fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: _graphFilters(filters));
+    final currentYearRows = rows.where((r) => r.fiscalYear == _fiscalYears.last).toList();
+    final target = await _loadTargetBars(filters: filters, currentYearActualRows: currentYearRows);
+    return _GraphData(rows: rows, targetBars: target.bars, targetIsEstimated: target.isEstimated);
+  }
+
+  /// Target overlay bars for the CURRENT fiscal year only (Craig,
+  /// 2026-09-03 — see _GraphData's own doc comment). Three cases, per
+  /// core/utils/target_overlay.dart:
+  ///   - 0 dimension filters active: the real, entered Company target.
+  ///   - exactly 1 active: that dimension+entity's own real entered target.
+  ///   - 2+ active at once: no real target exists for that exact
+  ///     combination (Decisions doc Section 58), so one is derived as this
+  ///     combination's share of whole-company actual, applied to the
+  ///     whole-company target — Craig's own worked example, confirmed with
+  ///     him before building this.
+  /// Wrapped in try/catch: a failure here (a Budgets/Performance-side
+  /// hiccup) degrades to "no overlay" rather than breaking the whole
+  /// actual-revenue chart, which has nothing to do with Targets and
+  /// worked fine long before this feature existed.
+  Future<({List<num?> bars, bool isEstimated})> _loadTargetBars({
+    required GlobalFilters filters,
+    required List<ConsolidatedSales> currentYearActualRows,
+  }) async {
+    try {
+      final repo = ref.read(salesRepositoryProvider);
+      final currentFy = _fiscalYears.last;
+      final single = singleActiveDimensionFilter(filters);
+      final dimCount = activeDimensionFilterCount(filters);
+
+      if (dimCount <= 1) {
+        final dimension = single?.dimension ?? SalesDimension.company;
+        final entityCode = single?.selection.code ?? 'ALL';
+        final rows = await repo.fetchDimensionPerformance(
+          dimension: dimension,
+          entityCode: entityCode,
+          fiscalYear: currentFy,
+          fiscalMonth: filters.fiscalMonth,
+        );
+        final byMonth = {for (final r in rows) r.fiscalMonth: r.targetValue};
+        return (bars: [for (final m in _months) byMonth[m]], isEstimated: false);
+      }
+
+      final companyTargetRows = await repo.fetchDimensionPerformance(
+        dimension: SalesDimension.company,
+        entityCode: 'ALL',
+        fiscalYear: currentFy,
+        fiscalMonth: filters.fiscalMonth,
+      );
+      final totalActualRows = await repo.fetchConsolidatedSales(fiscalYears: [currentFy]);
+
+      final companyTargetByMonth = {for (final r in companyTargetRows) r.fiscalMonth: r.targetValue};
+      final totalActualByMonth = {for (final r in totalActualRows) DateFormat('MMM').format(r.month): r.value};
+      final filteredActualByMonth = {for (final r in currentYearActualRows) DateFormat('MMM').format(r.month): r.value};
+
+      final bars = [
+        for (final m in _months)
+          deriveProportionalTarget(
+            companyTarget: companyTargetByMonth[m],
+            totalActual: totalActualByMonth[m],
+            filteredActual: filteredActualByMonth[m],
+          ),
+      ];
+      return (bars: bars, isEstimated: true);
+    } catch (_) {
+      return (bars: List<num?>.filled(_months.length, null), isEstimated: false);
+    }
   }
 
   /// A short form for the chart's y-axis gridlines — "R 1 234 567" doesn't
@@ -232,14 +327,14 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: AsyncSection<List<ConsolidatedSales>>(
+            child: AsyncSection<_GraphData>(
               future: _future,
-              isEmpty: (rows) => rows.isEmpty,
-              builder: (context, rows) => Card(
+              isEmpty: (data) => data.rows.isEmpty,
+              builder: (context, data) => Card(
                 margin: EdgeInsets.zero,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: _buildChart(rows),
+                  child: _buildChart(data),
                 ),
               ),
             ),
@@ -292,16 +387,24 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   }
 
   Future<ExportData> _buildExportData() async {
-    final rows = await _future;
-    final byMonth = _groupByMonth(rows);
+    final data = await _future;
+    final byMonth = _groupByMonth(data.rows);
     final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
+    // Target is a Rand-revenue figure (Sales Budget) — only meaningful
+    // alongside R Value, not R Gross Profit, same reasoning _buildChart
+    // below uses to decide whether to pass targetBars to the chart at all.
+    // Also skipped when every entry is null (a failed fetch, or genuinely
+    // nothing entered) — same as the chart, no point in an all-dash column.
+    final includeTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
+    final targetHeader = includeTarget ? (data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})') : null;
     return ExportData(
-      headers: ['Month', for (final fy in _fiscalYears) 'FY$fy'],
+      headers: ['Month', for (final fy in _fiscalYears) 'FY$fy', if (targetHeader != null) targetHeader],
       rows: [
-        for (final month in _months)
+        for (var i = 0; i < _months.length; i++)
           [
-            month,
-            for (final fy in _fiscalYears) _formatOrDash(_valueFor(byMonth, month, fy)),
+            _months[i],
+            for (final fy in _fiscalYears) _formatOrDash(_valueFor(byMonth, _months[i], fy)),
+            if (includeTarget) _formatOrDash(data.targetBars[i]),
           ],
       ],
       fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
@@ -311,8 +414,8 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
 
   String _formatOrDash(num? value) => value == null ? '—' : formatRand(value);
 
-  Widget _buildChart(List<ConsolidatedSales> rows) {
-    final byMonth = _groupByMonth(rows);
+  Widget _buildChart(_GraphData data) {
+    final byMonth = _groupByMonth(data.rows);
     num? valueFor(String month, int fiscalYear) => _valueFor(byMonth, month, fiscalYear);
 
     // A genuinely distinct colour per fiscal year (2026-09-01, Craig: "Line
@@ -338,11 +441,36 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         ),
     ];
 
+    // Target is a Rand-revenue figure (Sales Budget) — showing it against R
+    // Gross Profit lines would be comparing two different units, so the
+    // overlay only appears for R Value. Tinted from the CURRENT fiscal
+    // year's own line colour (always seriesColors.last — _fiscalYears is
+    // built oldest-to-newest) at low alpha, so the bars visually read as
+    // "this year's own target", not an unrelated colour; the estimated
+    // (2+-filter) case is additionally lower-alpha still and gets an
+    // "Estimated" label, per Craig's own request not to blur a derived
+    // number with a real entered one (2026-09-03).
+    // Also false when every entry is null (the target fetch failed, or
+    // genuinely nothing has ever been entered for this combination) — no
+    // point showing a legend entry and swatch for an overlay with no
+    // visible bars behind it.
+    final showTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
+    final currentYearColor = seriesColors.last;
+    final targetColor = currentYearColor.withValues(alpha: data.targetIsEstimated ? 0.18 : 0.28);
+    final targetLabel = data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})';
+    const targetTooltip =
+        'No target is entered for this exact combination of filters — this is this combination\'s share of whole-company '
+        'actual revenue, applied to the whole-company target, one fiscal month at a time.';
+
     return TrendLineChart(
       categories: _months,
       series: series,
       axisValueFormatter: _compactRand,
       detailValueFormatter: (v) => formatRand(v),
+      targetBars: showTarget ? data.targetBars : null,
+      targetLabel: showTarget ? targetLabel : null,
+      targetColor: showTarget ? targetColor : null,
+      targetTooltip: showTarget && data.targetIsEstimated ? targetTooltip : null,
     );
   }
 }
