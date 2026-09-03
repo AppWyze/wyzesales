@@ -1,0 +1,62 @@
+-- ============================================================================
+-- WyzeSales — attribution is now purely "whoever actually sold it," full
+-- stop; customer/branch assignment no longer redirects revenue or visibility
+-- ============================================================================
+-- Thirtieth migration. Craig, 2026-09-03, immediately after migration 029
+-- shipped, clarifying the exact rule he wants (his own words):
+--
+--   "Rep A Sells an Item to Customer A who belongs to Rep B. Rep A sees the
+--   transaction and it sums to Rep A's target. Rep B does not see the
+--   Transaction and it does not sum to Rep B's target. Same applies to
+--   Branch (Region). This happens infrequently. I know this is not what we
+--   agreed with earlier in the design but it has changed."
+--
+-- This is a deliberate reversal of the design decided in
+-- Wyzesales_Rebuild_Decisions.md Section 3 (carried into migration 029's
+-- "house account" exception, Section 67): that design said a customer could
+-- be flagged (customers.attribute_to_assigned_rep) so that ALL its revenue
+-- counts toward its assigned rep regardless of who actually sold it. Craig
+-- has now explicitly superseded that: a customer's assigned_rep_code is
+-- purely informational (e.g. "who normally looks after this account", from
+-- the source system's DEBTORS.NORMALREP) and must have NO effect on whose
+-- revenue a sale is, who can see it, or whose target it contributes to.
+-- Attribution is 100% the rep who actually keyed the invoice
+-- (invoice_rep_code) — nothing else, no exceptions, even for a customer with
+-- attribute_to_assigned_rep = true.
+--
+-- THE FIX: resolved_rep_code() (schema/001 Section 8) is the single place
+-- this rule is expressed — it already backs both the RLS policy (via
+-- migration 029) and every "by rep" rollup/target computation in the app
+-- (v_sales_documents.resolved_rep_code, and every dimension='sales_person'
+-- rollup built on it: schema/002's v_dimension_monthly_sales, schema/011's
+-- filtered rollups, schema/017's filter options, and the Dashboard/
+-- Performance target-attainment sums that compare those rollups against
+-- budget_figures/sales_forecast). Simplifying it to always return
+-- p_invoice_rep_code — dropping the customer-assignment lookup entirely —
+-- fixes all of those call sites in one place, with no call site itself
+-- needing to change: a sale is visible to, and its revenue counts toward,
+-- exactly the rep who sold it. Rep B (Customer A's assigned rep in Craig's
+-- example) no longer has any path to seeing or being credited for a sale
+-- they didn't make; Rep A (who made it) sees and is credited for it, same
+-- as always.
+--
+-- The function's signature is unchanged (still takes client_id/account_code
+-- so every existing caller keeps working untouched) — only its body drops
+-- the now-unwanted lookup. customers.assigned_rep_code and
+-- attribute_to_assigned_rep themselves are left in place (they're still
+-- real source-system data worth keeping on record) — they simply no longer
+-- feed into this function.
+--
+-- Branch/region needs NO corresponding change: unlike rep, there never was
+-- an "assigned branch" concept to begin with (schema/001 Section 9's own
+-- comment: branch resolves directly off the transaction's own
+-- warehouse_code because "REPS has no branch column at all" in the source
+-- data) — a reguser's own branch, and every by-branch rollup, already keys
+-- off the transaction's real warehouse_code with no assignment-based
+-- indirection possible. Verified this holds below rather than assumed.
+-- ============================================================================
+
+create or replace function resolved_rep_code(p_client_id uuid, p_account_code text, p_invoice_rep_code text)
+returns text language sql stable as $$
+  select p_invoice_rep_code;
+$$;
