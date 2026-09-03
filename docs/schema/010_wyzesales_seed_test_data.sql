@@ -53,6 +53,30 @@ declare
   v_month_end       date := date_trunc('month', current_date)::date;
   v_month_idx       int  := 0;
   v_lines_this_month int;
+  -- 2026-09-03, Craig: noticed the Sales Analysis Target overlay has nothing
+  -- to show for the current (still in-progress) fiscal month and asked
+  -- whether it's because there's no data yet for it. It's exactly that —
+  -- v_dimension_performance/fn_dimension_performance_filtered (schema/021)
+  -- build off actual sales first and LEFT JOIN budget/forecast onto that, so
+  -- a fiscal month with zero actual rows never surfaces a target either,
+  -- regardless of a budget figure existing for that month label. Beyond
+  -- just adding a few rows for the current month, re-running this script
+  -- itself has always had a latent bug here: this whole loop is written as
+  -- if every month is complete, spreading each month's documents across
+  -- ~27 days at random — for the CURRENT month, re-running this on (say) day
+  -- 3 of a new month would backdate invoices onto days 4-27 that haven't
+  -- happened yet. v_is_current_month/v_days_elapsed/v_days_in_month/
+  -- v_day_span/v_prorate_factor below fix both at once: the current month's
+  -- volume is scaled down to the fraction of it actually elapsed, and every
+  -- doc_date for that month is confined to days 1..v_days_elapsed — so this
+  -- script is now safe to re-run on any day of any month, always producing
+  -- a realistic partial month rather than either skipping the current month
+  -- entirely (if run before it started) or inventing future transactions.
+  v_is_current_month boolean;
+  v_days_elapsed    int;
+  v_days_in_month   int;
+  v_day_span        int;
+  v_prorate_factor  numeric;
   v_i               int;
   v_item_idx        int;
   v_cust_idx        int;
@@ -221,6 +245,23 @@ begin
   while v_month <= v_month_end loop
     v_month_idx := v_month_idx + 1;
 
+    -- Is this iteration the current, still-in-progress calendar month? If
+    -- so, work out how much of it has actually elapsed so volume and
+    -- document dates below can be scaled down to match — see the
+    -- v_is_current_month declaration above for why.
+    v_is_current_month := (v_month = v_month_end);
+    if v_is_current_month then
+      v_days_elapsed   := (current_date - v_month) + 1;
+      v_days_in_month  := extract(day from (date_trunc('month', v_month) + interval '1 month' - interval '1 day'))::int;
+      v_day_span       := v_days_elapsed;
+      v_prorate_factor := v_days_elapsed::numeric / v_days_in_month;
+    else
+      v_days_elapsed   := null;
+      v_days_in_month  := null;
+      v_day_span       := 27;
+      v_prorate_factor := 1;
+    end if;
+
     -- Base line count grows slowly release-over-release and dips in
     -- Dec/Jan (Southern-hemisphere summer slowdown), picks up Mar/Apr.
     v_lines_this_month := (55 + v_month_idx / 2)::int
@@ -232,6 +273,13 @@ begin
       + (floor(random() * 10) - 5)::int;
     if v_lines_this_month < 20 then
       v_lines_this_month := 20;
+    end if;
+    -- Scale a genuinely complete month's line count down to whatever
+    -- fraction of the current month has actually elapsed (e.g. 3 of 30 days
+    -- in) rather than generating a full month's worth of invoices dated
+    -- into days that haven't happened yet.
+    if v_is_current_month then
+      v_lines_this_month := greatest(1, round(v_lines_this_month * v_prorate_factor)::int);
     end if;
 
     v_doc_seq := 0;
@@ -261,7 +309,7 @@ begin
       values
         (v_client_id, 'invoice',
          'INV' || to_char(v_month, 'YYMM') || lpad(v_doc_seq::text, 4, '0'),
-         v_customer_codes[v_cust_idx], v_month + (floor(random() * 27))::int,
+         v_customer_codes[v_cust_idx], v_month + (floor(random() * v_day_span))::int,
          v_rep, v_item_codes[v_item_idx], v_branch, v_qty, v_value - v_discount, v_cost, v_discount);
 
       -- ~4% of invoice lines get a partial credit note in the same month.
@@ -273,7 +321,7 @@ begin
         values
           (v_client_id, 'credit_note',
            'CRN' || to_char(v_month, 'YYMM') || lpad(v_doc_seq::text, 4, '0'),
-           v_customer_codes[v_cust_idx], v_month + (floor(random() * 27))::int,
+           v_customer_codes[v_cust_idx], v_month + (floor(random() * v_day_span))::int,
            v_rep, v_item_codes[v_item_idx], v_branch,
            -round(v_qty * 0.3, 0), -round(v_value * 0.3, 2), -round(v_cost * 0.3, 2), 0);
       end if;
@@ -281,7 +329,9 @@ begin
 
     -- Quotes and sales orders: pending/potential business, excluded from
     -- the sales rollup views but shown on the Quote/Sales Order screens.
-    for v_i in 1..(10 + floor(random() * 8))::int loop
+    -- Same proration as the invoice count above — a partial current month
+    -- shouldn't have a full month's worth of pending quotes either.
+    for v_i in 1..greatest(1, round((10 + floor(random() * 8)) * v_prorate_factor))::int loop
       v_item_idx := 1 + floor(random() * array_length(v_item_codes, 1))::int;
       v_cust_idx := 1 + floor(random() * array_length(v_customer_codes, 1))::int;
       v_branch   := v_branches[1 + floor(random() * array_length(v_branches, 1))::int];
@@ -296,11 +346,11 @@ begin
       values
         (v_client_id, 'quote',
          'QTE' || to_char(v_month, 'YYMM') || lpad(v_i::text, 4, '0'),
-         v_customer_codes[v_cust_idx], v_month + (floor(random() * 27))::int,
+         v_customer_codes[v_cust_idx], v_month + (floor(random() * v_day_span))::int,
          v_rep, v_item_codes[v_item_idx], v_branch, v_qty, v_value, v_cost, 0);
     end loop;
 
-    for v_i in 1..(8 + floor(random() * 6))::int loop
+    for v_i in 1..greatest(1, round((8 + floor(random() * 6)) * v_prorate_factor))::int loop
       v_item_idx := 1 + floor(random() * array_length(v_item_codes, 1))::int;
       v_cust_idx := 1 + floor(random() * array_length(v_customer_codes, 1))::int;
       v_branch   := v_branches[1 + floor(random() * array_length(v_branches, 1))::int];
@@ -315,7 +365,7 @@ begin
       values
         (v_client_id, 'sales_order',
          'SOR' || to_char(v_month, 'YYMM') || lpad(v_i::text, 4, '0'),
-         v_customer_codes[v_cust_idx], v_month + (floor(random() * 27))::int,
+         v_customer_codes[v_cust_idx], v_month + (floor(random() * v_day_span))::int,
          v_rep, v_item_codes[v_item_idx], v_branch, v_qty, v_value, v_cost, 0);
     end loop;
 

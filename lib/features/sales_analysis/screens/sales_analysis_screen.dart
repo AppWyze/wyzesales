@@ -443,20 +443,23 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
 
     // Target is a Rand-revenue figure (Sales Budget) — showing it against R
     // Gross Profit lines would be comparing two different units, so the
-    // overlay only appears for R Value. Tinted from the CURRENT fiscal
-    // year's own line colour (always seriesColors.last — _fiscalYears is
-    // built oldest-to-newest) at low alpha, so the bars visually read as
-    // "this year's own target", not an unrelated colour; the estimated
-    // (2+-filter) case is additionally lower-alpha still and gets an
-    // "Estimated" label, per Craig's own request not to blur a derived
-    // number with a real entered one (2026-09-03).
+    // overlay only appears for R Value. Originally tinted from the CURRENT
+    // fiscal year's own line colour, but that meant the bars' actual colour
+    // depended on the configured history-window length (e.g. AppColors.teal
+    // — an amber, despite the name — for the default 3-year window), which
+    // read as too pale/orange to Craig: "change the colour to a light blue
+    // but also make it slightly darker so it is easier to read" (2026-09-03).
+    // Fixed to AppColors.info (the app's one blue) at a higher, more opaque
+    // alpha than before; the estimated (2+-filter) case stays visually
+    // lighter than a real entered figure and keeps its "Estimated" label,
+    // per Craig's earlier request not to blur a derived number with a real
+    // one.
     // Also false when every entry is null (the target fetch failed, or
     // genuinely nothing has ever been entered for this combination) — no
     // point showing a legend entry and swatch for an overlay with no
     // visible bars behind it.
     final showTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
-    final currentYearColor = seriesColors.last;
-    final targetColor = currentYearColor.withValues(alpha: data.targetIsEstimated ? 0.18 : 0.28);
+    final targetColor = AppColors.info.withValues(alpha: data.targetIsEstimated ? 0.30 : 0.45);
     final targetLabel = data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})';
     const targetTooltip =
         'No target is entered for this exact combination of filters — this is this combination\'s share of whole-company '
