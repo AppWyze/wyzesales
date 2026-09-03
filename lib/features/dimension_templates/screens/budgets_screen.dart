@@ -10,6 +10,7 @@ import '../../../core/filters/global_filters.dart';
 import '../../../core/supabase/supabase_config.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/budget_figure.dart';
+import '../../../data/models/profile.dart';
 import '../../../data/models/reference_data.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
@@ -76,9 +77,22 @@ class _BudgetMonthData {
 /// Entity picker on the left, two 12-month fiscal columns on the right — an
 /// editable Sales Budget and a read-only Seasonal Forecast
 /// (Wyzesales_Screens_and_Recommendations.md Section 1). Editing requires
-/// adminuser/superuser (schema/004 + schema/005 — see those migrations for
-/// why both are needed for a second edit to the same month to actually
-/// save).
+/// adminuser (schema/008 retired superuser from this and everything else —
+/// see `Profile.canEditBudgets`'s own comment).
+///
+/// 2026-09-03, Craig (Wyzesales_Rebuild_Decisions.md Section 70): "A User
+/// must be able to see their own Budget but also Category Budget, Item
+/// Budget, and only their allocated Customers Budgets. Not Branch or
+/// Company. A Regional User must see the Branch Sales Persons, Category,
+/// Items, Branch Customers and the Branch Budget. Admin sees every thing.
+/// Users and RegUsers only have view access." Viewing is now open to every
+/// level — only editing stays adminuser-only. Which DIMENSIONS a level can
+/// even pick from is filtered client-side by `_allowedDimensionsFor` purely
+/// as a convenience (no point offering a Branch entry list to a plain User
+/// when migration 031's RLS would hand back zero rows for it); the actual
+/// enforcement of which rows within an allowed dimension are visible lives
+/// entirely in `budget_figures_select`/`sales_forecast_select` (migration
+/// 031), same as every other screen in this app.
 class BudgetsScreen extends ConsumerStatefulWidget {
   const BudgetsScreen({super.key, required this.dimension});
 
@@ -86,6 +100,43 @@ class BudgetsScreen extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<BudgetsScreen> createState() => _BudgetsScreenState();
+}
+
+/// Which dimensions a login can pick from on the Budgets screen at all —
+/// Wyzesales_Rebuild_Decisions.md Section 70 (migration 031). Company stays
+/// admin-only for both non-admin levels (never asked for); a plain User has
+/// no "own branch" concept at all, so Branch is admin+reguser only. This is
+/// purely a UI convenience so a User/RegUser isn't shown an entity list for
+/// a dimension `budget_figures_select`/`sales_forecast_select` would just
+/// return zero rows for anyway — RLS is the only real enforcement, and this
+/// list is deliberately kept in lockstep with it rather than duplicating any
+/// row-level logic here.
+List<SalesDimension> _allowedDimensionsFor(Profile? profile) {
+  switch (profile?.level) {
+    case UserLevel.adminuser:
+    // superuser is vestigial — schema/008 retired it outright and nothing
+    // is ever assigned it again (see Profile.canEditBudgets's comment) —
+    // treated the same as adminuser here rather than falling through to
+    // the narrowest case for a level nobody actually has.
+    case UserLevel.superuser:
+      return SalesDimension.values;
+    case UserLevel.reguser:
+      return const [
+        SalesDimension.salesPerson,
+        SalesDimension.category,
+        SalesDimension.customer,
+        SalesDimension.item,
+        SalesDimension.branch,
+      ];
+    case UserLevel.user:
+    case null:
+      return const [
+        SalesDimension.salesPerson,
+        SalesDimension.category,
+        SalesDimension.customer,
+        SalesDimension.item,
+      ];
+  }
 }
 
 class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
@@ -175,13 +226,11 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   Widget build(BuildContext context) {
     final profileAsync = ref.watch(sessionProvider);
 
-    // Admin/SuperUser only, per Craig's decision. This is the real
-    // enforcement point — app_shell.dart's nav gate only hides the menu
-    // entry, so this check is what actually stops a User/RegUser who
-    // navigates straight to /budgets/:dimension (e.g. a bookmarked or
-    // typed URL) from seeing the screen at all. Checked separately from
-    // "not yet loaded" so a still-loading profile shows a spinner instead
-    // of flashing "access denied" before the real value arrives.
+    // Checked separately from "not yet loaded" so a still-loading profile
+    // shows a spinner instead of flashing content computed from a null
+    // profile (which `_allowedDimensionsFor`/`canEditBudgets` below would
+    // otherwise treat as the narrowest, User-level case) before the real
+    // value arrives.
     if (profileAsync.isLoading) {
       return AppShell(
         title: 'Budgets — ${widget.dimension.label}',
@@ -190,28 +239,27 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
       );
     }
 
-    final canEdit = profileAsync.value?.canEditBudgets ?? false;
-    if (!canEdit) {
+    final profile = profileAsync.value;
+    final canEditBudgets = profile?.canEditBudgets ?? false;
+    final allowedDimensions = _allowedDimensionsFor(profile);
+
+    // Every level can view Budgets now (Section 70) — the screen itself no
+    // longer has a hard access-denied state. What's left to guard against
+    // is a User/RegUser landing directly on a dimension route their level
+    // can't see at all (a bookmarked/typed /budgets/company, or
+    // /budgets/branch as a plain User) — bounce to the first dimension
+    // they're actually allowed rather than show them an entity list that
+    // migration 031's RLS would return zero rows for regardless. Deferred
+    // to a post-frame callback since build() itself must return a widget,
+    // not navigate mid-build.
+    if (!allowedDimensions.contains(widget.dimension)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go('/budgets/${allowedDimensions.first.dbValue}');
+      });
       return AppShell(
-        title: 'Budgets — ${widget.dimension.label}',
+        title: 'Budgets',
         currentRoute: '/budgets/${widget.dimension.dbValue}',
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.lock_outline, size: 48, color: Theme.of(context).textTheme.bodyMedium?.color),
-                const SizedBox(height: 12),
-                Text(
-                  'Budgets are only visible to Admin and SuperUser accounts.',
-                  style: Theme.of(context).textTheme.titleMedium,
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ),
+        body: const Center(child: RepaintBoundary(child: CircularProgressIndicator())),
       );
     }
 
@@ -230,7 +278,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
                   child: BoxedDropdown<SalesDimension>(
                     value: widget.dimension,
                     width: 236,
-                    items: SalesDimension.values.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
+                    items: allowedDimensions.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
                     onChanged: (d) {
                       if (d != null && d != widget.dimension) context.go('/budgets/${d.dbValue}');
                     },
@@ -275,12 +323,14 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
                               dimension: widget.dimension,
                               entityCode: _selectedEntityCode!,
                               data: data,
-                              // Always true here — the whole screen already
-                              // returned an access-denied state above for
-                              // anyone who fails canEditBudgets, so nobody
-                              // who reaches this point is read-only anymore.
-                              canEdit: true,
-                              clientId: profileAsync.value?.clientId,
+                              // Section 70: the screen no longer denies
+                              // access outright, so this now genuinely
+                              // varies — adminuser gets the editable
+                              // TextField cells and Save button,
+                              // User/RegUser get _MonthTable's existing
+                              // read-only Text rendering.
+                              canEdit: canEditBudgets,
+                              clientId: profile?.clientId,
                             ),
                           ),
                         ),

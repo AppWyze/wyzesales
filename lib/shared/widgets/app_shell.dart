@@ -235,7 +235,6 @@ class _Sidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final canEditBudgets = profileAsync.value?.canEditBudgets == true;
     final canManageUsers = profileAsync.value?.canManageUsers == true;
     final isPlatformAdmin = profileAsync.value?.isPlatformAdmin == true;
 
@@ -286,39 +285,45 @@ class _Sidebar extends StatelessWidget {
                   currentRoute: currentRoute,
                   isDrawer: isDrawer,
                 ),
-                // Admin/SuperUser only (Wyzesales_Rebuild_Decisions.md,
-                // "Budgets screens — Admin/SuperUser only") — the real
-                // enforcement is inside budgets_screen.dart itself, this is
-                // just so a User/RegUser doesn't see the section exists.
-                // Moved under its own "Settings" heading and out of the main
-                // nav list per Craig's request (2026-08-22) — a home for
-                // admin-only screens generally, not just Budgets, if more
-                // get added later (e.g. the still-unbuilt User Management
-                // screen).
-                if (canEditBudgets || canManageUsers) ...[
+                // Budgets — previously Admin/SuperUser only and tucked
+                // under "Settings" ("Budgets screens — Admin/SuperUser
+                // only"). Wyzesales_Rebuild_Decisions.md Section 70
+                // (2026-09-03, Craig: "A User must be able to see their own
+                // Budget... Users and RegUsers only have view access")
+                // opened VIEWING up to every level, so this tile moved out
+                // of the admin-only Settings section and in next to Sales
+                // By/Performance — same shape (one tile, opens the
+                // dimension switcher, no per-dimension entries), rendered
+                // for every authenticated level unconditionally, same as
+                // those two. Who can actually EDIT a figure is still
+                // `canEditBudgets` (adminuser only), threaded into
+                // `_MonthTable` inside budgets_screen.dart; who can see a
+                // given DIMENSION's rows at all is still migration 031's
+                // RLS — this tile no longer gates anything by itself.
+                // `SalesDimension.values.first` (Sales Person) is a valid
+                // landing dimension for every level, so no per-level
+                // redirect is needed just to pick the opening route.
+                _NavTile(
+                  icon: Icons.edit_note,
+                  label: 'Budgets',
+                  route: '/budgets/${SalesDimension.values.first.dbValue}',
+                  activePrefix: '/budgets/',
+                  currentRoute: currentRoute,
+                  isDrawer: isDrawer,
+                ),
+                if (canManageUsers) ...[
                   const _NavSectionLabel('Settings'),
-                  if (canEditBudgets)
-                    _NavTile(
-                      icon: Icons.edit_note,
-                      label: 'Budgets',
-                      route: '/budgets/${SalesDimension.values.first.dbValue}',
-                      activePrefix: '/budgets/',
-                      currentRoute: currentRoute,
-                      isDrawer: isDrawer,
-                    ),
                   // Company/Users/License — schema/008_wyzesales_
-                  // multitenancy.sql. Gated the same way Budgets already is:
-                  // this just hides the entry, SettingsScreen itself is the
-                  // real enforcement (canManageUsers == adminuser, see its
-                  // own comment).
-                  if (canManageUsers)
-                    _NavTile(
-                      icon: Icons.settings_outlined,
-                      label: 'Settings',
-                      route: '/settings',
-                      currentRoute: currentRoute,
-                      isDrawer: isDrawer,
-                    ),
+                  // multitenancy.sql. This just hides the entry,
+                  // SettingsScreen itself is the real enforcement
+                  // (canManageUsers == adminuser, see its own comment).
+                  _NavTile(
+                    icon: Icons.settings_outlined,
+                    label: 'Settings',
+                    route: '/settings',
+                    currentRoute: currentRoute,
+                    isDrawer: isDrawer,
+                  ),
                 ],
                 // Platform Admin — separate from the client-scoped Settings
                 // section above since it's cross-tenant, not "this client's
