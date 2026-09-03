@@ -108,16 +108,30 @@ class _KpiData {
   // quotes/sales orders are never reliably captured anywhere in WCSA's data,
   // not even in their own daily-use IQRetail application). `companyActualMtd`
   // /`companyActualYtd`/`companyTargetMtd`/`companyTargetYtd` above already
-  // carry everything needed for the Gap side of the calc; this adds only the
-  // one extra number the Gap doesn't already give: the company's own average
-  // monthly revenue over its trailing history window
-  // (fn_dimension_sales_history, schema/023), which the % Coverage Needed
-  // math divides the Gap by. `elapsedMonthsYtd` is how many fiscal months of
-  // the current year have actually elapsed — YTD's Gap covers that many
-  // months at once, so the YTD calc scales the average by this count rather
-  // than treating it as if it were a single month's Gap (Craig, 2026-09-02,
+  // carry everything needed for the Gap side of the calc.
+  //
+  // 2026-09-03 correction: this used to carry a single
+  // `companyAvgRevenuePerPeriod` fetched with `dimension: 'company'` always
+  // — copied from this tile's original 2026-09-02 build, one day before
+  // Craig's "the dashboard must be specific" scoping rule (Section 68/the
+  // `companyActualMtd` fields above) landed and was never propagated here.
+  // The result: for a User or RegUser login, the Gap (their own, correctly
+  // scoped, per `defaultTargetScope`) was being divided by the WHOLE
+  // COMPANY's average revenue per period, not their own — Johan, with a real
+  // R170,005 MTD gap, saw "Sales Coverage 34.6%" because his gap was tiny
+  // relative to the whole company's average, not his own. Now carries the
+  // same `own`/`company` pair Performance Analysis' identical calc already
+  // uses (`computeCoverage`, core/utils/sales_coverage.dart) — `own` is the
+  // viewer's own scoped history (their rep/branch/company, matching
+  // `defaultTargetScope`), `company` is the fallback used only when `own`
+  // has under `kMinActiveMonthsForOwnAverage` months of history (or doesn't
+  // exist at all). `elapsedMonthsYtd` is how many fiscal months of the
+  // current year have actually elapsed — YTD's Gap covers that many months
+  // at once, so the YTD calc scales the average by this count rather than
+  // treating it as if it were a single month's Gap (Craig, 2026-09-02,
   // confirming how to scale YTD: "Multiply average by elapsed months").
-  final num companyAvgRevenuePerPeriod;
+  final EntitySalesHistory? ownSalesHistory;
+  final EntitySalesHistory? companySalesHistory;
   final int elapsedMonthsYtd;
 
   // Top 5 Customer Concentration.
@@ -158,7 +172,8 @@ class _KpiData {
     required this.companyActualYtd,
     required this.companyTargetMtd,
     required this.companyTargetYtd,
-    required this.companyAvgRevenuePerPeriod,
+    required this.ownSalesHistory,
+    required this.companySalesHistory,
     required this.elapsedMonthsYtd,
     required this.top5CustomerValueMtd,
     required this.totalCustomerValueMtd,
@@ -385,14 +400,24 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final filters = _dashboardFilters(ref.read(globalFiltersProvider));
     final salesRepo = ref.read(salesRepositoryProvider);
 
-    // Sales Coverage's company-wide historical average — trailing 3/5-year
-    // window, same `fiscalYearWindow` convention Performance Analysis uses
-    // for the identical per-entity calc (core/utils/sales_coverage.dart).
-    // Deliberately NOT narrowed by `filters` — like companyActualMtd/
-    // companyTargetMtd above, this tile is whole-company (see _KpiData's own
-    // doc comment on why Revenue/Rep Target Attainment stay whole-company).
+    // Sales Coverage's historical average revenue per period — trailing
+    // 3/5-year window, same `fiscalYearWindow` convention Performance
+    // Analysis uses for the identical per-entity calc
+    // (core/utils/sales_coverage.dart). Deliberately NOT narrowed by
+    // `filters`, same as companyActualMtd/companyTargetMtd above — an
+    // entity's coverage baseline shouldn't shift just because a global
+    // dimension filter is active (see schema/023's own header comment).
+    //
+    // 2026-09-03: this now reads the VIEWER'S OWN scope
+    // (`defaultTargetScope`, same as `_fetchWholeCompanyTarget` above) rather
+    // than always `dimension: 'company'` — see `_KpiData.ownSalesHistory`'s
+    // doc comment for why the old always-company version was wrong for any
+    // non-admin login. Admin's own scope IS `company`, so the "own" fetch
+    // would just be a second, redundant copy of the exact same query in that
+    // case — skipped entirely, reusing the company row as `own` too.
     final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     final historyWindow = fiscalYearWindow(currentFiscalYear, historyYears);
+    final coverageScope = defaultTargetScope(ref.read(sessionProvider).value);
 
     final results = await Future.wait([
       salesRepo.fetchConsolidatedSales(fiscalYears: [currentFiscalYear], filters: filters),
@@ -456,12 +481,33 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       // method's own doc comment), just across every rep at once rather
       // than one entity.
       ref.read(budgetRepositoryProvider).fetchForecast(dimension: 'sales_person'),
+      // Sales Coverage's OWN-scope history (see the doc comment above
+      // `coverageScope`) — appended at the end rather than inserted earlier
+      // in this list so every existing `results[N]` index above stays
+      // unchanged. Admin's scope is already `company`, so there's nothing
+      // new to fetch — reuse the `dimension: 'company'` result (index 2)
+      // instead of firing the exact same query twice.
+      coverageScope.dimension == SalesDimension.company
+          ? Future.value(<EntitySalesHistory>[])
+          : salesRepo.fetchSalesHistory(dimension: coverageScope.dimension.dbValue, fiscalYears: historyWindow),
     ]);
 
     final consolidatedRows = results[0] as List<ConsolidatedSales>;
     final wholeCompanyTarget = results[1] as _WholeCompanyTarget;
     final companyHistoryRows = results[2] as List<EntitySalesHistory>;
-    final companyAvgRevenuePerPeriod = companyHistoryRows.isEmpty ? 0 : companyHistoryRows.first.avgRevenuePerPeriod;
+    final companySalesHistory = companyHistoryRows.isEmpty ? null : companyHistoryRows.first;
+    final ownHistoryRows = results[11] as List<EntitySalesHistory>;
+    EntitySalesHistory? ownSalesHistory;
+    if (coverageScope.dimension == SalesDimension.company) {
+      ownSalesHistory = companySalesHistory;
+    } else {
+      for (final row in ownHistoryRows) {
+        if (row.entityCode == coverageScope.entityCode) {
+          ownSalesHistory = row;
+          break;
+        }
+      }
+    }
     final customerMonthlyRows = results[3] as List<DimensionMonthlySales>;
     final repBudgetRows = results[4] as List<BudgetFigure>;
     final repMonthlyRows = results[5] as List<DimensionMonthlySales>;
@@ -566,7 +612,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       companyActualYtd: wholeCompanyTarget.actualYtd,
       companyTargetMtd: wholeCompanyTarget.targetMtd,
       companyTargetYtd: wholeCompanyTarget.targetYtd,
-      companyAvgRevenuePerPeriod: companyAvgRevenuePerPeriod,
+      ownSalesHistory: ownSalesHistory,
+      companySalesHistory: companySalesHistory,
       elapsedMonthsYtd: elapsedFiscalMonths.length,
       top5CustomerValueMtd: top5Sum(customerMtdTotals),
       totalCustomerValueMtd: totalSum(customerMtdTotals),
@@ -825,17 +872,39 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               // Conversion 2026-09-02 — see Wyzesales_Rebuild_Decisions.md
               // Section 55). Same Gap-over-average-revenue-per-period idea
               // as Performance Analysis' per-entity "% Coverage Needed"
-              // column (core/utils/sales_coverage.dart), but this tile is
-              // already whole-company, so there's no entity/company
-              // fallback to decide — only the MTD-vs-YTD period-count
-              // scaling, since a YTD Gap covers more than one month's worth
-              // of shortfall (Craig, 2026-09-02, confirming how to scale
-              // YTD: "Multiply average by elapsed months").
-              String coverageText(num gap, int periods) {
-                if (gap <= 0) return 'On Target';
-                final expected = kpis.companyAvgRevenuePerPeriod * periods;
-                if (expected <= 0) return '—';
-                return formatPercent((gap / expected) * 100);
+              // column — and, as of 2026-09-03 (Section 68), now genuinely
+              // the SAME calc, via the same `computeCoverage` pure function
+              // (core/utils/sales_coverage.dart), rather than a simplified
+              // always-company copy of it. `own`/`company` come from
+              // `_KpiData.ownSalesHistory`/`companySalesHistory` — see that
+              // field's doc comment for why the old version was wrong for a
+              // non-admin login. `usedFallback` is surfaced with the same
+              // trailing `*` convention Performance Analysis' own coverage
+              // column uses (Craig, 2026-09-02: a fallback "must be
+              // flagged/visible in the UI when this fallback is used").
+              final coverageMtd = computeCoverage(
+                targetValue: kpis.companyTargetMtd,
+                actualValue: kpis.companyActualMtd,
+                own: kpis.ownSalesHistory,
+                company: kpis.companySalesHistory,
+              );
+              final coverageYtd = computeCoverage(
+                targetValue: kpis.companyTargetYtd,
+                actualValue: kpis.companyActualYtd,
+                own: kpis.ownSalesHistory,
+                company: kpis.companySalesHistory,
+                periods: kpis.elapsedMonthsYtd,
+              );
+              // usedFallback doesn't depend on `periods` (only on how many
+              // active months `own` itself has), so MTD/YTD always agree —
+              // safe to fold into one page-level flag for the caption below.
+              final coverageUsedFallback = coverageMtd.usedFallback || coverageYtd.usedFallback;
+
+              String coverageText(CoverageResult coverage) {
+                if (coverage.onTarget) return 'On Target';
+                if (coverage.insufficientData) return '—';
+                final pct = formatPercent(coverage.coveragePercent);
+                return coverage.usedFallback ? '$pct *' : pct;
               }
 
               // Same 3-tier thresholds as Performance Analysis' % Coverage
@@ -846,11 +915,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               // a coarser 2-tier scale. Craig, 2026-09-02, confirming the
               // cutoffs: On Target or under 25% is green, 25-50% is amber,
               // over 50% is red.
-              Color coverageColor(num gap, int periods) {
-                if (gap <= 0) return AppColors.positive;
-                final expected = kpis.companyAvgRevenuePerPeriod * periods;
-                if (expected <= 0) return neutralMuted;
-                final pct = (gap / expected) * 100;
+              Color coverageColor(CoverageResult coverage) {
+                if (coverage.insufficientData) return neutralMuted;
+                if (coverage.onTarget) return AppColors.positive;
+                final pct = coverage.coveragePercent ?? 0;
                 if (pct < 25) return AppColors.positive;
                 if (pct <= 50) return AppColors.caution;
                 return AppColors.negative;
@@ -858,8 +926,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
               final coverageGapMtd = kpis.companyTargetMtd - kpis.companyActualMtd;
               final coverageGapYtd = kpis.companyTargetYtd - kpis.companyActualYtd;
-              final coverageMtdText = coverageText(coverageGapMtd, 1);
-              final coverageYtdText = coverageText(coverageGapYtd, kpis.elapsedMonthsYtd);
+              final coverageMtdText = coverageText(coverageMtd);
+              final coverageYtdText = coverageText(coverageYtd);
 
               // Top 5 Customer Concentration — 40% is a starting-point
               // "worth keeping an eye on" threshold, not a hard business
@@ -961,12 +1029,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       ToggleStatCard(
                         label: 'Sales Coverage',
                         mtdValue: coverageMtdText,
-                        mtdColor: coverageColor(coverageGapMtd, 1),
+                        mtdColor: coverageColor(coverageMtd),
                         mtdSubtitle: coverageGapMtd <= 0
                             ? '${formatRand(coverageGapMtd.abs())} above target (MTD)'
                             : '${formatRand(coverageGapMtd)} gap to target (MTD)',
                         ytdValue: coverageYtdText,
-                        ytdColor: coverageColor(coverageGapYtd, kpis.elapsedMonthsYtd),
+                        ytdColor: coverageColor(coverageYtd),
                         ytdSubtitle: coverageGapYtd <= 0
                             ? '${formatRand(coverageGapYtd.abs())} above target (YTD)'
                             : '${formatRand(coverageGapYtd)} gap to target (YTD)',
@@ -1021,6 +1089,24 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       // instead of taking up a KPI slot here.
                     ],
                   ),
+                  // Sales Coverage's fallback flag (2026-09-03, Section 68) —
+                  // Craig required this be "flagged/visible in the UI when
+                  // this fallback is used," same requirement Performance
+                  // Analysis' own coverage column already satisfies with a
+                  // page footnote. Conditionally shown (only when
+                  // `coverageUsedFallback`), unlike the always-present
+                  // caveat Craig asked removed from this same spot
+                  // 2026-08-28 (see the comment just below) — this is a
+                  // genuine, situational data-quality signal, not a
+                  // standing disclaimer.
+                  if (coverageUsedFallback) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '* Sales Coverage is using the company-wide average — '
+                      'under 3 months of your own sales history so far.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic, color: neutralMuted),
+                    ),
+                  ],
                   // The Quote → Order Conversion caveat footnote (same-period
                   // count, not a matched per-quote rate) was printed here as
                   // italic text under the KPI row until 2026-08-28, when
