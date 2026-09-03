@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/consolidated_sales.dart';
+import '../../../data/models/profile.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
@@ -348,6 +349,26 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // why that pattern was replaced (2026-08-26, Craig's branch filter bug
     // report).
     ref.listen<GlobalFilters>(globalFiltersProvider, (previous, next) => _refetch());
+
+    // Refetch once the signed-in profile actually finishes loading — Craig,
+    // 2026-09-03, reporting the identical race on the Dashboard: "Dashboard
+    // opens and it shows 0 target. I navigate to another screen and then
+    // back to Dashboard and it shows correctly." Root cause: initState's
+    // `_load` call above reads `sessionProvider` synchronously via
+    // `defaultTargetScope(ref.read(sessionProvider).value)` in
+    // `_loadTargetBars`, which can run before SessionNotifier
+    // (core/app_providers.dart) has finished its own async profile fetch —
+    // on a fresh app load/sign-in, that read can land while the provider is
+    // still `loading`/has no value yet, so `defaultTargetScope(null)` falls
+    // back to the company-wide scope, invisible to a non-admin login under
+    // RLS. This screen has the exact same `ref.read(sessionProvider).value`
+    // call (see `_loadTargetBars` below) and so the exact same latent race,
+    // even though it hadn't been reported here yet. Listening here re-runs
+    // the fetch the moment the profile actually becomes available, instead
+    // of requiring the user to navigate away and back themselves.
+    ref.listen<AsyncValue<Profile?>>(sessionProvider, (previous, next) {
+      if (previous?.value == null && next.value != null) _refetch();
+    });
 
     return Padding(
       padding: const EdgeInsets.all(16),

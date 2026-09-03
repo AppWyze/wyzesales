@@ -12,6 +12,7 @@ import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/budget_figure.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../data/models/dimension_monthly_sales.dart';
+import '../../../data/models/profile.dart';
 import '../../../data/models/sales_document.dart';
 import '../../../data/models/sales_forecast_figure.dart';
 import '../../../shared/widgets/app_shell.dart';
@@ -699,6 +700,27 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // build() for why that pattern was replaced (2026-08-26, Craig's branch
     // filter bug report).
     ref.listen<GlobalFilters>(globalFiltersProvider, (previous, next) => _refresh());
+
+    // Refresh once the signed-in profile actually finishes loading — Craig,
+    // 2026-09-03: "Dashboard opens and it shows 0 target. I navigate to
+    // another screen and then back to Dashboard and it shows correctly."
+    // Root cause: initState's very first `_loadKpis()` call reads
+    // `sessionProvider` synchronously via `defaultTargetScope(ref.read(
+    // sessionProvider).value)` inside `_fetchWholeCompanyTarget`, which can
+    // run before SessionNotifier (core/app_providers.dart) finishes its own
+    // async profile fetch after sign-in — landing while the provider is
+    // still `loading`/has no value yet, `defaultTargetScope(null)` falls
+    // back to the company-wide scope, invisible to a non-admin login under
+    // RLS (schema/018) — 0 target, exactly this symptom. Navigating away and
+    // back re-triggers `_loadKpis()` after `sessionProvider` (a top-level
+    // provider, not scoped to this screen) has already resolved by then,
+    // which is why the second load is correct. Listening here re-runs the
+    // KPI fetch (and the dimension breakdown, since RLS scoping affects that
+    // too) the moment the profile actually becomes available, instead of
+    // requiring the user to navigate away and back themselves.
+    ref.listen<AsyncValue<Profile?>>(sessionProvider, (previous, next) {
+      if (previous?.value == null && next.value != null) _refresh();
+    });
 
     final dimData = _dimensionData;
 
