@@ -180,6 +180,13 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   late final List<String> _months;
   late Future<_GraphData> _future;
 
+  // Same overlapping-batch guard as dashboard_screen.dart's own
+  // `_initialKpiLoadInFlight`/`_profileReloadQueued` — see that file's
+  // profile-loaded `ref.listen` for the full reasoning (2026-09-03,
+  // Section 62/65 of the Decisions doc).
+  bool _initialLoadInFlight = true;
+  bool _profileReloadQueued = false;
+
   // 2026-08-26 (Craig's global cross-dimension filters): same treatment as
   // ytd_comparative_screen.dart, which reads the exact same view — the 5
   // dimension filters and the global Month filter apply, Year does not
@@ -197,7 +204,19 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // left-to-right the same way the lines do on screen.
     _fiscalYears = fiscalYearWindow(currentFy, historyYears);
     _months = fiscalMonthOrderFor(startMonth: startMonth);
-    _future = _load(ref.read(globalFiltersProvider));
+    _future = _load(ref.read(globalFiltersProvider))
+      ..whenComplete(() {
+        _initialLoadInFlight = false;
+        // Same `mounted` guard dashboard_screen.dart's own equivalent
+        // callback uses — the user may have navigated away before this
+        // settles, and calling _refetch() (setState) after disposal would
+        // throw.
+        if (!mounted) return;
+        if (_profileReloadQueued) {
+          _profileReloadQueued = false;
+          _refetch();
+        }
+      });
     widget.onExportReady?.call(_buildExportData);
   }
 
@@ -363,11 +382,23 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // back to the company-wide scope, invisible to a non-admin login under
     // RLS. This screen has the exact same `ref.read(sessionProvider).value`
     // call (see `_loadTargetBars` below) and so the exact same latent race,
-    // even though it hadn't been reported here yet. Listening here re-runs
-    // the fetch the moment the profile actually becomes available, instead
-    // of requiring the user to navigate away and back themselves.
+    // even though it hadn't been reported here yet.
+    //
+    // Deliberately does NOT refetch immediately if the initial load is
+    // still in flight (`_initialLoadInFlight`) — an earlier version of this
+    // fix did, and firing a second overlapping query batch while the first
+    // was still running is the most plausible cause of a real
+    // `statement timeout` Craig hit retesting the Dashboard's identical
+    // pattern (Wyzesales_Rebuild_Decisions.md Section 62/65). Queuing the
+    // refetch instead, to run once the initial load settles, keeps at most
+    // one batch in flight at a time.
     ref.listen<AsyncValue<Profile?>>(sessionProvider, (previous, next) {
-      if (previous?.value == null && next.value != null) _refetch();
+      if (previous?.value != null || next.value == null) return;
+      if (_initialLoadInFlight) {
+        _profileReloadQueued = true;
+      } else {
+        _refetch();
+      }
     });
 
     return Padding(

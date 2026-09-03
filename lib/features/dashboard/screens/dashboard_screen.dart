@@ -221,6 +221,16 @@ class DashboardScreen extends ConsumerStatefulWidget {
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   late Future<_KpiData> _kpiFuture;
 
+  // 2026-09-03: guards against the profile-loaded listener (see build())
+  // firing a second, fully-overlapping ~10-query KPI batch while the
+  // initial one from initState is still in flight — see that listener's
+  // own doc comment for why overlapping batches are a real problem here
+  // (this screen's RLS performance gap, Wyzesales_Rebuild_Decisions.md
+  // Section 62), not just wasted duplicate work. `true` from construction
+  // until the very first _loadKpis() call settles.
+  bool _initialKpiLoadInFlight = true;
+  bool _profileReloadQueued = false;
+
   ValueMeasure _measure = ValueMeasure.rValue;
   SalesDimension _dimension = SalesDimension.customer;
   _RankMode _rankMode = _RankMode.top5;
@@ -245,7 +255,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _kpiFuture = _loadKpis();
+    _kpiFuture = _loadKpis()
+      ..whenComplete(() {
+        _initialKpiLoadInFlight = false;
+        // Same `mounted` guard _loadDimension's own post-await continuation
+        // already uses just below — the user may have navigated away before
+        // this settles, and calling _refresh() (setState/ref.invalidate)
+        // after disposal would throw.
+        if (!mounted) return;
+        // The profile finished loading WHILE the initial batch was still in
+        // flight, and the listener below deliberately held off rather than
+        // firing a second overlapping batch — run that deferred refresh now
+        // that it's safe to.
+        if (_profileReloadQueued) {
+          _profileReloadQueued = false;
+          _refresh();
+        }
+      });
     // Direct field write, not setState — this seeds the very first build
     // that's already about to happen when initState returns. Calling
     // setState() here (even indirectly, via the synchronous prefix of an
@@ -711,15 +737,28 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // async profile fetch after sign-in — landing while the provider is
     // still `loading`/has no value yet, `defaultTargetScope(null)` falls
     // back to the company-wide scope, invisible to a non-admin login under
-    // RLS (schema/018) — 0 target, exactly this symptom. Navigating away and
-    // back re-triggers `_loadKpis()` after `sessionProvider` (a top-level
-    // provider, not scoped to this screen) has already resolved by then,
-    // which is why the second load is correct. Listening here re-runs the
-    // KPI fetch (and the dimension breakdown, since RLS scoping affects that
-    // too) the moment the profile actually becomes available, instead of
-    // requiring the user to navigate away and back themselves.
+    // RLS (schema/018) — 0 target, exactly this symptom.
+    //
+    // Deliberately does NOT call `_refresh()` immediately if the initial
+    // load is still in flight (`_initialKpiLoadInFlight`) — this screen
+    // already fires ~10 concurrent queries per load, and a non-admin
+    // login's RLS evaluation on `sales_document_facts` is genuinely
+    // expensive per row (Section 62's `statement timeout` investigation).
+    // Firing a SECOND full batch on top of the first, still-running one
+    // was exactly what an earlier version of this fix did — Craig hit a
+    // real `PostgrestException: canceling statement due to statement
+    // timeout` on the very next retest, most plausibly because doubling
+    // concurrent load during this exact startup window tipped an already
+    // marginal query plan over the edge. Queuing the refresh instead, to
+    // run once the initial load actually settles (see initState's
+    // `whenComplete`), keeps at most one full batch in flight at a time.
     ref.listen<AsyncValue<Profile?>>(sessionProvider, (previous, next) {
-      if (previous?.value == null && next.value != null) _refresh();
+      if (previous?.value != null || next.value == null) return;
+      if (_initialKpiLoadInFlight) {
+        _profileReloadQueued = true;
+      } else {
+        _refresh();
+      }
     });
 
     final dimData = _dimensionData;
