@@ -241,25 +241,21 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       if (dimCount <= 1) {
         final dimension = single?.dimension ?? SalesDimension.company;
         final entityCode = single?.selection.code ?? 'ALL';
-        final rows = await repo.fetchDimensionPerformance(
+        final byMonth = await _fetchTargetByMonth(
           dimension: dimension,
           entityCode: entityCode,
-          fiscalYear: currentFy,
-          fiscalMonth: filters.fiscalMonth,
+          fiscalMonthFilter: filters.fiscalMonth,
         );
-        final byMonth = {for (final r in rows) r.fiscalMonth: r.targetValue};
         return (bars: [for (final m in _months) byMonth[m]], isEstimated: false);
       }
 
-      final companyTargetRows = await repo.fetchDimensionPerformance(
+      final companyTargetByMonth = await _fetchTargetByMonth(
         dimension: SalesDimension.company,
         entityCode: 'ALL',
-        fiscalYear: currentFy,
-        fiscalMonth: filters.fiscalMonth,
+        fiscalMonthFilter: filters.fiscalMonth,
       );
       final totalActualRows = await repo.fetchConsolidatedSales(fiscalYears: [currentFy]);
 
-      final companyTargetByMonth = {for (final r in companyTargetRows) r.fiscalMonth: r.targetValue};
       final totalActualByMonth = {for (final r in totalActualRows) DateFormat('MMM').format(r.month): r.value};
       final filteredActualByMonth = {for (final r in currentYearActualRows) DateFormat('MMM').format(r.month): r.value};
 
@@ -275,6 +271,45 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     } catch (_) {
       return (bars: List<num?>.filled(_months.length, null), isEstimated: false);
     }
+  }
+
+  /// A dimension+entity's real target, per fiscal month, straight off
+  /// budget_figures/sales_forecast (BudgetRepository) rather than through
+  /// v_dimension_performance/fn_dimension_performance_filtered.
+  ///
+  /// Craig, 2026-09-03: "if I filter a customer who has no sales transaction
+  /// for September, Actual Revenue = 0 and Target does not show." Those two
+  /// views/functions are built by joining budget/forecast ONTO actual sales
+  /// (schema/021), so a fiscal month with zero actual rows for this exact
+  /// dimension+entity never gets a row at all — dropping a perfectly real,
+  /// entered target purely because nobody bought anything that month.
+  /// budget_figures/sales_forecast have no fiscal_year column regardless
+  /// (one figure per fiscal_month label, reused every year), so there's
+  /// nothing actual-sales-shaped to join against in the first place — this
+  /// reads both tables directly and resolves them with
+  /// core/utils/target_overlay.dart's `resolveTarget`, sidestepping the
+  /// dependency on actual sales entirely. Deliberately does NOT touch
+  /// fetchDimensionPerformance/v_dimension_performance/fn_dimension_
+  /// performance_filtered themselves — Performance Analysis still relies on
+  /// those exactly as they are.
+  Future<Map<String, num?>> _fetchTargetByMonth({
+    required SalesDimension dimension,
+    required String entityCode,
+    String? fiscalMonthFilter,
+  }) async {
+    final budgetRepo = ref.read(budgetRepositoryProvider);
+    final budgetRows = await budgetRepo.fetchBudget(dimension: dimension.dbValue, entityCode: entityCode);
+    final forecastByMonth = await budgetRepo.fetchForecastValues(dimension: dimension.dbValue, entityCode: entityCode);
+    final budgetByMonth = {for (final b in budgetRows) b.fiscalMonth: b.budgetValue};
+
+    final full = {
+      for (final m in _months) m: resolveTarget(budgetValue: budgetByMonth[m], forecastValue: forecastByMonth[m]),
+    };
+    if (fiscalMonthFilter == null) return full;
+    // Same scoping fetchDimensionPerformance's own p_fiscal_month param used
+    // to give: with a global Month filter active, only that one month's bar
+    // should show, not all 12.
+    return {for (final m in _months) m: m == fiscalMonthFilter ? full[m] : null};
   }
 
   /// A short form for the chart's y-axis gridlines — "R 1 234 567" doesn't

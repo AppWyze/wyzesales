@@ -71,3 +71,25 @@ num? deriveProportionalTarget({
   if (companyTarget == null || filteredActual == null || totalActual == null || totalActual == 0) return null;
   return companyTarget * (filteredActual / totalActual);
 }
+
+/// Mirrors schema/021's `coalesce(nullif(budget_value, 0), forecast_value)`
+/// target resolution client-side (Craig, 2026-09-03: filtering to a customer
+/// with no September sales showed "Actual Revenue = 0" but no Target bar).
+/// v_dimension_performance/fn_dimension_performance_filtered only ever
+/// surface a target for a fiscal month that has at least one ACTUAL sales
+/// row, because they're built by joining budget/forecast ONTO actual sales
+/// rather than the other way round — so a genuinely real, entered target for
+/// a month with zero actual sales was being silently dropped, for any
+/// dimension+entity, not just whole-company. budget_figures/sales_forecast
+/// carry no fiscal_year column at all (one figure per fiscal_month label,
+/// reused every year), so there's nothing year- or actual-sales-specific to
+/// join against in the first place — reading them directly (BudgetRepository
+/// .fetchBudget/.fetchForecastValues) and resolving here sidesteps the
+/// actual-sales dependency entirely.
+/// `budgetValue` treats 0 the same as "not entered" (not distinguishable
+/// from a real 0, per schema/021's own reasoning — budget_value is `not
+/// null default 0`) and falls back to `forecastValue`.
+num? resolveTarget({required num? budgetValue, required num? forecastValue}) {
+  if (budgetValue != null && budgetValue != 0) return budgetValue;
+  return forecastValue;
+}

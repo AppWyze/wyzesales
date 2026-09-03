@@ -104,4 +104,27 @@ void main() {
       expect(result, 0);
     });
   });
+
+  group('resolveTarget', () {
+    test('a real, non-zero budget wins outright — forecast is never even consulted', () {
+      expect(resolveTarget(budgetValue: 50000, forecastValue: 99999), 50000);
+    });
+
+    test('falls back to forecast when budget is null — never entered', () {
+      expect(resolveTarget(budgetValue: null, forecastValue: 42000), 42000);
+    });
+
+    test('falls back to forecast when budget is exactly 0 — schema/021\'s own definition of '
+        '"not populated", since budget_value is NOT NULL DEFAULT 0', () {
+      expect(resolveTarget(budgetValue: 0, forecastValue: 42000), 42000);
+    });
+
+    test('null when neither a budget nor a forecast exists for this month at all — the whole '
+        'point this exists: Craig\'s "customer with zero September sales" case, where the target '
+        'must NOT depend on whether v_dimension_performance happened to have an actual-sales row '
+        'to attach it to', () {
+      expect(resolveTarget(budgetValue: null, forecastValue: null), isNull);
+      expect(resolveTarget(budgetValue: 0, forecastValue: null), isNull);
+    });
+  });
 }
