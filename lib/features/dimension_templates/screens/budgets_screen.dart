@@ -161,8 +161,29 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     }
   }
 
+  /// 2026-09-03, Craig, after confirming Section 70's "only their allocated
+  /// Customers Budgets" behaved exactly as intended (blank figures for a
+  /// customer a User can see but isn't allocated to): "hide the Customer if
+  /// it does not belong to the User." A User's RLS-visible customer set
+  /// (`customers_select`, `fn_customer_visible_to_rep` — assigned to me OR
+  /// I've sold to them) is broader than the set Budgets now shows a figure
+  /// for (`fn_customer_allocated_to_rep` — assigned to me only), so without
+  /// this a User could pick a customer here and see nothing but em-dashes.
+  /// Narrowed with a plain `assigned_rep_code` equality filter ON TOP of
+  /// RLS (`ReferenceDataRepository.customers`'s own doc comment) — this is a
+  /// convenience narrowing for THIS screen's picker only, not a change to
+  /// who can see a customer elsewhere in the app (the global Customer
+  /// filter/search still use the broader "visible to rep" rule, unchanged).
+  /// RegUser/Admin are untouched: a RegUser's Customer list here already
+  /// uses the same "sold at my branch" rule Budgets' own figures use, so
+  /// there's no equivalent gap for that level.
   Future<_BudgetEntityData> _loadEntities() async {
-    final list = await ref.read(referenceDataRepositoryProvider).entitiesFor(widget.dimension);
+    final profile = ref.read(sessionProvider).value;
+    final restrictToOwnCustomers = widget.dimension == SalesDimension.customer && profile?.level == UserLevel.user;
+    final list = await ref.read(referenceDataRepositoryProvider).entitiesFor(
+          widget.dimension,
+          customerAssignedRepCode: restrictToOwnCustomers ? profile?.repCode : null,
+        );
     final data = _BudgetEntityData(list);
     _applyGlobalFilterSelection(data);
     return data;
@@ -225,6 +246,29 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   @override
   Widget build(BuildContext context) {
     final profileAsync = ref.watch(sessionProvider);
+
+    // Mirrors dashboard_screen.dart's own fix for the identical race
+    // (Craig, 2026-09-03: "Dashboard opens and it shows 0 target. I
+    // navigate to another screen and then back... and it shows correctly")
+    // — `_loadEntities()` is kicked off from `initState`, which can run
+    // before SessionNotifier's own async profile fetch finishes. For the
+    // Customer dimension, `_loadEntities` uses whatever profile
+    // `ref.read(sessionProvider).value` returns AT THAT MOMENT to decide
+    // whether to narrow the list to a User's allocated customers; a null
+    // profile at that instant silently falls back to the unfiltered list
+    // instead. Refetch once the profile actually arrives so a User who
+    // lands directly on Budgets — Customer (a fresh page load/deep link,
+    // not simple in-app navigation, where the profile is virtually always
+    // already loaded) still gets the narrowed list without needing to
+    // switch dimensions and back to trigger it. Scoped to the Customer
+    // dimension only — it's the only one `_loadEntities` treats
+    // profile-dependently.
+    ref.listen<AsyncValue<Profile?>>(sessionProvider, (previous, next) {
+      if (previous?.value != null || next.value == null) return;
+      if (widget.dimension == SalesDimension.customer) {
+        setState(() => _entitiesFuture = _loadEntities());
+      }
+    });
 
     // Checked separately from "not yet loaded" so a still-loading profile
     // shows a spinner instead of flashing content computed from a null

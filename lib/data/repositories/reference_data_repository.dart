@@ -28,8 +28,23 @@ class ReferenceDataRepository {
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'rep_code')).toList();
   }
 
-  Future<List<CodeName>> customers({String? search}) async {
+  /// `assignedRepCode`, when given, narrows this to customers whose
+  /// `assigned_rep_code` matches exactly — an additional filter ON TOP of
+  /// whatever `customers_select` RLS already allows, never a widening of
+  /// it. Added 2026-09-03 (Wyzesales_Rebuild_Decisions.md Section 71) for
+  /// Budgets' Customer entity list specifically: a User's RLS-visible
+  /// customer set (`fn_customer_visible_to_rep`, "assigned to me OR I've
+  /// sold to them") is broader than the set they actually have a Budget
+  /// figure for (`fn_customer_allocated_to_rep`, "assigned to me only" —
+  /// migration 031), so without this a User could pick a customer here and
+  /// see nothing but blank figures. Every other caller leaves this null and
+  /// gets the exact same unfiltered-beyond-RLS list as before — this is
+  /// additive, not a change to the default.
+  Future<List<CodeName>> customers({String? search, String? assignedRepCode}) async {
     var query = supabase.from('customers').select('code, name');
+    if (assignedRepCode != null) {
+      query = query.eq('assigned_rep_code', assignedRepCode);
+    }
     if (search != null && search.isNotEmpty) {
       query = query.ilike('name', '%$search%');
     }
@@ -59,12 +74,17 @@ class ReferenceDataRepository {
   /// entity for this dimension" (Sales by / Budgets' entity list, Performance's
   /// name lookup), so that switching keeps this one place instead of a
   /// per-screen switch statement.
-  Future<List<CodeName>> entitiesFor(SalesDimension dimension, {String? search}) {
+  ///
+  /// `customerAssignedRepCode` only ever affects the `customer` branch — see
+  /// `customers()`'s own doc comment. Left null by every caller except
+  /// Budgets' entity list, which is the one place the RLS-visible customer
+  /// set and the customer's actual assigned rep can legitimately diverge.
+  Future<List<CodeName>> entitiesFor(SalesDimension dimension, {String? search, String? customerAssignedRepCode}) {
     switch (dimension) {
       case SalesDimension.salesPerson:
         return salesReps(search: search);
       case SalesDimension.customer:
-        return customers(search: search);
+        return customers(search: search, assignedRepCode: customerAssignedRepCode);
       case SalesDimension.item:
         return items(search: search);
       case SalesDimension.category:
