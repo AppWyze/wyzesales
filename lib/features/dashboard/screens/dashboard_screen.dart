@@ -13,6 +13,7 @@ import '../../../data/models/budget_figure.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../data/models/dimension_monthly_sales.dart';
 import '../../../data/models/sales_document.dart';
+import '../../../data/models/sales_forecast_figure.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/simple_pie_chart.dart';
@@ -283,14 +284,27 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   /// an RLS-scoped view, so it was always naturally "my own visible revenue"
   /// for a User, "my branch's" for a RegUser, and the true company total
   /// only for an Admin; only the target side was ever hardcoded.
+  ///
+  /// Also now falls back to `sales_forecast` via `resolveTarget` when there's
+  /// no real `budget_figures` value (2026-09-03, found retesting Section 62:
+  /// after `defaultTargetScope` landed, Johan's own tile still read "R 0
+  /// target" even though "he does have a sales target" — this method never
+  /// read `sales_forecast` at all, only `budget_figures`, so a rep whose
+  /// September figure exists only as a forecast (not a manually-entered
+  /// budget) showed 0 here while Sales Analysis's Target overlay — which
+  /// already does this same `resolveTarget` fallback, Section 62 — showed
+  /// the real number for the exact same rep/month). Same gap existed for
+  /// Rep Target Attainment below, fixed the same way.
   Future<_WholeCompanyTarget> _fetchWholeCompanyTarget(int currentFiscalYear, DateTime monthStart) async {
     final scope = defaultTargetScope(ref.read(sessionProvider).value);
     final results = await Future.wait([
       ref.read(salesRepositoryProvider).fetchConsolidatedSales(fiscalYears: [currentFiscalYear]),
       ref.read(budgetRepositoryProvider).fetchBudget(dimension: scope.dimension.dbValue, entityCode: scope.entityCode),
+      ref.read(budgetRepositoryProvider).fetchForecast(dimension: scope.dimension.dbValue, entityCode: scope.entityCode),
     ]);
     final consolidatedRows = results[0] as List<ConsolidatedSales>;
     final budgetRows = results[1] as List<BudgetFigure>;
+    final forecastRows = results[2] as List<SalesForecastFigure>;
 
     num actualMtd = 0, actualYtd = 0;
     for (final row in consolidatedRows) {
@@ -300,10 +314,18 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       }
     }
 
-    final targetByMonth = <String, num>{};
+    final budgetByMonth = <String, num>{};
     for (final row in budgetRows) {
-      targetByMonth[row.fiscalMonth] = (targetByMonth[row.fiscalMonth] ?? 0) + row.budgetValue;
+      budgetByMonth[row.fiscalMonth] = (budgetByMonth[row.fiscalMonth] ?? 0) + row.budgetValue;
     }
+    final forecastByMonth = <String, num>{};
+    for (final row in forecastRows) {
+      forecastByMonth[row.fiscalMonth] = (forecastByMonth[row.fiscalMonth] ?? 0) + row.forecastValue;
+    }
+    final targetByMonth = <String, num>{
+      for (final month in {...budgetByMonth.keys, ...forecastByMonth.keys})
+        month: resolveTarget(budgetValue: budgetByMonth[month], forecastValue: forecastByMonth[month]) ?? 0,
+    };
     final currentMonthLabel = fiscalMonthLabelFor(monthStart);
     final elapsedMonthLabels = consolidatedRows.map((r) => fiscalMonthLabelFor(r.month)).toSet();
     final targetMtd = targetByMonth[currentMonthLabel] ?? 0;
@@ -401,6 +423,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         branchCode: filters.branch?.code,
         customerCode: filters.customer?.code,
       ),
+      // Every rep's sales_forecast row alongside repBudgetRows above (index
+      // 4) — Rep Target Attainment needs the same budget-or-forecast
+      // fallback `_fetchWholeCompanyTarget` gained the same day (see that
+      // method's own doc comment), just across every rep at once rather
+      // than one entity.
+      ref.read(budgetRepositoryProvider).fetchForecast(dimension: 'sales_person'),
     ]);
 
     final consolidatedRows = results[0] as List<ConsolidatedSales>;
@@ -414,6 +442,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final creditNoteTotalsMtd = results[7] as SalesDocumentTotals;
     final invoiceTotalsYtd = results[8] as SalesDocumentTotals;
     final creditNoteTotalsYtd = results[9] as SalesDocumentTotals;
+    final repForecastRows = results[10] as List<SalesForecastFigure>;
 
     num salesMtd = 0, profitMtd = 0, salesYtd = 0, profitYtd = 0;
     for (final row in consolidatedRows) {
@@ -454,10 +483,28 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       final byMonth = repActualByMonth.putIfAbsent(row.entityCode, () => {});
       byMonth[row.fiscalMonth] = (byMonth[row.fiscalMonth] ?? 0) + row.value;
     }
-    final repTargetByMonth = <String, Map<String, num>>{};
+    // Budget and forecast collected per rep separately, then merged one
+    // (rep, month) at a time via resolveTarget — same budget-takes-
+    // precedence-else-forecast rule as _fetchWholeCompanyTarget above and
+    // Sales Analysis's Target overlay, so a rep whose figure only exists as
+    // a forecast still counts as having "a target this month" here.
+    final repBudgetByMonth = <String, Map<String, num>>{};
     for (final row in repBudgetRows) {
-      final byMonth = repTargetByMonth.putIfAbsent(row.entityCode, () => {});
+      final byMonth = repBudgetByMonth.putIfAbsent(row.entityCode, () => {});
       byMonth[row.fiscalMonth] = (byMonth[row.fiscalMonth] ?? 0) + row.budgetValue;
+    }
+    final repForecastByMonth = <String, Map<String, num>>{};
+    for (final row in repForecastRows) {
+      final byMonth = repForecastByMonth.putIfAbsent(row.entityCode, () => {});
+      byMonth[row.fiscalMonth] = (byMonth[row.fiscalMonth] ?? 0) + row.forecastValue;
+    }
+    final repTargetByMonth = <String, Map<String, num>>{};
+    for (final rep in {...repBudgetByMonth.keys, ...repForecastByMonth.keys}) {
+      final months = {...(repBudgetByMonth[rep]?.keys ?? const <String>{}), ...(repForecastByMonth[rep]?.keys ?? const <String>{})};
+      repTargetByMonth[rep] = {
+        for (final month in months)
+          month: resolveTarget(budgetValue: repBudgetByMonth[rep]?[month], forecastValue: repForecastByMonth[rep]?[month]) ?? 0,
+      };
     }
 
     final repsWithMtdTarget = repTargetByMonth.entries.where((e) => e.value.containsKey(currentMonthLabel)).map((e) => e.key).toSet();

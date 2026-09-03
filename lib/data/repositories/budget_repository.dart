@@ -1,5 +1,6 @@
 import '../../core/supabase/supabase_config.dart';
 import '../models/budget_figure.dart';
+import '../models/sales_forecast_figure.dart';
 
 /// Reads and writes budget_figures — the one table in this whole app that's
 /// genuinely user-owned data, per schema/001 Section 4. Writing requires
@@ -14,30 +15,39 @@ class BudgetRepository {
     return rows.map<BudgetFigure>((r) => BudgetFigure.fromMap(r)).toList();
   }
 
-  /// sales_forecast's forecast_value, keyed by fiscal_month — the other half
-  /// of schema/021's `coalesce(nullif(budget_value, 0), forecast_value)`
-  /// target resolution, needed client-side by
-  /// core/utils/target_overlay.dart's `resolveTarget` (Sales Analysis's
-  /// Target overlay, 2026-09-03). Read directly off sales_forecast — same
-  /// RLS (`sales_forecast_select`, schema/001) as fetchBudget above — rather
-  /// than through v_dimension_performance/fn_dimension_performance_filtered,
-  /// because those views only ever surface a row when there's at least one
-  /// ACTUAL sales row for that (dimension, entity, fiscal_year, fiscal_month)
-  /// — a customer with zero September sales but a perfectly real September
+  /// sales_forecast rows for a dimension, optionally narrowed to one entity
+  /// — the other half of schema/021's `coalesce(nullif(budget_value, 0),
+  /// forecast_value)` target resolution, needed client-side by
+  /// core/utils/target_overlay.dart's `resolveTarget`. Read directly off
+  /// sales_forecast — same RLS (`sales_forecast_select`, schema/001) as
+  /// fetchBudget above — rather than through
+  /// v_dimension_performance/fn_dimension_performance_filtered, because
+  /// those views only ever surface a row when there's at least one ACTUAL
+  /// sales row for that (dimension, entity, fiscal_year, fiscal_month) — a
+  /// customer with zero September sales but a perfectly real September
   /// target/forecast entered would show neither, which is exactly the gap
   /// Craig hit ("if I filter a customer who has no sales transaction for
   /// September... Target does not show"). budget_figures/sales_forecast
   /// themselves carry no fiscal_year column at all (schema/001 — one figure
   /// per fiscal_month label, reused every year), so reading them directly
   /// sidesteps the actual-sales dependency entirely rather than needing a
-  /// schema change.
+  /// schema change. Mirrors fetchBudget's own optional-`entityCode` shape
+  /// (2026-09-03 — dashboard_screen.dart's Rep Target Attainment needed
+  /// every rep's forecast at once, not just one entity's, the same reason
+  /// fetchBudget itself takes an optional entityCode).
+  Future<List<SalesForecastFigure>> fetchForecast({required String dimension, String? entityCode}) async {
+    var query = supabase.from('sales_forecast').select().eq('dimension', dimension);
+    if (entityCode != null) query = query.eq('entity_code', entityCode);
+    final rows = await query;
+    return rows.map<SalesForecastFigure>((r) => SalesForecastFigure.fromMap(r)).toList();
+  }
+
+  /// The single-entity case of [fetchForecast] above, flattened to a plain
+  /// `fiscal_month -> forecast_value` map — the shape
+  /// sales_analysis_screen.dart's `_fetchTargetByMonth` already expects.
   Future<Map<String, num>> fetchForecastValues({required String dimension, required String entityCode}) async {
-    final rows = await supabase
-        .from('sales_forecast')
-        .select('fiscal_month, forecast_value')
-        .eq('dimension', dimension)
-        .eq('entity_code', entityCode);
-    return {for (final r in rows) r['fiscal_month'] as String: r['forecast_value'] as num};
+    final rows = await fetchForecast(dimension: dimension, entityCode: entityCode);
+    return {for (final r in rows) r.fiscalMonth: r.forecastValue};
   }
 
   /// Upsert one fiscal month's target for one entity. client_id is required
