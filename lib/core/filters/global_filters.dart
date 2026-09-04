@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app_providers.dart';
 import '../constants/fiscal.dart';
-import '../../data/repositories/auth_repository.dart';
 
 /// One selected entity for a dimension filter — `code` is what queries
 /// filter by, `label` is what the filter chip displays. Capturing both at
@@ -123,19 +122,40 @@ class GlobalFilters {
   }
 }
 
-/// Same shape as SessionNotifier (app_providers.dart) — listens to auth
-/// state changes and resets to empty on sign-out, matching Craig's "for the
-/// session only" decision: filters live purely in memory for as long as the
-/// user is signed in, never written to local storage or Supabase, and the
-/// next login always starts clean.
+/// Same shape as SessionNotifier (app_providers.dart) — resets to empty
+/// whenever the signed-in user changes, matching Craig's "for the session
+/// only" decision: filters live purely in memory for as long as a GIVEN user
+/// is signed in, never written to local storage or Supabase.
+///
+/// 2026-09-04 (Decisions doc Section 80): this used to listen directly to
+/// `AuthRepository.onAuthStateChange` and reset only when `currentSession`
+/// became null — correct for an ordinary sign-out, but Craig found the real
+/// gap: sign out, then sign straight back in as a DIFFERENT user (Johan) on
+/// the same login screen — the OLD user's filter selection was still
+/// showing on Johan's own screen. This app is a single long-lived Flutter
+/// web page (one `ProviderScope` for the life of the browser tab — see
+/// main.dart); `globalFiltersProvider` is never recreated on navigation, so
+/// the ONLY thing that ever clears it is this reset logic actually firing at
+/// the right moment. Watching `sessionProvider` instead of the raw auth
+/// stream — and comparing the resolved PROFILE ID across changes, not just
+/// "is there a session at all" — resets on every one of null->user,
+/// user->null, AND user->a-different-user, closing that gap regardless of
+/// the exact sequence/timing of the underlying Supabase auth events (which
+/// this sandbox has no way to reproduce and verify directly — see this
+/// file's own note in Section 80).
 class GlobalFiltersNotifier extends StateNotifier<GlobalFilters> {
-  GlobalFiltersNotifier(this._authRepository) : super(const GlobalFilters()) {
-    _authRepository.onAuthStateChange.listen((_) {
-      if (_authRepository.currentSession == null) state = const GlobalFilters();
+  GlobalFiltersNotifier(Ref ref) : super(const GlobalFilters()) {
+    _lastUserId = ref.read(sessionProvider).value?.id;
+    ref.listen(sessionProvider, (previous, next) {
+      final userId = next.value?.id;
+      if (userId != _lastUserId) {
+        _lastUserId = userId;
+        state = const GlobalFilters();
+      }
     });
   }
 
-  final AuthRepository _authRepository;
+  String? _lastUserId;
 
   void setDimension(SalesDimension dimension, FilterSelection? selection) {
     state = switch (dimension) {
@@ -165,5 +185,5 @@ class GlobalFiltersNotifier extends StateNotifier<GlobalFilters> {
 }
 
 final globalFiltersProvider = StateNotifierProvider<GlobalFiltersNotifier, GlobalFilters>(
-  (ref) => GlobalFiltersNotifier(ref.watch(authRepositoryProvider)),
+  (ref) => GlobalFiltersNotifier(ref),
 );

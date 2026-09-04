@@ -66,6 +66,30 @@ final sessionProvider = StateNotifierProvider<SessionNotifier, AsyncValue<Profil
   (ref) => SessionNotifier(ref.watch(authRepositoryProvider)),
 );
 
+/// 2026-09-04 (Decisions doc Section 80) — every plain (non-autoDispose)
+/// FutureProvider below that reads client- or user-scoped data now has a
+/// `ref.watch(sessionProvider);` line at the top of its body. Craig found a
+/// real bug this closes: this app is one long-lived Flutter web page (a
+/// single `ProviderScope` for the life of the browser tab, main.dart) —
+/// signing out and straight back in as a DIFFERENT user, in the same tab,
+/// does NOT recreate any of these providers, so without an explicit
+/// dependency on the signed-in user, each one just keeps returning its
+/// PREVIOUS user's cached result forever (RLS is still correctly enforced
+/// server-side on the next real query — this was purely a client-side
+/// caching gap). `sessionProvider` already re-resolves on every auth event,
+/// including a straight user-to-user switch with no intervening signed-out
+/// moment (`SessionNotifier._refresh()` re-queries `profiles` unconditionally
+/// each time) — watching it is enough to make Riverpod treat these as
+/// needing a fresh fetch, without each provider needing its own bespoke
+/// reset logic. Same fix applied to `globalFiltersProvider` itself (see
+/// `GlobalFiltersNotifier`'s own note, core/filters/global_filters.dart) for
+/// the session-only FILTER SELECTION Craig actually caught this with — the
+/// two bugs shared one root cause. One accepted trade-off: since Supabase
+/// silently refreshes the auth token roughly hourly, these providers now
+/// also refetch on that schedule, not just when Craig's original "changes a
+/// couple of times a day" comments assumed — a small extra read against
+/// data that's cheap to query and, per those same comments, rarely changes.
+
 /// Data freshness indicator shown in AppShell's top bar (Craig, 2026-08-26:
 /// moved out of the Dashboard's own "Last Updated" KPI tile so it's visible
 /// on every screen, not just the Dashboard) — the most recent
@@ -85,6 +109,7 @@ final sessionProvider = StateNotifierProvider<SessionNotifier, AsyncValue<Profil
 /// the data_load_runs update yet, so this chip never regresses to showing
 /// nothing for a client mid-rollout.
 final lastDataUpdateProvider = FutureProvider<DateTime?>((ref) async {
+  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
   final rows = await supabase.from('sales_document_facts').select('extracted_at').order('extracted_at', ascending: false).limit(1);
   if (rows.isEmpty) return null;
   return DateTime.parse(rows.first['extracted_at'] as String);
@@ -102,6 +127,7 @@ final lastDataUpdateProvider = FutureProvider<DateTime?>((ref) async {
 /// convention as lastDataUpdateProvider — changes at most a couple of times a
 /// day (Schedule.RunTimes), so one shared cached read is right.
 final latestDataLoadRunProvider = FutureProvider<DataLoadRun?>((ref) {
+  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
   return ref.watch(settingsRepositoryProvider).getLatestDataLoadRun();
 });
 
@@ -112,6 +138,7 @@ final latestDataLoadRunProvider = FutureProvider<DataLoadRun?>((ref) {
 /// different places for different reasons and there's no benefit to coupling
 /// their cache lifetimes.
 final recentDataLoadRunsProvider = FutureProvider<List<DataLoadRun>>((ref) {
+  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
   return ref.watch(settingsRepositoryProvider).getRecentDataLoadRuns();
 });
 
@@ -127,6 +154,7 @@ final recentDataLoadRunsProvider = FutureProvider<List<DataLoadRun>>((ref) {
 /// underlying sales/budget data itself); a manual pull-to-refresh on the
 /// bell's dropdown could, if that's ever wanted.
 final activeAlertsProvider = FutureProvider<List<ActiveAlert>>((ref) {
+  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
   return ref.watch(alertsRepositoryProvider).getActiveAlerts();
 });
 
@@ -143,6 +171,7 @@ final activeAlertsProvider = FutureProvider<List<ActiveAlert>>((ref) {
 /// (i.e. the next time activeAlertsProvider itself is read/invalidated)
 /// immediately rather than only on next reload.
 final budgetVarianceThresholdProvider = FutureProvider<double>((ref) {
+  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
   return ref.watch(settingsRepositoryProvider).getBudgetVarianceThreshold();
 });
 
@@ -158,6 +187,7 @@ final budgetVarianceThresholdProvider = FutureProvider<double>((ref) {
 /// (settings_screen.dart) so a changed start month takes effect app-wide
 /// immediately, not just on next reload.
 final fiscalYearStartMonthProvider = FutureProvider<int>((ref) {
+  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
   return ref.watch(settingsRepositoryProvider).getFiscalYearStartMonth();
 });
 
@@ -173,6 +203,7 @@ final fiscalYearStartMonthProvider = FutureProvider<int>((ref) {
 /// fiscalYearStartMonthProvider, so a changed window takes effect app-wide
 /// immediately.
 final fiscalYearHistoryYearsProvider = FutureProvider<int>((ref) {
+  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
   return ref.watch(settingsRepositoryProvider).getDataHistoryYears();
 });
 
@@ -230,12 +261,16 @@ class FiscalDataAvailability {
 /// This user's saved filter presets (filter_presets, schema/035, 2026-09-04)
 /// — backs the "Presets" control in the global filter bar. Private per user
 /// (RLS), so this is never shared across a client's other users — see
-/// FilterPreset's own doc comment. Plain (non-autoDispose) FutureProvider,
-/// same convention as the Settings-backed providers above: explicitly
-/// `ref.invalidate`d after a save or delete (the Presets dialog in
-/// global_filter_bar.dart does this) so the list picks up the change
-/// immediately rather than only on next app reload.
+/// FilterPreset's own doc comment. `ref.watch(sessionProvider)` here is NOT
+/// optional the way it is on the other providers above (see the note above
+/// sessionProvider) — Craig hit this exact gap directly: without it, signing
+/// out and back in as a different user in the same browser tab kept showing
+/// the PREVIOUS user's own saved presets, since nothing had ever re-run this
+/// query. Also explicitly `ref.invalidate`d after a save or delete (the
+/// Presets dialog in global_filter_bar.dart does this) so the list picks up
+/// a change immediately rather than waiting for the next auth event.
 final filterPresetsProvider = FutureProvider<List<FilterPreset>>((ref) {
+  ref.watch(sessionProvider);
   return ref.watch(filterPresetRepositoryProvider).list();
 });
 
