@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>WyzeSalesExtract</AssemblyName>
+    <RootNamespace>WyzeSalesExtract</RootNamespace>
+    <!-- Windows only: the ODBC driver, sc.exe service install, and IQRetail paths all assume
+         this runs on the Windows server that currently runs the QlikView extract. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SupportedOSPlatform>windows</SupportedOSPlatform>
+    <!-- Self-contained + single-file: the published exe carries its own copy of the .NET
+         runtime, so the production server needs nothing pre-installed to RUN it (no SDK, no
+         separate .NET Runtime install, no WinSCP) - only the ODBC driver. Build/publish
+         still needs the SDK, but only on whichever machine you build on. -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- All four are pulled in at build time only - nothing extra needed at runtime on the
+         server, since everything is bundled into the single published exe.
+         - System.Data.Odbc: Microsoft's own ODBC provider for .NET - still needed for the
+           WCSA/IQRetail side, which hasn't changed.
+         - Npgsql: pure C# Postgres client - what this program now uses to write straight into
+           Supabase. Replaces SSH.NET; there's no SFTP upload step any more, so no SFTP client
+           is needed either.
+         - Microsoft.Extensions.Hosting (+ .WindowsServices): the standard .NET "Generic
+           Host" / Worker Service framework - what lets this one exe run either as a normal
+           console app (run-once mode, self-test mode) or as a real Windows Service with an
+           internal scheduler (the default mode, see Worker/ExtractWorker.cs), replacing the
+           need for Windows Task Scheduler entirely. -->
+    <PackageReference Include="System.Data.Odbc" Version="8.0.1" />
+    <PackageReference Include="Npgsql" Version="8.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

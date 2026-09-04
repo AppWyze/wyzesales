@@ -52,3 +52,12 @@ app.*.map.json
 
 # Supabase local config
 supabase/.temp/
+
+# WyzeSalesExtract (.NET) - real appsettings.json holds a Supabase connection
+# string and WCSA DB credentials once configured; only the blank
+# appsettings.example.json template is tracked. bin/obj/publish are normal
+# .NET build output, same reasoning as build/ above for the Flutter side.
+WyzeSalesExtract/appsettings.json
+WyzeSalesExtract/bin/
+WyzeSalesExtract/obj/
+WyzeSalesExtract/publish/
