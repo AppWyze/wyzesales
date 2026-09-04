@@ -1,10 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/models/active_alert.dart';
 import '../data/models/data_load_run.dart';
+import '../data/models/filter_preset.dart';
 import '../data/models/profile.dart';
 import '../data/repositories/alerts_repository.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/budget_repository.dart';
+import '../data/repositories/filter_preset_repository.dart';
 import '../data/repositories/platform_admin_repository.dart';
 import '../data/repositories/reference_data_repository.dart';
 import '../data/repositories/sales_repository.dart';
@@ -19,6 +21,7 @@ final budgetRepositoryProvider = Provider<BudgetRepository>((ref) => BudgetRepos
 final settingsRepositoryProvider = Provider<SettingsRepository>((ref) => SettingsRepository());
 final platformAdminRepositoryProvider = Provider<PlatformAdminRepository>((ref) => PlatformAdminRepository());
 final alertsRepositoryProvider = Provider<AlertsRepository>((ref) => AlertsRepository());
+final filterPresetRepositoryProvider = Provider<FilterPresetRepository>((ref) => FilterPresetRepository());
 
 /// Holds the signed-in user's own profile row (name, level, rep_code,
 /// branch_code, client_id) — loaded once on sign-in, cleared on sign-out.
@@ -223,6 +226,18 @@ class FiscalDataAvailability {
   final Set<int> yearsWithData;
   final Map<int, Set<String>> monthsWithDataByYear;
 }
+
+/// This user's saved filter presets (filter_presets, schema/035, 2026-09-04)
+/// — backs the "Presets" control in the global filter bar. Private per user
+/// (RLS), so this is never shared across a client's other users — see
+/// FilterPreset's own doc comment. Plain (non-autoDispose) FutureProvider,
+/// same convention as the Settings-backed providers above: explicitly
+/// `ref.invalidate`d after a save or delete (the Presets dialog in
+/// global_filter_bar.dart does this) so the list picks up the change
+/// immediately rather than only on next app reload.
+final filterPresetsProvider = FutureProvider<List<FilterPreset>>((ref) {
+  return ref.watch(filterPresetRepositoryProvider).list();
+});
 
 final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability>((ref) async {
   final startMonth = await ref.watch(fiscalYearStartMonthProvider.future);

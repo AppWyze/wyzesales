@@ -5,6 +5,7 @@ import '../../core/app_providers.dart';
 import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/models/filter_preset.dart';
 import '../../data/models/reference_data.dart';
 import 'boxed_dropdown.dart';
 import 'entity_search_field.dart';
@@ -93,6 +94,17 @@ class GlobalFilterBar extends ConsumerWidget {
             onChanged: (key) {
               if (key != null) _handleAdd(context, ref, notifier, filters, key);
             },
+          ),
+          // 2026-09-04, Craig: "Saved filter presets" — save/reapply the 5
+          // dimension filters by name (Decisions doc Section 79). A plain
+          // icon+label button here, not another BoxedDropdown — this opens a
+          // dialog rather than picking a value inline, so it isn't really a
+          // "dropdown" the way Add filter/Year/Month are.
+          TextButton.icon(
+            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(0, 32)),
+            onPressed: () => showDialog<void>(context: context, builder: (_) => _PresetsDialog(filters: filters, notifier: notifier)),
+            icon: const Icon(Icons.bookmark_outline, size: 16),
+            label: const Text('Presets'),
           ),
           if (filters.activeCount > 0)
             TextButton(
@@ -339,6 +351,181 @@ class _DocumentSearchDialogState extends ConsumerState<_DocumentSearchDialog> {
       ),
       actions: [
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+      ],
+    );
+  }
+}
+
+/// "Presets" button's dialog — save the current 5 dimension filters under a
+/// name, or reapply/delete one already saved (schema/035, filter_presets
+/// repository/provider, app_providers.dart). `filters`/`notifier` are passed
+/// in rather than watched here: this is a plain (non-Consumer) dialog over a
+/// snapshot of the filter bar's own already-current values, which can't
+/// change out from under it while the modal dialog is open anyway.
+class _PresetsDialog extends ConsumerStatefulWidget {
+  const _PresetsDialog({required this.filters, required this.notifier});
+
+  final GlobalFilters filters;
+  final GlobalFiltersNotifier notifier;
+
+  @override
+  ConsumerState<_PresetsDialog> createState() => _PresetsDialogState();
+}
+
+class _PresetsDialogState extends ConsumerState<_PresetsDialog> {
+  final _nameController = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  /// Craig's own scope for what a preset captures ("Just the 5 dimension
+  /// filters") means a preset with none of them set would save nothing
+  /// meaningful — the name field + Save button are hidden in favor of an
+  /// explanatory line instead, rather than letting Craig save an empty
+  /// preset and wonder later why applying it didn't do anything.
+  bool get _hasDimensionFilter =>
+      widget.filters.salesPerson != null ||
+      widget.filters.category != null ||
+      widget.filters.customer != null ||
+      widget.filters.item != null ||
+      widget.filters.branch != null;
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(filterPresetRepositoryProvider).save(name, widget.filters);
+      ref.invalidate(filterPresetsProvider);
+      _nameController.clear();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Loops over every filterable dimension, not just the ones this preset
+  /// has — see FilterPreset.forDimension's own doc comment for why that's
+  /// what makes this a wholesale replace of the current 5 dimension filters
+  /// rather than a merge. Year/Month/Document are never touched.
+  void _apply(FilterPreset preset) {
+    for (final dimension in SalesDimension.filterable) {
+      widget.notifier.setDimension(dimension, preset.forDimension(dimension));
+    }
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _delete(FilterPreset preset) async {
+    // Same confirm-dialog shape as Settings > Users' own delete-user
+    // confirmation (settings_screen.dart's _confirmDelete) — Cancel/Delete,
+    // Delete styled negative-red, "this cannot be undone."
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Delete preset', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        content: Text('Delete the "${preset.name}" preset? This cannot be undone.', style: const TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete', style: TextStyle(color: AppColors.negative, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await ref.read(filterPresetRepositoryProvider).delete(preset.id);
+      ref.invalidate(filterPresetsProvider);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final presetsAsync = ref.watch(filterPresetsProvider);
+    return AlertDialog(
+      title: const Text('Saved filter presets'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!_hasDimensionFilter)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Select a Sales Person, Category, Customer, Item, or Branch filter above, then come back here to save it as a preset.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _nameController,
+                        autofocus: true,
+                        decoration: const InputDecoration(isDense: true, hintText: 'Preset name'),
+                        onSubmitted: (_) => _save(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _saving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: RepaintBoundary(child: CircularProgressIndicator(strokeWidth: 2)),
+                          )
+                        : TextButton(onPressed: _save, child: const Text('Save')),
+                  ],
+                ),
+              ),
+            const Divider(height: 1),
+            SizedBox(
+              height: 240,
+              child: presetsAsync.when(
+                data: (presets) => presets.isEmpty
+                    ? const Center(child: Padding(padding: EdgeInsets.all(16), child: Text('No saved presets yet.')))
+                    : ListView.builder(
+                        itemCount: presets.length,
+                        itemBuilder: (context, index) {
+                          final preset = presets[index];
+                          return ListTile(
+                            dense: true,
+                            title: Text(preset.name, overflow: TextOverflow.ellipsis),
+                            onTap: () => _apply(preset),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                              tooltip: 'Delete preset',
+                              onPressed: () => _delete(preset),
+                            ),
+                          );
+                        },
+                      ),
+                loading: () => const Center(child: RepaintBoundary(child: CircularProgressIndicator())),
+                error: (e, _) => Center(child: Text('Error: $e')),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
       ],
     );
   }
