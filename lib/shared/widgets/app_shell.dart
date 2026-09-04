@@ -6,6 +6,8 @@ import '../../core/app_providers.dart';
 import '../../core/constants/fiscal.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/theme_provider.dart';
+import '../../core/utils/formatters.dart';
+import '../../data/models/active_alert.dart';
 import '../../data/models/data_load_run.dart';
 import '../../data/models/profile.dart';
 import 'app_logo.dart';
@@ -154,6 +156,14 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: 8),
           ],
           ...?actions,
+          // Notification bell (2026-09-04, Item 3 — Craig's own choice via
+          // AskUserQuestion: "Notification bell in top bar") — deliberately
+          // NOT gated by `!showMenuButton` the way the date/data-freshness
+          // chips above are: an active budget-variance or negative-GP%
+          // condition is worth surfacing on a narrow/drawer-mode screen too,
+          // not just on wide layouts.
+          const _NotificationBell(),
+          const SizedBox(width: 8),
           _TopBarIconChip(
             icon: themeMode == ThemeMode.dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
             tooltip: 'Toggle theme',
@@ -272,6 +282,237 @@ class _LastDataUpdateChip extends ConsumerWidget {
         label,
         style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor, fontWeight: textColor == null ? null : FontWeight.w600),
       ),
+    );
+  }
+}
+
+/// Top-bar notification bell (2026-09-04, Item 3 of the post-forecast-deploy
+/// roadmap — Decisions doc Section 74/77) — Craig's own choice of alert
+/// surface (AskUserQuestion: "Notification bell in top bar") for the two
+/// proactive alert types v_active_alerts computes (schema/034):
+/// budget_variance and negative_gp. A red badge shows the current alert
+/// count; tapping the bell fetches the live list plus friendly entity names
+/// (via ReferenceDataRepository.namesFor, same lookup Sales by/Performance
+/// already use) and shows them in a dropdown, same
+/// LayerLink+CompositedTransform+OverlayEntry shape TopBarSearch's own
+/// results dropdown already uses (top_bar_search.dart) — reused deliberately
+/// rather than introducing a different overlay mechanism this project has no
+/// other precedent for.
+///
+/// Names are resolved BEFORE opening the overlay (stored in local state,
+/// same "fetch first, then show a plain-data overlay" shape
+/// _TopBarSearchState._runSearch already uses) rather than having the
+/// overlay itself watch Riverpod providers — nothing else in this codebase
+/// puts a ConsumerWidget inside an OverlayEntry, so this avoids being the
+/// first place that pattern would need to be trusted without a real
+/// analyzer to check it against.
+class _NotificationBell extends ConsumerStatefulWidget {
+  const _NotificationBell();
+
+  @override
+  ConsumerState<_NotificationBell> createState() => _NotificationBellState();
+}
+
+class _NotificationBellState extends ConsumerState<_NotificationBell> {
+  final _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  Future<void> _toggle() async {
+    if (_overlayEntry != null) {
+      _removeOverlay();
+      return;
+    }
+    // Guards against a second tap firing a second concurrent fetch while
+    // the first is still in flight — simpler than disabling the chip
+    // itself, and avoids assigning a `Future<void> Function()` vs a plain
+    // `void Function() {}` across a ternary's two branches (both are valid
+    // against onPressed's VoidCallback context via Dart's void-return
+    // subtyping rule, but this project has no live analyzer to double-check
+    // that against, so the plain early-return guard below is worth the
+    // extra line).
+    if (_loading) return;
+    setState(() => _loading = true);
+    try {
+      final alerts = await ref.read(activeAlertsProvider.future);
+      final dimensions = alerts.map((a) => a.dimension).toSet();
+      final refRepo = ref.read(referenceDataRepositoryProvider);
+      final namesByDimension = <String, Map<String, String>>{};
+      for (final dbValue in dimensions) {
+        final dimension = SalesDimension.values.firstWhere((d) => d.dbValue == dbValue);
+        namesByDimension[dbValue] = await refRepo.namesFor(dimension);
+      }
+      if (!mounted) return;
+      _overlayEntry = OverlayEntry(
+        builder: (context) => _AlertsDropdown(
+          layerLink: _layerLink,
+          alerts: alerts,
+          namesByDimension: namesByDimension,
+          onDismiss: () {
+            _removeOverlay();
+            if (mounted) setState(() {});
+          },
+        ),
+      );
+      Overlay.of(context).insert(_overlayEntry!);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Same faint neutral chip background _TopBarIconChip's caller derives —
+    // this widget is `const` at its own call site (no chipColor threaded
+    // through), so it computes the identical tint locally rather than
+    // requiring a parameter just for one shared constant.
+    final chipColor = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.06);
+    // Badge count comes from the same provider _toggle reads on open — a
+    // plain `.value` read (not `.when`) is enough here: `null` (still
+    // loading, or a fetch never happened yet) and an error both correctly
+    // show no badge rather than a stale or misleading count.
+    final count = ref.watch(activeAlertsProvider).value?.length ?? 0;
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          _TopBarIconChip(
+            icon: Icons.notifications_outlined,
+            tooltip: count == 0 ? 'No active alerts' : '$count active alert${count == 1 ? '' : 's'}',
+            color: chipColor,
+            onPressed: _toggle,
+          ),
+          if (count > 0)
+            Positioned(
+              right: 2,
+              top: 2,
+              child: IgnorePointer(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  constraints: const BoxConstraints(minWidth: 16),
+                  decoration: BoxDecoration(color: AppColors.negative, borderRadius: BorderRadius.circular(8)),
+                  child: Text(
+                    count > 9 ? '9+' : '$count',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The bell's dropdown content — plain data in, no provider reads of its
+/// own (see _NotificationBellState's own doc comment for why). Same visual
+/// shape as _SearchResultsDropdown (top_bar_search.dart): a full-screen
+/// translucent dismiss layer behind a CompositedTransformFollower card.
+class _AlertsDropdown extends StatelessWidget {
+  const _AlertsDropdown({
+    required this.layerLink,
+    required this.alerts,
+    required this.namesByDimension,
+    required this.onDismiss,
+  });
+
+  final LayerLink layerLink;
+  final List<ActiveAlert> alerts;
+  final Map<String, Map<String, String>> namesByDimension;
+  final VoidCallback onDismiss;
+
+  String _entityName(ActiveAlert alert) => namesByDimension[alert.dimension]?[alert.entityCode] ?? alert.entityCode;
+
+  String _dimensionLabel(ActiveAlert alert) =>
+      SalesDimension.values.firstWhere((d) => d.dbValue == alert.dimension, orElse: () => SalesDimension.company).label;
+
+  String _messageFor(ActiveAlert alert) {
+    if (alert.isBudgetVariance) {
+      final behindPct = alert.metricPercent.abs();
+      return '${formatPercent(behindPct)} behind budget pace — ${formatRand(alert.actualValue)} vs an expected '
+          '${formatRand(alert.expectedToDate)} this month so far.';
+    }
+    return 'Negative gross profit this month (${formatPercent(alert.metricPercent)}) on ${formatRand(alert.actualValue)} sold so far.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(onTap: onDismiss, behavior: HitTestBehavior.translucent, child: const SizedBox.expand()),
+        ),
+        CompositedTransformFollower(
+          link: layerLink,
+          showWhenUnlinked: false,
+          // Anchored by its TOP-RIGHT corner to the bell's own top-right
+          // corner (unlike TopBarSearch's dropdown, which anchors top-left
+          // to a search field that sits in the middle of the bar) — the
+          // bell lives at the far right of the top bar, so a left-aligned
+          // 400-wide dropdown (top_bar_search.dart's own approach) would run
+          // off the right edge of the screen on most widths.
+          targetAnchor: Alignment.topRight,
+          followerAnchor: Alignment.topRight,
+          offset: const Offset(0, 40),
+          child: Align(
+            alignment: Alignment.topRight,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                width: 400,
+                constraints: const BoxConstraints(maxHeight: 420),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.12)),
+                ),
+                child: _buildContent(context),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
+    if (alerts.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Text('No active alerts — everything is on pace and gross-profit positive this month.'),
+      );
+    }
+    return ListView.separated(
+      shrinkWrap: true,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      itemCount: alerts.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final alert = alerts[index];
+        return ListTile(
+          dense: true,
+          leading: Icon(
+            alert.isBudgetVariance ? Icons.trending_down : Icons.money_off,
+            color: AppColors.negative,
+            size: 20,
+          ),
+          title: Text('${_entityName(alert)} — ${_dimensionLabel(alert)}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          subtitle: Text(_messageFor(alert), style: const TextStyle(fontSize: 11)),
+        );
+      },
     );
   }
 }

@@ -99,6 +99,41 @@ class SettingsRepository {
     );
   }
 
+  /// The signed-in user's client's budget-variance alert threshold, as a
+  /// whole percent (alert_settings.budget_variance_threshold_pct,
+  /// schema/034, 2026-09-04, Item 3) — how far month-to-date actual has to
+  /// fall below the prorated budget pace before the top-bar notification
+  /// bell raises a budget_variance alert for a row (v_active_alerts). Same
+  /// "own table, own primary key on client_id, no clientId parameter"
+  /// convention as getFiscalYearStartMonth/getDataHistoryYears right above;
+  /// defaults to 15 client-side when no row exists yet for this client —
+  /// mirrors that column's own database default (schema/034) exactly, same
+  /// reasoning as those two methods' own doc comments, and matches Craig's
+  /// own starting choice (AskUserQuestion, 2026-09-04: "15% under budget").
+  Future<double> getBudgetVarianceThreshold() async {
+    final row = await supabase.from('alert_settings').select('budget_variance_threshold_pct').maybeSingle();
+    return (row?['budget_variance_threshold_pct'] as num?)?.toDouble() ?? 15;
+  }
+
+  /// Powers Settings > Company's "Alert threshold" field (2026-09-04, Item
+  /// 3 — Craig's own follow-up question, "Where are these set and how would
+  /// we maintain them?", is why this exists as a real Settings field rather
+  /// than staying database-only the way forecast_settings still is).
+  /// Upserts rather than a plain update — same "a client created before
+  /// this feature has no alert_settings row yet, so the very first save has
+  /// to INSERT" reasoning as updateFiscalYearStartMonth/
+  /// updateDataHistoryYears; `onConflict: 'client_id'` targets
+  /// alert_settings' own primary key (schema/034). RLS:
+  /// `alert_settings_adminuser_insert`/`_update` (schema/034) — same
+  /// `is_adminuser()` + `get_my_client_id()` gate every other Settings >
+  /// Company field write already uses.
+  Future<void> updateBudgetVarianceThreshold(String clientId, double thresholdPct) async {
+    await supabase.from('alert_settings').upsert(
+      {'client_id': clientId, 'budget_variance_threshold_pct': thresholdPct},
+      onConflict: 'client_id',
+    );
+  }
+
   /// The signed-in user's client's most recent WyzeSalesExtract run —
   /// powers the top-bar health chip (2026-09-04, data_load_runs, schema/033).
   /// No clientId parameter, same RLS-scoped convention as every other method

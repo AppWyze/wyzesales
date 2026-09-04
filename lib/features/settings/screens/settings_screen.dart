@@ -293,6 +293,10 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
           // fiscalYearStartMonthProvider's own doc comment.
           final startMonthAsync = ref.watch(fiscalYearStartMonthProvider);
           final historyYearsAsync = ref.watch(fiscalYearHistoryYearsProvider);
+          // alert_settings is a third separate table (schema/034, 2026-09-04,
+          // Item 3) — same "own provider, own row keyed on client_id" shape
+          // as fiscal_year_settings' two fields above.
+          final alertThresholdAsync = ref.watch(budgetVarianceThresholdProvider);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -319,6 +323,11 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
                   ), isDark),
                   _infoRow('Data history window', historyYearsAsync.when(
                     data: (y) => '$y years',
+                    loading: () => '…',
+                    error: (_, __) => '—',
+                  ), isDark),
+                  _infoRow('Alert threshold', alertThresholdAsync.when(
+                    data: (pct) => '${_formatThresholdPct(pct)}% under budget',
                     loading: () => '…',
                     error: (_, __) => '—',
                   ), isDark),
@@ -494,6 +503,18 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
   // matching fiscal_year_settings.history_years' own column default.
   int _historyYears = 3;
 
+  // alert_settings.budget_variance_threshold_pct (schema/034, 2026-09-04,
+  // Item 3) — a free-form percent, not a small fixed set like the two
+  // dropdowns above, so this is a plain text field (see _tf) rather than a
+  // DropdownButtonFormField. Starts at '15' (Craig's own starting default,
+  // AskUserQuestion: "15% under budget") and gets overwritten once the
+  // async read below resolves, same "external source" pattern as
+  // _startMonth/_historyYears — text controllers don't need the
+  // ValueKey(...)-on-rebuild trick those two dropdowns use, since setting
+  // `.text` directly on an existing TextEditingController already updates
+  // what's displayed.
+  final _alertThresholdController = TextEditingController(text: '15');
+
   @override
   void initState() {
     super.initState();
@@ -513,6 +534,9 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
     ref.read(fiscalYearHistoryYearsProvider.future).then((value) {
       if (mounted) setState(() => _historyYears = value);
     });
+    ref.read(budgetVarianceThresholdProvider.future).then((value) {
+      if (mounted) setState(() => _alertThresholdController.text = _formatThresholdPct(value));
+    });
   }
 
   @override
@@ -527,6 +551,7 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
     _cityController.dispose();
     _countryController.dispose();
     _postalCodeController.dispose();
+    _alertThresholdController.dispose();
     super.dispose();
   }
 
@@ -534,6 +559,17 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
 
   Future<void> _save() async {
     if (_nameController.text.trim().isEmpty) return;
+    // Same check_constraint bounds as alert_settings.budget_variance_
+    // threshold_pct itself (schema/034: `> 0 and <= 100`) — caught here so
+    // an out-of-range value shows a friendly inline error instead of a raw
+    // Postgres constraint-violation message from `updateBudgetVarianceThreshold`.
+    final thresholdPct = double.tryParse(_alertThresholdController.text.trim());
+    if (thresholdPct == null || thresholdPct <= 0 || thresholdPct > 100) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alert threshold must be a number between 0 and 100.'), backgroundColor: AppColors.negative),
+      );
+      return;
+    }
     setState(() => _isLoading = true);
     try {
       await ref.read(settingsRepositoryProvider).updateCompanyProfile(widget.client.id, {
@@ -553,6 +589,9 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
       // a separate call rather than folded into the map above.
       await ref.read(settingsRepositoryProvider).updateFiscalYearStartMonth(widget.client.id, _startMonth);
       await ref.read(settingsRepositoryProvider).updateDataHistoryYears(widget.client.id, _historyYears);
+      // Separate table/policy again (alert_settings, schema/034) — same
+      // "own upsert call" shape as the two lines right above.
+      await ref.read(settingsRepositoryProvider).updateBudgetVarianceThreshold(widget.client.id, thresholdPct);
       // Every screen reading fiscalYearStartMonthProvider/
       // fiscalYearHistoryYearsProvider (fiscal.dart's
       // fiscalMonthOrderFor/fiscalYearFor/fiscalYearWindow call sites) picks
@@ -560,6 +599,11 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
       // after a full reload.
       ref.invalidate(fiscalYearStartMonthProvider);
       ref.invalidate(fiscalYearHistoryYearsProvider);
+      // Same reasoning — a changed threshold should apply to the next
+      // v_active_alerts read (activeAlertsProvider) without needing a full
+      // app reload.
+      ref.invalidate(budgetVarianceThresholdProvider);
+      ref.invalidate(activeAlertsProvider);
       // Bare `mounted`, not `context.mounted` — this `context` is
       // `State.context` (no local `context` parameter shadowing it here).
       if (mounted) Navigator.of(context).pop(true);
@@ -582,7 +626,7 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       insetPadding: dialogInsetPadding,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 480, maxHeight: dialogMaxHeight(context, 640)),
+        constraints: BoxConstraints(maxWidth: 480, maxHeight: dialogMaxHeight(context, 690)),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -615,6 +659,8 @@ class _EditCompanyDialogState extends ConsumerState<_EditCompanyDialog> {
                     _fiscalStartMonthDropdown(isDark),
                     const SizedBox(height: 10),
                     _dataHistoryWindowDropdown(isDark),
+                    const SizedBox(height: 10),
+                    _tf('Alert threshold (% under budget)', _alertThresholdController, isDark, keyboardType: const TextInputType.numberWithOptions(decimal: true)),
                   ],
                 ),
               ),
@@ -1823,6 +1869,13 @@ Widget _twoCol(List<Widget> children) {
     );
   });
 }
+
+/// Drops a trailing '.0' for a whole-number threshold (e.g. 15.0 -> '15')
+/// while still showing real decimals as entered (e.g. 12.5 -> '12.5') —
+/// alert_settings.budget_variance_threshold_pct is `numeric`, so a plain
+/// `.toString()` on the double Supabase hands back would show '15.0' for
+/// Craig's own starting default, which reads oddly next to "% under budget."
+String _formatThresholdPct(double pct) => pct == pct.roundToDouble() ? pct.toInt().toString() : pct.toString();
 
 Widget _infoRow(String label, String value, bool isDark) {
   return Column(

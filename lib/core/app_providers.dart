@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../data/models/active_alert.dart';
 import '../data/models/data_load_run.dart';
 import '../data/models/profile.dart';
+import '../data/repositories/alerts_repository.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/budget_repository.dart';
 import '../data/repositories/platform_admin_repository.dart';
@@ -16,6 +18,7 @@ final salesRepositoryProvider = Provider<SalesRepository>((ref) => SalesReposito
 final budgetRepositoryProvider = Provider<BudgetRepository>((ref) => BudgetRepository());
 final settingsRepositoryProvider = Provider<SettingsRepository>((ref) => SettingsRepository());
 final platformAdminRepositoryProvider = Provider<PlatformAdminRepository>((ref) => PlatformAdminRepository());
+final alertsRepositoryProvider = Provider<AlertsRepository>((ref) => AlertsRepository());
 
 /// Holds the signed-in user's own profile row (name, level, rep_code,
 /// branch_code, client_id) — loaded once on sign-in, cleared on sign-out.
@@ -107,6 +110,37 @@ final latestDataLoadRunProvider = FutureProvider<DataLoadRun?>((ref) {
 /// their cache lifetimes.
 final recentDataLoadRunsProvider = FutureProvider<List<DataLoadRun>>((ref) {
   return ref.watch(settingsRepositoryProvider).getRecentDataLoadRuns();
+});
+
+/// v_active_alerts (schema/034, 2026-09-04, Item 3) — the top-bar
+/// notification bell's data source (AppShell's `_TopBar`, Craig's own choice
+/// via AskUserQuestion). Plain (non-autoDispose) FutureProvider, same
+/// convention as latestDataLoadRunProvider/lastDataUpdateProvider above:
+/// this changes at most a couple of times a day (once per WyzeSalesExtract
+/// run), so one shared cached read across every screen — the bell needs to
+/// show the same badge count regardless of which screen is currently open —
+/// is right rather than each screen refetching independently. Not
+/// `ref.invalidate`d by anything today (nothing in this app writes the
+/// underlying sales/budget data itself); a manual pull-to-refresh on the
+/// bell's dropdown could, if that's ever wanted.
+final activeAlertsProvider = FutureProvider<List<ActiveAlert>>((ref) {
+  return ref.watch(alertsRepositoryProvider).getActiveAlerts();
+});
+
+/// The signed-in user's client's budget-variance alert threshold
+/// (alert_settings.budget_variance_threshold_pct, Settings > Company,
+/// schema/034, 2026-09-04, Item 3) — every place that needs "how far below
+/// pace counts as an alert" reads this rather than assuming Craig's own
+/// starting default (15%) is fixed forever. Same plain (non-autoDispose)
+/// FutureProvider convention as fiscalYearStartMonthProvider/
+/// fiscalYearHistoryYearsProvider right below — changes rarely (an admin
+/// editing one Settings field) — and, same as those two, explicitly
+/// `ref.invalidate`d by `_EditCompanyDialog`'s save handler
+/// (settings_screen.dart) so a changed threshold takes effect app-wide
+/// (i.e. the next time activeAlertsProvider itself is read/invalidated)
+/// immediately rather than only on next reload.
+final budgetVarianceThresholdProvider = FutureProvider<double>((ref) {
+  return ref.watch(settingsRepositoryProvider).getBudgetVarianceThreshold();
 });
 
 /// The signed-in user's client's fiscal year start month
