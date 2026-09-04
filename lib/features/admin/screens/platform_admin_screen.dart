@@ -173,27 +173,43 @@ class _PlatformAdminScreenState extends ConsumerState<PlatformAdminScreen> {
     );
   }
 
+  // 2026-09-04 (Decisions doc Section 86 — accessibility pass): was a bare
+  // GestureDetector, which registers a tap for a mouse/touch/screen-reader
+  // user but never joins the keyboard focus order at all — a keyboard-only
+  // user could not Tab to this nav item or activate it with Enter/Space.
+  // Material+InkWell (the same pattern `_navItem` below already used
+  // correctly) gets real keyboard focus and activation for free; the
+  // explicit `Semantics(button: true)` wrapper guarantees a screen reader
+  // announces this as a button with its visible label.
   Widget _mobileNavItem(int index, String label, bool isDark) {
     final isActive = _selectedNav == index;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedNav = index),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(color: isActive ? AppColors.teal : Colors.transparent, width: 2),
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-            color: isActive
-                ? AppColors.teal
-                : isDark
-                    ? AppColors.darkTextSecondary
-                    : AppColors.lightTextSecondary,
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => _selectedNav = index),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: isActive ? AppColors.teal : Colors.transparent, width: 2),
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+                color: isActive
+                    ? AppColors.teal
+                    : isDark
+                        ? AppColors.darkTextSecondary
+                        : AppColors.lightTextSecondary,
+              ),
+            ),
           ),
         ),
       ),
@@ -215,44 +231,60 @@ class _PlatformAdminScreenState extends ConsumerState<PlatformAdminScreen> {
     );
   }
 
+  // Same accessibility fix as `_mobileNavItem` above (Decisions doc Section
+  // 86) — was a bare GestureDetector, not reachable or activatable by
+  // keyboard.
   Widget _navItem(int index, bool isDark) {
     final isActive = _selectedNav == index;
     final item = _navItems[index];
-    return GestureDetector(
-      onTap: () => setState(() => _selectedNav = index),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: isActive ? AppColors.teal.withValues(alpha: 0.08) : Colors.transparent,
-          borderRadius: BorderRadius.circular(7),
-          border: isActive ? Border.all(color: AppColors.teal.withValues(alpha: 0.2)) : null,
-        ),
-        child: Row(
-          children: [
-            Icon(
-              item.icon,
-              size: 15,
-              color: isActive
-                  ? AppColors.teal
-                  : isDark
-                      ? AppColors.darkTextSecondary
-                      : AppColors.lightTextSecondary,
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: item.label,
+      child: Material(
+        color: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          child: Material(
+            color: isActive ? AppColors.teal.withValues(alpha: 0.08) : Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(7),
+              side: isActive ? BorderSide(color: AppColors.teal.withValues(alpha: 0.2)) : BorderSide.none,
             ),
-            const SizedBox(width: 8),
-            Text(
-              item.label,
-              style: TextStyle(
-                fontSize: 12,
-                color: isActive
-                    ? AppColors.teal
-                    : isDark
-                        ? AppColors.darkText
-                        : AppColors.lightText,
-                fontWeight: isActive ? FontWeight.w500 : FontWeight.normal,
+            child: InkWell(
+              onTap: () => setState(() => _selectedNav = index),
+              borderRadius: BorderRadius.circular(7),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      item.icon,
+                      size: 15,
+                      color: isActive
+                          ? AppColors.teal
+                          : isDark
+                              ? AppColors.darkTextSecondary
+                              : AppColors.lightTextSecondary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      item.label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isActive
+                            ? AppColors.teal
+                            : isDark
+                                ? AppColors.darkText
+                                : AppColors.lightText,
+                        fontWeight: isActive ? FontWeight.w500 : FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -512,6 +544,7 @@ class _ClientRow extends StatelessWidget {
             child: _IconBtn(
               icon: Icons.edit_outlined,
               isDark: isDark,
+              label: 'Edit ${client['name'] as String? ?? 'client'}',
               onTap: () async {
                 await showDialog(
                   context: context,
@@ -766,6 +799,7 @@ class _LicenseRow extends StatelessWidget {
             child: _IconBtn(
               icon: Icons.edit_outlined,
               isDark: isDark,
+              label: 'Edit license for $clientName',
               onTap: () async {
                 await showDialog(
                   context: context,
@@ -1085,6 +1119,7 @@ class _PlanRow extends StatelessWidget {
           _IconBtn(
             icon: Icons.edit_outlined,
             isDark: isDark,
+            label: 'Edit ${plan.name} plan',
             onTap: () async {
               await showDialog(context: context, builder: (_) => _EditPlanDialog(plan: plan, isDark: isDark));
               onSaved();
@@ -1657,21 +1692,31 @@ class _PrimaryBtn extends StatelessWidget {
     // onAccent only while amber-filled — the disabled fill (navyMid) is dark,
     // so white still reads fine there (SAMTRA palette rebrand, 2026-08-26).
     final fg = onTap != null ? AppColors.onAccent : Colors.white;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: onTap != null ? AppColors.teal : AppColors.navyMid,
+    // 2026-09-04 (Decisions doc Section 86 — accessibility pass): was a bare
+    // GestureDetector, unreachable by keyboard. Material+InkWell restores
+    // real keyboard focus/activation; the explicit Semantics(button: true)
+    // guarantees a screen reader announces this as a button.
+    return Semantics(
+      button: true,
+      enabled: onTap != null,
+      label: label,
+      child: Material(
+        color: onTap != null ? AppColors.teal : AppColors.navyMid,
+        borderRadius: BorderRadius.circular(6),
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(6),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: fg),
-            const SizedBox(width: 5),
-            Text(label, style: TextStyle(fontSize: 11, color: fg)),
-          ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 13, color: fg),
+                const SizedBox(width: 5),
+                Text(label, style: TextStyle(fontSize: 11, color: fg)),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1683,21 +1728,41 @@ class _IconBtn extends StatelessWidget {
   final bool isDark;
   final VoidCallback onTap;
 
-  const _IconBtn({required this.icon, required this.isDark, required this.onTap});
+  // 2026-09-04 (Decisions doc Section 86 — accessibility pass): this is
+  // always an icon-only button, so unlike `_PrimaryBtn` there's no visible
+  // text to fall back on for a screen reader — `label` is now required at
+  // every call site specifically so this can't silently ship as an
+  // unlabelled control the way it always has until now. Also shown as a
+  // `Tooltip`, so sighted mouse users get the same description on hover.
+  final String label;
+
+  const _IconBtn({required this.icon, required this.isDark, required this.onTap, required this.label});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
+    // Same GestureDetector-to-Material/InkWell fix as `_PrimaryBtn` above —
+    // was unreachable by keyboard.
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        label: label,
+        child: Material(
           color: isDark ? AppColors.navyMid : AppColors.lightBackground,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(6),
+            side: BorderSide(color: isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000)),
+          ),
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(6),
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: Icon(icon, size: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+            ),
+          ),
         ),
-        child: Icon(icon, size: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
       ),
     );
   }

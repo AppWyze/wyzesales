@@ -161,27 +161,45 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  // 2026-09-04 (Decisions doc Section 86 — accessibility pass, first item):
+  // was a bare GestureDetector, which registers a tap for a mouse/touch/
+  // screen-reader user but never joins the keyboard focus order at all — a
+  // keyboard-only user could not Tab to this nav item or activate it with
+  // Enter/Space. Material+InkWell (the same pattern `_navItem`, the desktop
+  // sidebar's own nav tile below, already used correctly) gets real keyboard
+  // focus and activation for free; the explicit `Semantics(button: true)`
+  // wrapper guarantees a screen reader announces this as a button with its
+  // visible label, rather than relying on however InkWell happens to expose
+  // its tap handler by default.
   Widget _mobileNavItem(int index, String label, bool isDark) {
     final isActive = _selectedNav == index;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedNav = index),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(color: isActive ? AppColors.teal : Colors.transparent, width: 2),
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-            color: isActive
-                ? AppColors.teal
-                : isDark
-                    ? AppColors.darkTextSecondary
-                    : AppColors.lightTextSecondary,
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => _selectedNav = index),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: isActive ? AppColors.teal : Colors.transparent, width: 2),
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+                color: isActive
+                    ? AppColors.teal
+                    : isDark
+                        ? AppColors.darkTextSecondary
+                        : AppColors.lightTextSecondary,
+              ),
+            ),
           ),
         ),
       ),
@@ -465,27 +483,41 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
     );
   }
 
+  // Same accessibility fix as `_mobileNavItem` above (Decisions doc Section
+  // 86) — was a plain GestureDetector, not reachable or activatable by
+  // keyboard. This one is a radio-style choice (only one of the two
+  // Light/No-backing options is ever selected at a time), so the semantics
+  // used are `inMutuallyExclusiveGroup`/`checked` rather than `button` — the
+  // correct role for a screen reader to announce as "radio button, selected"
+  // rather than a plain activatable button.
   Widget _bgOption(String label, bool selected, bool isDark, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: _isUploadingLogo ? null : onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.teal.withValues(alpha: 0.1) : (isDark ? AppColors.navyMid : AppColors.lightBackground),
+    final borderColor = selected ? AppColors.teal : (isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000));
+    return Semantics(
+      inMutuallyExclusiveGroup: true,
+      checked: selected,
+      label: label,
+      enabled: !_isUploadingLogo,
+      child: Material(
+        color: selected ? AppColors.teal.withValues(alpha: 0.1) : (isDark ? AppColors.navyMid : AppColors.lightBackground),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6), side: BorderSide(color: borderColor)),
+        child: InkWell(
+          onTap: _isUploadingLogo ? null : onTap,
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: selected ? AppColors.teal : (isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000))),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-              size: 14,
-              color: selected ? AppColors.teal : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                  size: 14,
+                  color: selected ? AppColors.teal : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                ),
+                const SizedBox(width: 6),
+                Text(label, style: TextStyle(fontSize: 11, color: selected ? AppColors.teal : (isDark ? AppColors.darkText : AppColors.lightText))),
+              ],
             ),
-            const SizedBox(width: 6),
-            Text(label, style: TextStyle(fontSize: 11, color: selected ? AppColors.teal : (isDark ? AppColors.darkText : AppColors.lightText))),
-          ],
+          ),
         ),
       ),
     );
@@ -1353,14 +1385,17 @@ class _UserRow extends ConsumerWidget {
           // stay gated below: a support login needs to keep working, so
           // deactivating or removing it isn't offered from this screen.
           const SizedBox(width: 10),
-          _outlineBtn(
-            Icons.edit_outlined,
-            '',
-            isDark,
-            () async {
-              await showDialog<bool>(context: context, builder: (_) => _EditUserDialog(user: user, isDark: isDark));
-              onChanged();
-            },
+          Tooltip(
+            message: 'Edit ${user.name}',
+            child: _outlineBtn(
+              Icons.edit_outlined,
+              '',
+              isDark,
+              () async {
+                await showDialog<bool>(context: context, builder: (_) => _EditUserDialog(user: user, isDark: isDark));
+                onChanged();
+              },
+            ),
           ),
           if (!user.isPlatformAdmin) ...[
             // "Send password reset" — 2026-08-31, the other half of the gap
@@ -1380,33 +1415,46 @@ class _UserRow extends ConsumerWidget {
               child: _outlineBtn(Icons.lock_reset, '', isDark, () => _sendPasswordReset(context, ref)),
             ),
             const SizedBox(width: 6),
-            _outlineBtn(
-              user.isActive ? Icons.pause_circle_outline : Icons.play_circle_outline,
-              '',
-              isDark,
-              () async {
-                final repo = ref.read(settingsRepositoryProvider);
-                if (user.isActive) {
-                  await repo.deactivateUser(user.id);
-                } else {
-                  await repo.reactivateUser(user.id);
-                }
-                onChanged();
-              },
+            Tooltip(
+              message: user.isActive ? 'Deactivate ${user.name}' : 'Reactivate ${user.name}',
+              child: _outlineBtn(
+                user.isActive ? Icons.pause_circle_outline : Icons.play_circle_outline,
+                '',
+                isDark,
+                () async {
+                  final repo = ref.read(settingsRepositoryProvider);
+                  if (user.isActive) {
+                    await repo.deactivateUser(user.id);
+                  } else {
+                    await repo.reactivateUser(user.id);
+                  }
+                  onChanged();
+                },
+              ),
             ),
             if (!isMe) ...[
               const SizedBox(width: 6),
-              GestureDetector(
-                onTap: () => _confirmDelete(context, ref),
-                child: Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: AppColors.negative.withValues(alpha: 0.08),
+              // Same accessibility fix as the two buttons above (Decisions
+              // doc Section 86) — a bare GestureDetector, unreachable by
+              // keyboard; Material+InkWell plus a Tooltip (doubling as this
+              // icon-only button's screen-reader label) fixes it.
+              Tooltip(
+                message: 'Delete ${user.name}',
+                child: Material(
+                  color: AppColors.negative.withValues(alpha: 0.08),
+                  shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: AppColors.negative.withValues(alpha: 0.2)),
+                    side: BorderSide(color: AppColors.negative.withValues(alpha: 0.2)),
                   ),
-                  child: const Icon(Icons.delete_outline, size: 14, color: AppColors.negative),
+                  child: InkWell(
+                    onTap: () => _confirmDelete(context, ref),
+                    borderRadius: BorderRadius.circular(6),
+                    child: const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: Icon(Icons.delete_outline, size: 14, color: AppColors.negative),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -2160,25 +2208,36 @@ class _LicenseTabState extends ConsumerState<_LicenseTab> {
             ),
           ),
           const SizedBox(width: 12),
-          GestureDetector(
-            onTap: _requesting ? null : _sendUpgradeRequest,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: AppColors.positive.withValues(alpha: 0.08),
+          // Same accessibility fix as every other custom button on this
+          // screen (Decisions doc Section 86) — was a bare GestureDetector,
+          // unreachable by keyboard.
+          Semantics(
+            button: true,
+            enabled: !_requesting,
+            label: _requesting ? 'Sending...' : 'Request upgrade',
+            child: Material(
+              color: AppColors.positive.withValues(alpha: 0.08),
+              shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(7),
-                border: Border.all(color: AppColors.positive.withValues(alpha: 0.3)),
+                side: BorderSide(color: AppColors.positive.withValues(alpha: 0.3)),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.arrow_outward, size: 13, color: AppColors.positive),
-                  const SizedBox(width: 4),
-                  Text(
-                    _requesting ? 'Sending...' : 'Request upgrade',
-                    style: const TextStyle(fontSize: 12, color: AppColors.positive, fontWeight: FontWeight.w500),
+              child: InkWell(
+                onTap: _requesting ? null : _sendUpgradeRequest,
+                borderRadius: BorderRadius.circular(7),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.arrow_outward, size: 13, color: AppColors.positive),
+                      const SizedBox(width: 4),
+                      Text(
+                        _requesting ? 'Sending...' : 'Request upgrade',
+                        style: const TextStyle(fontSize: 12, color: AppColors.positive, fontWeight: FontWeight.w500),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -2434,52 +2493,80 @@ Widget _warningBanner(String message, bool isDark) {
   );
 }
 
+// 2026-09-04 (Decisions doc Section 86 — accessibility pass): both
+// `_primaryBtn` and `_outlineBtn` used to be bare GestureDetectors — a
+// GestureDetector registers a tap for mouse/touch/screen-reader users, but
+// it never joins the keyboard focus order at all, so a keyboard-only user
+// could not Tab to any button built from either helper (which is most of
+// the buttons in this whole screen) or activate it with Enter/Space.
+// Material+InkWell (the same pattern `_navItem`, the desktop sidebar's own
+// nav tile, already used correctly) restores real keyboard focus/
+// activation for free. The explicit `Semantics(button: true)` wrapper
+// guarantees a screen reader announces these as buttons; `label` is only
+// set when the visible text label is non-empty — every ICON-ONLY call site
+// of these helpers is wrapped in its own `Tooltip` (matching the one that
+// already existed for "Send password reset email"), which contributes its
+// own accessible label, so setting one here too would just create a
+// duplicate, sometimes-empty announcement ahead of it.
 Widget _primaryBtn(IconData icon, String label, VoidCallback? onTap) {
   // onAccent only while the button is actually amber-filled — the disabled
   // state's grey fill is unchanged, so its text stays white as before
   // (SAMTRA palette rebrand, 2026-08-26).
   final fg = onTap != null ? AppColors.onAccent : Colors.white;
-  return GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: onTap != null ? AppColors.teal : AppColors.lightTextSecondary.withValues(alpha: 0.3),
+  return Semantics(
+    button: true,
+    enabled: onTap != null,
+    label: label.isNotEmpty ? label : null,
+    child: Material(
+      color: onTap != null ? AppColors.teal : AppColors.lightTextSecondary.withValues(alpha: 0.3),
+      borderRadius: BorderRadius.circular(7),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(7),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: fg),
-          if (label.isNotEmpty) ...[
-            const SizedBox(width: 4),
-            Text(label, style: TextStyle(fontSize: 12, color: fg)),
-          ],
-        ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: fg),
+              if (label.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Text(label, style: TextStyle(fontSize: 12, color: fg)),
+              ],
+            ],
+          ),
+        ),
       ),
     ),
   );
 }
 
 Widget _outlineBtn(IconData icon, String label, bool isDark, VoidCallback onTap) {
-  return GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.navyMid : AppColors.lightBackground,
+  return Semantics(
+    button: true,
+    label: label.isNotEmpty ? label : null,
+    child: Material(
+      color: isDark ? AppColors.navyMid : AppColors.lightBackground,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000)),
+        side: BorderSide(color: isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000)),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
-          if (label.isNotEmpty) ...[
-            const SizedBox(width: 4),
-            Text(label, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkText : AppColors.lightText)),
-          ],
-        ],
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+              if (label.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Text(label, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkText : AppColors.lightText)),
+              ],
+            ],
+          ),
+        ),
       ),
     ),
   );
