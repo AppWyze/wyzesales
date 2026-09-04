@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/models/active_alert.dart';
+import '../data/models/client.dart';
 import '../data/models/data_load_run.dart';
 import '../data/models/filter_preset.dart';
 import '../data/models/profile.dart';
@@ -272,6 +273,29 @@ class FiscalDataAvailability {
 final filterPresetsProvider = FutureProvider<List<FilterPreset>>((ref) {
   ref.watch(sessionProvider);
   return ref.watch(filterPresetRepositoryProvider).list();
+});
+
+/// The signed-in user's own client row (`clients`) — added 2026-09-04
+/// (Decisions doc Section 83) purely so AppShell's sidebar (`_BrandMark`,
+/// app_shell.dart — every screen, not just Settings) can read `logo_path`/
+/// `logo_updated_at` for the client-branding feature. Settings > Company's
+/// own `_CompanyTab` still fetches `Client` itself via a local `_future`
+/// (settings_screen.dart) rather than switching to this provider — that
+/// screen already has its own reload lifecycle tied to `_EditCompanyDialog`
+/// closing, and there was no bug there worth touching working code to fix.
+///
+/// Same plain (non-autoDispose) FutureProvider + `ref.watch(sessionProvider)`
+/// convention as every other client-scoped provider above — see the note
+/// above `sessionProvider`: without it, this would keep showing the
+/// PREVIOUS user's client row (and logo) after a same-tab sign-out/sign-in
+/// as a different user. Explicitly `ref.invalidate`d by the Branding card's
+/// upload/remove handlers (settings_screen.dart) so the sidebar mark updates
+/// immediately rather than waiting for the next auth event.
+final currentClientProvider = FutureProvider<Client?>((ref) {
+  ref.watch(sessionProvider);
+  final clientId = ref.watch(sessionProvider).value?.clientId;
+  if (clientId == null) return Future.value(null);
+  return ref.watch(settingsRepositoryProvider).getClient(clientId);
 });
 
 final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability>((ref) async {

@@ -26,6 +26,21 @@ class Client {
   final String? postalCode;
   final DateTime createdAt;
 
+  /// Storage object path for this client's uploaded logo
+  /// (`client-logos/{client_id}/logo.png`, schema/036, 2026-09-04) — null for
+  /// every client that hasn't set one, which is the app-wide default (the
+  /// sidebar falls back to the stock WyzeSales mark). Use `clientLogoUrl`
+  /// (core/utils/client_logo.dart) to turn this into a displayable URL rather
+  /// than building the storage URL ad hoc at each call site.
+  final String? logoPath;
+
+  /// When `logoPath` was last (re)uploaded — exists purely as a cache-buster
+  /// for `clientLogoUrl`: the storage path itself never changes across a
+  /// re-upload (always the same fixed filename, overwritten in place), so
+  /// without this a browser that already cached the old image would keep
+  /// showing it after a client replaces their logo.
+  final DateTime? logoUpdatedAt;
+
   const Client({
     required this.id,
     required this.code,
@@ -40,6 +55,8 @@ class Client {
     this.country,
     this.postalCode,
     required this.createdAt,
+    this.logoPath,
+    this.logoUpdatedAt,
   });
 
   factory Client.fromMap(Map<String, dynamic> map) {
@@ -57,6 +74,8 @@ class Client {
       country: map['country'] as String?,
       postalCode: map['postal_code'] as String?,
       createdAt: DateTime.parse(map['created_at'] as String),
+      logoPath: map['logo_path'] as String?,
+      logoUpdatedAt: map['logo_updated_at'] == null ? null : DateTime.parse(map['logo_updated_at'] as String),
     );
   }
 }

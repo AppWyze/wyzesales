@@ -1,16 +1,23 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/app_providers.dart';
 import '../../../core/constants/fiscal.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/client_logo.dart';
 import '../../../core/utils/formatters.dart';
+import '../../../core/utils/image_picker_web.dart';
 import '../../../data/models/client.dart';
 import '../../../data/models/data_load_run.dart';
 import '../../../data/models/license.dart';
 import '../../../data/models/profile.dart';
 import '../../../data/models/reference_data.dart';
 import '../../../shared/utils/responsive.dart';
+import '../../../shared/widgets/app_logo.dart';
 import '../../../shared/widgets/app_shell.dart';
 
 /// Company / Users / License — every client's own adminuser-gated Settings
@@ -253,6 +260,7 @@ class _CompanyTab extends ConsumerStatefulWidget {
 
 class _CompanyTabState extends ConsumerState<_CompanyTab> {
   late Future<Client?> _future;
+  bool _isUploadingLogo = false;
 
   @override
   void initState() {
@@ -335,6 +343,8 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
                 ]),
               ),
               const SizedBox(height: 16),
+              _brandingCard(context, client, isDark),
+              const SizedBox(height: 16),
               _DataLoadHistoryCard(isDark: isDark),
             ],
           );
@@ -347,6 +357,342 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
     await showDialog<bool>(context: context, builder: (_) => _EditCompanyDialog(client: client, isDark: widget.isDark));
     if (mounted) setState(_reload);
   }
+
+  /// Settings > Company's "Branding" card (2026-09-04, Decisions doc Section
+  /// 83) — the self-serve UI for the client-logo feature Craig asked for
+  /// ("Some clients would like their own branding... I agree with this. Logo
+  /// only."). Shows a live preview against the same navy the sidebar
+  /// actually uses (`AppColors.navyDeep`), not this card's own light/dark
+  /// surface colour, so what an admin sees here matches what every user of
+  /// their client actually sees in the sidebar — including the fallback
+  /// stock `AppLogo` mark when no logo is set yet.
+  Widget _brandingCard(BuildContext context, Client client, bool isDark) {
+    final logoUrl = clientLogoUrl(client);
+    return _card(
+      title: 'Branding',
+      isDark: isDark,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Show your own logo in the sidebar in place of the WyzeSales mark. '
+            'WyzeSales stays credited in the sidebar footer either way.',
+            style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: 240,
+            height: 96,
+            decoration: BoxDecoration(color: AppColors.navyDeep, borderRadius: BorderRadius.circular(8)),
+            alignment: Alignment.center,
+            child: logoUrl != null
+                ? Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Image.network(
+                      logoUrl,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const AppLogo(iconSize: 28, fontSize: 16, onDark: true),
+                    ),
+                  )
+                : const AppLogo(iconSize: 28, fontSize: 16, onDark: true),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _primaryBtn(
+                Icons.upload_outlined,
+                _isUploadingLogo ? 'Uploading…' : (logoUrl != null ? 'Replace logo' : 'Upload logo'),
+                _isUploadingLogo ? null : () => _pickAndUploadLogo(context, client),
+              ),
+              if (logoUrl != null) ...[
+                const SizedBox(width: 10),
+                _outlineBtn(
+                  Icons.delete_outline,
+                  'Remove',
+                  isDark,
+                  () {
+                    if (!_isUploadingLogo) _removeLogo(context, client);
+                  },
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Picks an image file, lets the admin crop/position it against a fixed
+  /// frame (`_LogoCropDialog`), then uploads the result. Two independent
+  /// points where the admin can back out with nothing happening — declining
+  /// the file picker, or cancelling the crop dialog — both just return early
+  /// with no error shown, same as any other cancel action in this app.
+  Future<void> _pickAndUploadLogo(BuildContext context, Client client) async {
+    Uint8List? picked;
+    try {
+      picked = await pickImageFileBytes();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e'), backgroundColor: AppColors.negative));
+      }
+      return;
+    }
+    if (picked == null) return;
+    if (!context.mounted) return;
+
+    final cropped = await showDialog<Uint8List?>(
+      context: context,
+      builder: (_) => _LogoCropDialog(imageBytes: picked!, isDark: widget.isDark),
+    );
+    if (cropped == null) return;
+    if (!context.mounted) return;
+
+    setState(() => _isUploadingLogo = true);
+    try {
+      await ref.read(settingsRepositoryProvider).uploadClientLogo(client.id, cropped);
+      // Same "an app-wide provider needs to pick up this change immediately,
+      // not just on next reload" reasoning as _EditCompanyDialogState._save's
+      // own ref.invalidate calls right above — the sidebar's _BrandMark
+      // (app_shell.dart) reads currentClientProvider on every screen.
+      ref.invalidate(currentClientProvider);
+      if (mounted) setState(_reload);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.negative));
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingLogo = false);
+    }
+  }
+
+  Future<void> _removeLogo(BuildContext context, Client client) async {
+    final existingPath = client.logoPath;
+    if (existingPath == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Remove logo', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        content: const Text('Remove your logo and go back to the WyzeSales sidebar mark?', style: TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove', style: TextStyle(color: AppColors.negative, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _isUploadingLogo = true);
+    try {
+      await ref.read(settingsRepositoryProvider).removeClientLogo(client.id, existingPath);
+      ref.invalidate(currentClientProvider);
+      if (mounted) setState(_reload);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.negative));
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingLogo = false);
+    }
+  }
+}
+
+/// The crop/position step between picking a logo file and uploading it
+/// (2026-09-04, Decisions doc Section 83 — Craig: "the logo needs to look
+/// professional so cropping / sizing is necessary"). Lets the admin pan and
+/// zoom their picked image inside a fixed 5:2 landscape frame — a moderate
+/// landscape ratio chosen because it suits most real company logo lockups
+/// (a horizontal wordmark, or an icon beside one) without being so thin a
+/// frame that positioning it becomes fiddly; the sidebar itself then renders
+/// whatever comes out of this with `BoxFit.contain` (`_BrandMark`,
+/// app_shell.dart) so the exact frame ratio chosen here doesn't have to be a
+/// pixel-perfect match for the sidebar slot's own proportions.
+///
+/// Deliberately built on nothing but the Flutter framework itself
+/// (`InteractiveViewer` + `RenderRepaintBoundary.toImage`) rather than a
+/// third-party cropping package: this sandbox has no live Flutter SDK to
+/// `pub get`/compile-check an unfamiliar package API or its web-platform
+/// support against (see this project's standing note on tree-sitter-only
+/// verification), while capturing a widget subtree as an image is a small,
+/// well-understood, purely-framework technique with nothing version-specific
+/// to get wrong.
+///
+/// The captured PNG is transparent outside whatever area the logo image
+/// itself covers — the on-screen checkerboard (`_CheckerboardPainter`) that
+/// shows this during editing lives BEHIND the `RepaintBoundary` in a `Stack`,
+/// not inside it, so `toImage()` only ever captures the `InteractiveViewer`/
+/// `Image` layer and never bakes that checkerboard (or any other solid
+/// background) into the exported file. A transparent result looks correct
+/// wherever it's later displayed — today just the navy sidebar, but not
+/// hard-coded to assume that's the only place a logo like this ever renders.
+///
+/// Returns the cropped PNG bytes via `Navigator.pop`, or null if the admin
+/// cancelled.
+class _LogoCropDialog extends StatefulWidget {
+  const _LogoCropDialog({required this.imageBytes, required this.isDark});
+  final Uint8List imageBytes;
+  final bool isDark;
+
+  @override
+  State<_LogoCropDialog> createState() => _LogoCropDialogState();
+}
+
+class _LogoCropDialogState extends State<_LogoCropDialog> {
+  final _boundaryKey = GlobalKey();
+  final _transformController = TransformationController();
+  bool _isSaving = false;
+  String? _error;
+
+  // 5:2 landscape frame — see this class's own doc comment for why. Output
+  // is captured at 3x this on-screen size (1200x480) so a logo still looks
+  // crisp on a high-DPI display even though the sidebar only ever shows it
+  // at a small size.
+  static const double _viewportWidth = 300;
+  static const double _viewportHeight = 120;
+  static const double _outputScale = 4;
+
+  Future<void> _cropAndSave() async {
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      final renderObject = _boundaryKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderRepaintBoundary) {
+        throw Exception('Could not process the image. Please try again.');
+      }
+      final image = await renderObject.toImage(pixelRatio: _outputScale);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) throw Exception('Could not process the image. Please try again.');
+      if (mounted) Navigator.of(context).pop(byteData.buffer.asUint8List());
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = '$e';
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    return Dialog(
+      backgroundColor: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      insetPadding: dialogInsetPadding,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight(context, 520)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogHeader('Position your logo', isDark),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Drag to reposition, scroll or pinch to zoom.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    width: _viewportWidth,
+                    height: _viewportHeight,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: AppColors.teal, width: 2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Stack(
+                      children: [
+                        // Visual-only transparency indicator — a sibling
+                        // BEHIND the RepaintBoundary below, never captured
+                        // by it. See this class's own doc comment.
+                        Positioned.fill(child: CustomPaint(painter: _CheckerboardPainter())),
+                        Positioned.fill(
+                          child: RepaintBoundary(
+                            key: _boundaryKey,
+                            child: InteractiveViewer(
+                              transformationController: _transformController,
+                              boundaryMargin: const EdgeInsets.all(double.infinity),
+                              minScale: 0.3,
+                              maxScale: 5,
+                              child: Image.memory(
+                                widget.imageBytes,
+                                width: _viewportWidth,
+                                height: _viewportHeight,
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(_error!, style: const TextStyle(fontSize: 12, color: AppColors.negative), textAlign: TextAlign.center),
+                  ],
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: _isSaving ? null : () => Navigator.of(context).pop(null),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: _isSaving ? null : _cropAndSave,
+                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.teal, foregroundColor: AppColors.onAccent),
+                        child: _isSaving
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Text('Use this logo'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A plain grey/white checkerboard, the standard visual convention for "this
+/// area is transparent" — purely decorative, painted behind the crop frame's
+/// `RepaintBoundary` during editing (see `_LogoCropDialog`'s own doc comment
+/// for why it's never part of the exported image).
+class _CheckerboardPainter extends CustomPainter {
+  static const double _cell = 10;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final light = Paint()..color = const Color(0xFFE0E0E0);
+    final dark = Paint()..color = const Color(0xFFBDBDBD);
+    for (double y = 0; y < size.height; y += _cell) {
+      for (double x = 0; x < size.width; x += _cell) {
+        final isDark = ((x / _cell).floor() + (y / _cell).floor()) % 2 == 0;
+        canvas.drawRect(Rect.fromLTWH(x, y, _cell, _cell), isDark ? dark : light);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CheckerboardPainter oldDelegate) => false;
 }
 
 /// Settings > Company's "Data load history" card (2026-09-04, data_load_runs

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/supabase/supabase_config.dart';
@@ -48,6 +50,65 @@ class SettingsRepository {
   /// already does server-side, so a client that's never touched this setting
   /// behaves identically to how every client behaved before this feature
   /// existed.
+  /// Uploads (or replaces) this client's logo — Settings > Company >
+  /// Branding, schema/036, 2026-09-04 (Decisions doc Section 83). `bytes` is
+  /// already a cropped, encoded PNG by the time it reaches here (see
+  /// `_LogoCropDialog`, settings_screen.dart) — this method just puts it
+  /// somewhere durable and points `clients.logo_path` at it.
+  ///
+  /// Always the same fixed object path (`{clientId}/logo.png`) with
+  /// `upsert: true` — a re-upload overwrites in place rather than
+  /// accumulating old versions the app would otherwise need to clean up.
+  /// RLS (`client_logos_adminuser_insert`/`_update`, schema/036) already
+  /// restricts this to the caller's own client via `is_adminuser()` +
+  /// `get_my_client_id()`, the same gate every other Settings > Company write
+  /// in this file uses — no clientId validation needed here beyond what the
+  /// caller (an adminuser on their own Settings screen) already implies.
+  ///
+  /// `logo_updated_at` is set here (not left to a DB trigger/default) purely
+  /// so `clientLogoUrl`'s cache-busting query param changes on every save —
+  /// see that function's own doc comment (core/utils/client_logo.dart).
+  Future<Client> uploadClientLogo(String clientId, Uint8List bytes) async {
+    final path = '$clientId/logo.png';
+    await supabase.storage.from('client-logos').uploadBinary(
+          path,
+          bytes,
+          fileOptions: const FileOptions(contentType: 'image/png', upsert: true),
+        );
+    final row = await supabase
+        .from('clients')
+        .update({'logo_path': path, 'logo_updated_at': DateTime.now().toUtc().toIso8601String()})
+        .eq('id', clientId)
+        .select()
+        .single();
+    return Client.fromMap(row);
+  }
+
+  /// Reverts a client back to the stock WyzeSales sidebar mark — clears
+  /// `clients.logo_path`/`logo_updated_at` and best-effort deletes the
+  /// now-orphaned storage object. The delete is wrapped in its own
+  /// try/catch and never allowed to block clearing the `clients` row: a
+  /// client whose storage object is somehow already gone (or a delete that
+  /// fails for any other reason) should still successfully revert to the
+  /// default look from the app's point of view — a leftover, no-longer-
+  /// referenced object in `client-logos` is a harmless cleanup gap, not a
+  /// user-visible failure.
+  Future<Client> removeClientLogo(String clientId, String existingPath) async {
+    try {
+      await supabase.storage.from('client-logos').remove([existingPath]);
+    } catch (_) {
+      // See doc comment above — a failed storage delete must not stop the
+      // clients row from being cleared.
+    }
+    final row = await supabase
+        .from('clients')
+        .update({'logo_path': null, 'logo_updated_at': null})
+        .eq('id', clientId)
+        .select()
+        .single();
+    return Client.fromMap(row);
+  }
+
   Future<int> getFiscalYearStartMonth() async {
     final row = await supabase.from('fiscal_year_settings').select('start_month').maybeSingle();
     return (row?['start_month'] as int?) ?? 3;

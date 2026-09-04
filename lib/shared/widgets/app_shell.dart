@@ -6,8 +6,10 @@ import '../../core/app_providers.dart';
 import '../../core/constants/fiscal.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/theme_provider.dart';
+import '../../core/utils/client_logo.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/active_alert.dart';
+import '../../data/models/client.dart';
 import '../../data/models/data_load_run.dart';
 import '../../data/models/profile.dart';
 import 'app_logo.dart';
@@ -517,7 +519,7 @@ class _AlertsDropdown extends StatelessWidget {
   }
 }
 
-class _Sidebar extends StatelessWidget {
+class _Sidebar extends ConsumerWidget {
   const _Sidebar({required this.profileAsync, required this.currentRoute, required this.isDrawer});
 
   final AsyncValue<Profile?> profileAsync;
@@ -525,17 +527,18 @@ class _Sidebar extends StatelessWidget {
   final bool isDrawer;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final canManageUsers = profileAsync.value?.canManageUsers == true;
     final isPlatformAdmin = profileAsync.value?.isPlatformAdmin == true;
+    final clientAsync = ref.watch(currentClientProvider);
 
     return Container(
       color: AppColors.navyDeep,
       child: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 24, 20, 16),
-            child: Align(alignment: Alignment.centerLeft, child: AppLogo(iconSize: 32, fontSize: 19, onDark: true)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+            child: Align(alignment: Alignment.centerLeft, child: _BrandMark(clientAsync: clientAsync)),
           ),
           const Divider(color: Colors.white12, height: 1),
           Expanded(
@@ -637,6 +640,48 @@ class _Sidebar extends StatelessWidget {
           const Divider(color: Colors.white12, height: 1),
           _ProfileFooter(profileAsync: profileAsync),
         ],
+      ),
+    );
+  }
+}
+
+/// The sidebar's top-left brand slot — 2026-09-04 (Decisions doc Section 83):
+/// a client's own uploaded logo (`clients.logo_path`, schema/036, Settings >
+/// Company > Branding) takes over this primary spot in place of the stock
+/// `AppLogo` mark, per Craig's own choice ("I agree with this. Logo only.")
+/// on the co-branding pattern discussed that day. WyzeSales itself is never
+/// actually removed from the app for a branded client — see
+/// `_ProfileFooter`'s unconditional "WyzeSales v0.1 · © 2026 WyzeSales" line
+/// a few rows below this one, which renders identically either way — it's
+/// only demoted out of this top slot once a client has configured a logo.
+///
+/// Falls back to the stock `AppLogo` for the overwhelming majority of
+/// clients that have never uploaded a logo (`currentClientProvider`'s data
+/// has no `logoPath`), and for that provider's loading/error states too —
+/// this never shows a blank sidebar header while the client row is still
+/// being fetched. `errorBuilder` covers the same "fall back to the stock
+/// mark" outcome for a broken/unreachable image URL (a stale cached
+/// `client-logos` object that's since been deleted, a transient network
+/// blip loading it) — better than a broken-image icon sitting at the very
+/// top of every screen.
+class _BrandMark extends StatelessWidget {
+  const _BrandMark({required this.clientAsync});
+  final AsyncValue<Client?> clientAsync;
+
+  @override
+  Widget build(BuildContext context) {
+    final client = clientAsync.value;
+    final logoUrl = client == null ? null : clientLogoUrl(client);
+    if (logoUrl == null) {
+      return const AppLogo(iconSize: 32, fontSize: 19, onDark: true);
+    }
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 160, maxHeight: 40),
+      child: Image.network(
+        logoUrl,
+        fit: BoxFit.contain,
+        alignment: Alignment.centerLeft,
+        errorBuilder: (_, __, ___) => const AppLogo(iconSize: 32, fontSize: 19, onDark: true),
       ),
     );
   }
