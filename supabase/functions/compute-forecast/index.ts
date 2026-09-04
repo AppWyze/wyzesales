@@ -131,6 +131,42 @@ function holtWintersForecast(
   };
 }
 
+// 2026-09-04: Supabase's project-wide "Max Rows" setting (PostgREST's
+// db-max-rows) caps any single API/RPC response and silently TRUNCATES
+// anything past it rather than erroring. Found the hard way against a real
+// client: the Item dimension alone needed 1185 rows against this project's
+// 1000-row cap, so a plain single-shot call here was silently dropping
+// ~185 rows' worth of history — whichever entities sorted last (by the
+// entity_code/month ordering forecast_input_series itself guarantees) never
+// got seen at all, and got no forecast, with nothing anywhere that looked
+// like an error. Paginates via .range() instead of assuming one call ever
+// returns everything; safe specifically because forecast_input_series's own
+// `order by entity_code, month` is stable and deterministic across pages,
+// so nothing gets skipped or duplicated at a page boundary.
+async function fetchAllInputSeries(
+  supabase: ReturnType<typeof createClient>,
+  clientId: string,
+  dimension: string,
+): Promise<{
+  data: { entity_code: string; month: string; value: number }[] | null;
+  error: { message: string } | null;
+}> {
+  const pageSize = 1000;
+  const allRows: { entity_code: string; month: string; value: number }[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .rpc("forecast_input_series", { p_client_id: clientId, p_dimension: dimension })
+      .range(from, from + pageSize - 1);
+    if (error) return { data: null, error };
+    const page = (data ?? []) as { entity_code: string; month: string; value: number }[];
+    allRows.push(...page);
+    if (page.length < pageSize) break; // short page = that was the last one
+    from += pageSize;
+  }
+  return { data: allRows, error: null };
+}
+
 Deno.serve(async (_req) => {
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -167,10 +203,7 @@ Deno.serve(async (_req) => {
     const runTimestamp = new Date().toISOString();
 
     for (const dimension of DIMENSIONS) {
-      const { data: series, error: seriesError } = await supabase.rpc("forecast_input_series", {
-        p_client_id: clientId,
-        p_dimension: dimension,
-      });
+      const { data: series, error: seriesError } = await fetchAllInputSeries(supabase, clientId, dimension);
 
       if (seriesError) {
         console.error(`[${clientId}/${dimension}] forecast_input_series failed:`, seriesError.message);
