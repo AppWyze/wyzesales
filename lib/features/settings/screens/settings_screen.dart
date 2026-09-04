@@ -377,18 +377,35 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
         children: [
           Text(
             'Show your own logo in the sidebar in place of the WyzeSales mark. '
-            'WyzeSales stays credited in the sidebar footer either way.',
+            'A small "Powered by WyzeSales" mark stays alongside it, and WyzeSales '
+            'stays credited in the sidebar footer either way.',
             style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
           ),
           const SizedBox(height: 14),
           Container(
             width: 240,
-            height: 96,
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: AppColors.navyDeep, borderRadius: BorderRadius.circular(8)),
-            alignment: Alignment.center,
-            child: logoUrl != null
-                ? ClientLogoMark(logoUrl: logoUrl, onDarkBackground: client.logoBackground == 'dark', height: 40, maxWidth: 180)
-                : const AppLogo(iconSize: 28, fontSize: 16, onDark: true),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 40,
+                  child: logoUrl != null
+                      ? ClientLogoMark(logoUrl: logoUrl, onDarkBackground: client.logoBackground == 'dark', height: 40, maxWidth: 180)
+                      : const AppLogo(iconSize: 28, fontSize: 16, onDark: true),
+                ),
+                // Same "only next to an actual client logo, not the stock
+                // WyzeSales mark itself" condition _Sidebar uses
+                // (app_shell.dart) — this preview should show exactly what
+                // the sidebar will, not just an approximation of it.
+                if (logoUrl != null) ...[
+                  const SizedBox(height: 8),
+                  const PoweredByWyzeSales(),
+                ],
+              ],
+            ),
           ),
           const SizedBox(height: 14),
           Row(

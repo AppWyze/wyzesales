@@ -532,6 +532,12 @@ class _Sidebar extends ConsumerWidget {
     final canManageUsers = profileAsync.value?.canManageUsers == true;
     final isPlatformAdmin = profileAsync.value?.isPlatformAdmin == true;
     final clientAsync = ref.watch(currentClientProvider);
+    // Drives whether the "Powered by WyzeSales" line below shows at all —
+    // see PoweredByWyzeSales' own doc comment (app_logo.dart, Decisions doc
+    // Section 85). Only relevant once a client actually HAS a logo; showing
+    // "Powered by WyzeSales" directly under the WyzeSales mark itself, for
+    // every client that hasn't set one, would be redundant.
+    final hasClientLogo = clientAsync.value != null && clientLogoUrl(clientAsync.value!) != null;
 
     return Container(
       color: AppColors.navyDeep,
@@ -539,7 +545,16 @@ class _Sidebar extends ConsumerWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-            child: Align(alignment: Alignment.centerLeft, child: _BrandMark(clientAsync: clientAsync)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Align(alignment: Alignment.centerLeft, child: _BrandMark(clientAsync: clientAsync)),
+                if (hasClientLogo) ...[
+                  const SizedBox(height: 8),
+                  const PoweredByWyzeSales(),
+                ],
+              ],
+            ),
           ),
           const Divider(color: Colors.white12, height: 1),
           Expanded(

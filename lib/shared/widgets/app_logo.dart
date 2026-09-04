@@ -1,6 +1,48 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 
+/// A compact "Powered by WyzeSales" attribution — 2026-09-04
+/// (Wyzesales_Rebuild_Decisions.md Section 85), added right after Craig saw
+/// the client-logo feature (Section 83) live and pushed back: "the Wyzesales
+/// logo, branding and identity is lost." His concern was specifically about
+/// the actual MARK disappearing once a client's own logo takes over the
+/// sidebar's primary slot — the sidebar's small version/copyright line at
+/// the very bottom ("WyzeSales v0.1 · © 2026 WyzeSales", `_ProfileFooter`,
+/// app_shell.dart) technically still names WyzeSales, but it sits far from
+/// the client's logo, in muted text, next to Sign Out — easy to miss
+/// entirely, which is exactly what happened. This reuses the real `AppLogo`
+/// mark itself, just smaller, immediately next to wherever a client's own
+/// logo is shown (`_Sidebar`, app_shell.dart; the Branding card's own
+/// preview, settings_screen.dart) — the standard co-branding attribution
+/// pattern ("Powered by Stripe", "Built on Shopify"): small, but always
+/// present right beside the partner's own branding, not relegated to a
+/// distant footer.
+class PoweredByWyzeSales extends StatelessWidget {
+  const PoweredByWyzeSales({super.key, this.onDark = true});
+
+  /// True when rendering against a dark ground (the sidebar's navy) — same
+  /// parameter AppLogo itself takes, threaded straight through.
+  final bool onDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Powered by ',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            color: onDark ? Colors.white54 : AppColors.lightTextSecondary,
+          ),
+        ),
+        AppLogo(iconSize: 14, fontSize: 11, onDark: onDark),
+      ],
+    );
+  }
+}
+
 /// Shared brand mark — the "Signal Spark" icon (a hex badge with a
 /// heartbeat-style pulse line through it) plus a two-tone "Wyze"/"Sales"
 /// wordmark, mirroring the split-colour treatment SeaWyze uses for its own
