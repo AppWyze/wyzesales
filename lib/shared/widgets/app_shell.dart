@@ -6,6 +6,7 @@ import '../../core/app_providers.dart';
 import '../../core/constants/fiscal.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/theme_provider.dart';
+import '../../data/models/data_load_run.dart';
 import '../../data/models/profile.dart';
 import 'app_logo.dart';
 import 'global_filter_bar.dart';
@@ -202,9 +203,16 @@ class _TopBarIconChip extends StatelessWidget {
 /// Data-freshness indicator — replaces the Dashboard's old "Last Updated"
 /// KPI tile (Craig, 2026-08-26: "Remove last update tile and insert last
 /// update text in the top bar"). Lives here rather than on the Dashboard
-/// screen so it shows on every screen, not just the Dashboard, using the
-/// shared lastDataUpdateProvider so this and the Dashboard's own pie charts
-/// read the same cached value instead of each fetching it separately.
+/// screen so it shows on every screen, not just the Dashboard.
+///
+/// 2026-09-04: reads latestDataLoadRunProvider (data_load_runs, schema/033)
+/// first — Craig's "real run tracking from the start" choice — so a failed
+/// or stuck WyzeSalesExtract run shows up as an actual red "Load failed"/
+/// "Load stuck" chip instead of a plain neutral timestamp that could mean
+/// anything. Falls back to the old lastDataUpdateProvider (a plain
+/// extracted_at timestamp, neutral-coloured, same as before this change) for
+/// a client with no data_load_runs rows yet — WyzeSalesExtract not yet
+/// redeployed with the update — so nothing regresses mid-rollout.
 class _LastDataUpdateChip extends ConsumerWidget {
   const _LastDataUpdateChip({required this.chipColor});
 
@@ -212,16 +220,58 @@ class _LastDataUpdateChip extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final runAsync = ref.watch(latestDataLoadRunProvider);
+
+    return runAsync.when(
+      data: (run) {
+        if (run == null) return _fallbackChip(context, ref);
+        final label = _labelFor(run);
+        final color = _colorFor(run);
+        return _chip(context, label, color.withValues(alpha: 0.14), color);
+      },
+      loading: () => _plainChip(context, 'Updated —'),
+      // A query failure here (RLS not yet applied, transient network blip)
+      // shouldn't read as "load failed" — that's a specific, meaningful
+      // claim about WyzeSalesExtract this chip has no basis to make just
+      // because ITS OWN read didn't come back. Falls back same as "no rows
+      // yet" rather than fabricating a red state from an unrelated error.
+      error: (_, __) => _fallbackChip(context, ref),
+    );
+  }
+
+  String _labelFor(DataLoadRun run) {
+    final timeLabel = DateFormat('d MMM, HH:mm').format(run.startedAt.toLocal());
+    if (run.effectiveStatus == 'success') return 'Updated $timeLabel';
+    if (run.effectiveStatus == 'running') return 'Loading… (since $timeLabel)';
+    return run.isStuck ? 'Load stuck since $timeLabel' : 'Load failed $timeLabel';
+  }
+
+  Color _colorFor(DataLoadRun run) {
+    if (run.effectiveStatus == 'success') return AppColors.positive;
+    if (run.effectiveStatus == 'running') return AppColors.info;
+    return AppColors.negative;
+  }
+
+  Widget _fallbackChip(BuildContext context, WidgetRef ref) {
     final lastUpdate = ref.watch(lastDataUpdateProvider);
     final label = lastUpdate.when(
       data: (value) => value == null ? 'No extract yet' : 'Updated ${DateFormat('d MMM, HH:mm').format(value.toLocal())}',
       loading: () => 'Updated —',
       error: (_, __) => 'Updated —',
     );
+    return _plainChip(context, label);
+  }
+
+  Widget _plainChip(BuildContext context, String label) => _chip(context, label, chipColor, null);
+
+  Widget _chip(BuildContext context, String label, Color background, Color? textColor) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: chipColor, borderRadius: BorderRadius.circular(8)),
-      child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
+      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(8)),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor, fontWeight: textColor == null ? null : FontWeight.w600),
+      ),
     );
   }
 }

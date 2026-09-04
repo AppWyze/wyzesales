@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import '../../../core/app_providers.dart';
 import '../../../core/constants/fiscal.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/client.dart';
+import '../../../data/models/data_load_run.dart';
 import '../../../data/models/license.dart';
 import '../../../data/models/profile.dart';
 import '../../../shared/utils/responsive.dart';
@@ -291,33 +293,40 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
           // fiscalYearStartMonthProvider's own doc comment.
           final startMonthAsync = ref.watch(fiscalYearStartMonthProvider);
           final historyYearsAsync = ref.watch(fiscalYearHistoryYearsProvider);
-          return _card(
-            title: 'Company information',
-            isDark: isDark,
-            action: _primaryBtn(Icons.edit_outlined, 'Edit', () => _showEdit(context, client)),
-            child: _twoCol([
-              _infoRow('Client name', client.name, isDark),
-              _infoRow('Client code', client.code, isDark),
-              _infoRow('Contact name', client.contactName ?? '—', isDark),
-              _infoRow('Contact number', client.contactNumber ?? '—', isDark),
-              _infoRow('Contact email', client.contactEmail ?? '—', isDark),
-              _infoRow('Address line 1', client.address1 ?? '—', isDark),
-              _infoRow('Address line 2', client.address2 ?? '—', isDark),
-              _infoRow('Address line 3', client.address3 ?? '—', isDark),
-              _infoRow('City', client.city ?? '—', isDark),
-              _infoRow('Country', client.country ?? '—', isDark),
-              _infoRow('Postal code', client.postalCode ?? '—', isDark),
-              _infoRow('Fiscal year starts', startMonthAsync.when(
-                data: (m) => fiscalStartMonthName(m),
-                loading: () => '…',
-                error: (_, __) => '—',
-              ), isDark),
-              _infoRow('Data history window', historyYearsAsync.when(
-                data: (y) => '$y years',
-                loading: () => '…',
-                error: (_, __) => '—',
-              ), isDark),
-            ]),
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _card(
+                title: 'Company information',
+                isDark: isDark,
+                action: _primaryBtn(Icons.edit_outlined, 'Edit', () => _showEdit(context, client)),
+                child: _twoCol([
+                  _infoRow('Client name', client.name, isDark),
+                  _infoRow('Client code', client.code, isDark),
+                  _infoRow('Contact name', client.contactName ?? '—', isDark),
+                  _infoRow('Contact number', client.contactNumber ?? '—', isDark),
+                  _infoRow('Contact email', client.contactEmail ?? '—', isDark),
+                  _infoRow('Address line 1', client.address1 ?? '—', isDark),
+                  _infoRow('Address line 2', client.address2 ?? '—', isDark),
+                  _infoRow('Address line 3', client.address3 ?? '—', isDark),
+                  _infoRow('City', client.city ?? '—', isDark),
+                  _infoRow('Country', client.country ?? '—', isDark),
+                  _infoRow('Postal code', client.postalCode ?? '—', isDark),
+                  _infoRow('Fiscal year starts', startMonthAsync.when(
+                    data: (m) => fiscalStartMonthName(m),
+                    loading: () => '…',
+                    error: (_, __) => '—',
+                  ), isDark),
+                  _infoRow('Data history window', historyYearsAsync.when(
+                    data: (y) => '$y years',
+                    loading: () => '…',
+                    error: (_, __) => '—',
+                  ), isDark),
+                ]),
+              ),
+              const SizedBox(height: 16),
+              _DataLoadHistoryCard(isDark: isDark),
+            ],
           );
         },
       ),
@@ -327,6 +336,115 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
   Future<void> _showEdit(BuildContext context, Client client) async {
     await showDialog<bool>(context: context, builder: (_) => _EditCompanyDialog(client: client, isDark: widget.isDark));
     if (mounted) setState(_reload);
+  }
+}
+
+/// Settings > Company's "Data load history" card (2026-09-04, data_load_runs
+/// schema/033) — the troubleshooting detail behind the top-bar chip's single
+/// current-run summary (_LastDataUpdateChip, app_shell.dart): every recent
+/// WyzeSalesExtract run, its outcome, and — for a failure — the actual
+/// sanitized error message, so WCSA staff can see WHY last night's load
+/// failed without needing server/log access. Admin-only by virtue of living
+/// on this already adminuser-gated screen (see SettingsScreen's own doc
+/// comment) — no separate RLS needed beyond data_load_runs_select, since
+/// every signed-in user of this client can already read this table; this
+/// card just happens to only be reachable by an adminuser today.
+class _DataLoadHistoryCard extends ConsumerWidget {
+  const _DataLoadHistoryCard({required this.isDark});
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final runsAsync = ref.watch(recentDataLoadRunsProvider);
+    return _card(
+      title: 'Data load history',
+      isDark: isDark,
+      subtitle: 'Recent WyzeSalesExtract runs',
+      child: runsAsync.when(
+        loading: () => const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+        error: (e, _) => Text('Error: $e', style: TextStyle(color: AppColors.negative)),
+        data: (runs) {
+          if (runs.isEmpty) {
+            return Text(
+              'No load history yet. This is expected until WyzeSalesExtract is redeployed '
+              'with the run-tracking update — the top-bar indicator falls back to the '
+              'last extract timestamp until then.',
+              style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+            );
+          }
+          return Column(
+            children: [for (final run in runs) _runRow(run, isDark)],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _runRow(DataLoadRun run, bool isDark) {
+    String label;
+    Color color;
+    if (run.effectiveStatus == 'success') {
+      label = 'Success';
+      color = AppColors.positive;
+    } else if (run.effectiveStatus == 'running') {
+      label = 'Running';
+      color = AppColors.info;
+    } else {
+      label = run.isStuck ? 'Stuck' : 'Failed';
+      color = AppColors.negative;
+    }
+    final subtext = <String>[];
+    if (run.finishedAt != null && run.durationSeconds != null) {
+      final mins = (run.durationSeconds! / 60).floor();
+      final secs = (run.durationSeconds! % 60).round();
+      subtext.add('took ${mins > 0 ? '${mins}m ' : ''}${secs}s');
+    }
+    if (run.isSuccess) {
+      final parts = <String>[];
+      if (run.salesDocumentFactsRows != null) parts.add('${formatQuantity(run.salesDocumentFactsRows)} sales facts');
+      if (run.stockMovementFactsRows != null) parts.add('${formatQuantity(run.stockMovementFactsRows)} stock movements');
+      if (run.itemStockSnapshotRows != null) parts.add('${formatQuantity(run.itemStockSnapshotRows)} stock snapshot rows');
+      if (parts.isNotEmpty) subtext.add(parts.join(', '));
+    }
+    if (run.errorMessage != null) subtext.add(run.errorMessage!);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.navyMid : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Badge(label: label, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  DateFormat('EEE d MMM yyyy, HH:mm').format(run.startedAt.toLocal()),
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkText : AppColors.lightText),
+                ),
+                if (subtext.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtext.join(' — '),
+                    style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

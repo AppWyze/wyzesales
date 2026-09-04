@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/supabase/supabase_config.dart';
 import '../../core/utils/edge_function_errors.dart';
 import '../models/client.dart';
+import '../models/data_load_run.dart';
 import '../models/license.dart';
 import '../models/profile.dart';
 
@@ -96,6 +97,34 @@ class SettingsRepository {
       {'client_id': clientId, 'history_years': historyYears},
       onConflict: 'client_id',
     );
+  }
+
+  /// The signed-in user's client's most recent WyzeSalesExtract run —
+  /// powers the top-bar health chip (2026-09-04, data_load_runs, schema/033).
+  /// No clientId parameter, same RLS-scoped convention as every other method
+  /// here (`data_load_runs_select`, schema/033). Returns null both when this
+  /// client has no rows yet (WyzeSalesExtract not yet redeployed with the
+  /// 2026-09-04 update — a real, expected state, not an error) and on any
+  /// query failure, so callers can treat "no data" as one case and fall back
+  /// to the old extracted_at-based indicator without needing a try/catch of
+  /// their own at every call site.
+  Future<DataLoadRun?> getLatestDataLoadRun() async {
+    try {
+      final row = await supabase.from('data_load_runs').select().order('started_at', ascending: false).limit(1).maybeSingle();
+      if (row == null) return null;
+      return DataLoadRun.fromMap(row);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Recent run history for Settings > Company's "Data load history" card —
+  /// most recent first, capped at 20 (a troubleshooting view, not a full
+  /// audit log; WyzeSalesExtract's Schedule.RunTimes is normally 1-2 runs a
+  /// day, so 20 already covers 1-3 weeks).
+  Future<List<DataLoadRun>> getRecentDataLoadRuns({int limit = 20}) async {
+    final rows = await supabase.from('data_load_runs').select().order('started_at', ascending: false).limit(limit);
+    return rows.map<DataLoadRun>((r) => DataLoadRun.fromMap(r)).toList();
   }
 
   /// Joins pricing_plan so License.plan is populated — needed for the

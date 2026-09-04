@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../data/models/data_load_run.dart';
 import '../data/models/profile.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/budget_repository.dart';
@@ -70,10 +71,42 @@ final sessionProvider = StateNotifierProvider<SessionNotifier, AsyncValue<Profil
 /// app writes sales_document_facts — only the extract does — so there's
 /// currently no action that needs to `ref.invalidate` this; a manual pull-
 /// to-refresh could, if that's ever wanted.
+///
+/// 2026-09-04: superseded as the CHIP'S primary source by
+/// latestDataLoadRunProvider below (real success/failure, not just "a
+/// timestamp exists") — kept as-is and still used as that provider's
+/// fallback for a client whose WyzeSalesExtract hasn't been redeployed with
+/// the data_load_runs update yet, so this chip never regresses to showing
+/// nothing for a client mid-rollout.
 final lastDataUpdateProvider = FutureProvider<DateTime?>((ref) async {
   final rows = await supabase.from('sales_document_facts').select('extracted_at').order('extracted_at', ascending: false).limit(1);
   if (rows.isEmpty) return null;
   return DateTime.parse(rows.first['extracted_at'] as String);
+});
+
+/// The signed-in user's client's most recent WyzeSalesExtract run
+/// (data_load_runs, schema/033, 2026-09-04) — "real run tracking from the
+/// start," Craig's own choice (AskUserQuestion) over a staleness-only
+/// heuristic, so AppShell's top-bar chip can show an actual failed/stuck
+/// load as a failure, not just an old-looking timestamp. `null` means this
+/// client has no rows yet (WyzeSalesExtract not yet redeployed with the
+/// 2026-09-04 update) — _LastDataUpdateChip (app_shell.dart) falls back to
+/// lastDataUpdateProvider's plain timestamp in that case, so nothing regresses
+/// for a client mid-rollout. Same plain (non-autoDispose) FutureProvider
+/// convention as lastDataUpdateProvider — changes at most a couple of times a
+/// day (Schedule.RunTimes), so one shared cached read is right.
+final latestDataLoadRunProvider = FutureProvider<DataLoadRun?>((ref) {
+  return ref.watch(settingsRepositoryProvider).getLatestDataLoadRun();
+});
+
+/// Recent WyzeSalesExtract run history for Settings > Company's admin-only
+/// "Data load history" card (2026-09-04) — troubleshooting detail behind the
+/// top-bar chip's single-run summary. Not shared with latestDataLoadRunProvider
+/// above (separate query, separate cache) since the two are read from
+/// different places for different reasons and there's no benefit to coupling
+/// their cache lifetimes.
+final recentDataLoadRunsProvider = FutureProvider<List<DataLoadRun>>((ref) {
+  return ref.watch(settingsRepositoryProvider).getRecentDataLoadRuns();
 });
 
 /// The signed-in user's client's fiscal year start month
