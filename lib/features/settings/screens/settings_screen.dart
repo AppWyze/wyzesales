@@ -19,6 +19,7 @@ import '../../../data/models/reference_data.dart';
 import '../../../shared/utils/responsive.dart';
 import '../../../shared/widgets/app_logo.dart';
 import '../../../shared/widgets/app_shell.dart';
+import '../../../shared/widgets/client_logo_mark.dart';
 
 /// Company / Users / License — every client's own adminuser-gated Settings
 /// area (schema/008's profiles_adminuser_manage_own_client and related RLS
@@ -386,14 +387,7 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
             decoration: BoxDecoration(color: AppColors.navyDeep, borderRadius: BorderRadius.circular(8)),
             alignment: Alignment.center,
             child: logoUrl != null
-                ? Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Image.network(
-                      logoUrl,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const AppLogo(iconSize: 28, fontSize: 16, onDark: true),
-                    ),
-                  )
+                ? ClientLogoMark(logoUrl: logoUrl, onDarkBackground: client.logoBackground == 'dark', height: 40, maxWidth: 180)
                 : const AppLogo(iconSize: 28, fontSize: 16, onDark: true),
           ),
           const SizedBox(height: 14),
@@ -417,9 +411,83 @@ class _CompanyTabState extends ConsumerState<_CompanyTab> {
               ],
             ],
           ),
+          // 2026-09-04 follow-up (Decisions doc Section 84) — Craig, right
+          // after seeing the feature live: "what if the colour of their
+          // logo is dark? Cannot be seen." Only shown once a logo is set —
+          // meaningless before then, since there's nothing to render either
+          // way. See ClientLogoMark's own doc comment for what the two
+          // options actually do.
+          if (logoUrl != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Logo background',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _bgOption(
+                  'Light backing — for dark or coloured logos',
+                  client.logoBackground != 'dark',
+                  isDark,
+                  () => _setLogoBackground(context, client, 'light'),
+                ),
+                _bgOption(
+                  'No backing — for white or light logos',
+                  client.logoBackground == 'dark',
+                  isDark,
+                  () => _setLogoBackground(context, client, 'dark'),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  Widget _bgOption(String label, bool selected, bool isDark, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: _isUploadingLogo ? null : onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.teal.withValues(alpha: 0.1) : (isDark ? AppColors.navyMid : AppColors.lightBackground),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: selected ? AppColors.teal : (isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000))),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              size: 14,
+              color: selected ? AppColors.teal : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+            ),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(fontSize: 11, color: selected ? AppColors.teal : (isDark ? AppColors.darkText : AppColors.lightText))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _setLogoBackground(BuildContext context, Client client, String background) async {
+    if (client.logoBackground == background || _isUploadingLogo) return;
+    setState(() => _isUploadingLogo = true);
+    try {
+      await ref.read(settingsRepositoryProvider).updateClientLogoBackground(client.id, background);
+      ref.invalidate(currentClientProvider);
+      if (mounted) setState(_reload);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.negative));
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingLogo = false);
+    }
   }
 
   /// Picks an image file, lets the admin crop/position it against a fixed

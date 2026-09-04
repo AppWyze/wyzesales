@@ -41,6 +41,19 @@ class Client {
   /// showing it after a client replaces their logo.
   final DateTime? logoUpdatedAt;
 
+  /// How `ClientLogoMark` (shared/widgets/client_logo_mark.dart) should
+  /// render `logoPath` against the sidebar's fixed navy — `'light'` (the
+  /// default, schema/037, 2026-09-04) wraps it in a small white backing chip
+  /// so a dark or richly-coloured logo stays visible; `'dark'` renders it
+  /// directly on the navy with no chip, for a client whose logo is itself
+  /// light/white and was designed to sit on a dark ground. See schema/037's
+  /// own comment — this exists because Craig, right after seeing the logo
+  /// feature live, asked "what if the colour of their logo is dark? Cannot
+  /// be seen." Defaults to `'light'` client-side too (not just via the
+  /// column's DB default) so a `Client` built from a row read before
+  /// schema/037 ran still renders sensibly.
+  final String logoBackground;
+
   const Client({
     required this.id,
     required this.code,
@@ -57,6 +70,7 @@ class Client {
     required this.createdAt,
     this.logoPath,
     this.logoUpdatedAt,
+    this.logoBackground = 'light',
   });
 
   factory Client.fromMap(Map<String, dynamic> map) {
@@ -76,6 +90,7 @@ class Client {
       createdAt: DateTime.parse(map['created_at'] as String),
       logoPath: map['logo_path'] as String?,
       logoUpdatedAt: map['logo_updated_at'] == null ? null : DateTime.parse(map['logo_updated_at'] as String),
+      logoBackground: (map['logo_background'] as String?) ?? 'light',
     );
   }
 }

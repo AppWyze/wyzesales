@@ -13,6 +13,7 @@ import '../../data/models/client.dart';
 import '../../data/models/data_load_run.dart';
 import '../../data/models/profile.dart';
 import 'app_logo.dart';
+import 'client_logo_mark.dart';
 import 'global_filter_bar.dart';
 import 'top_bar_search.dart';
 
@@ -672,17 +673,14 @@ class _BrandMark extends StatelessWidget {
   Widget build(BuildContext context) {
     final client = clientAsync.value;
     final logoUrl = client == null ? null : clientLogoUrl(client);
-    if (logoUrl == null) {
+    if (logoUrl == null || client == null) {
       return const AppLogo(iconSize: 32, fontSize: 19, onDark: true);
     }
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 160, maxHeight: 40),
-      child: Image.network(
-        logoUrl,
-        fit: BoxFit.contain,
-        alignment: Alignment.centerLeft,
-        errorBuilder: (_, __, ___) => const AppLogo(iconSize: 32, fontSize: 19, onDark: true),
-      ),
+    return ClientLogoMark(
+      logoUrl: logoUrl,
+      onDarkBackground: client.logoBackground == 'dark',
+      height: 32,
+      maxWidth: 140,
     );
   }
 }

@@ -109,6 +109,21 @@ class SettingsRepository {
     return Client.fromMap(row);
   }
 
+  /// Powers Settings > Company > Branding's "Logo background" choice
+  /// (schema/037, 2026-09-04 — Craig, right after seeing the logo feature
+  /// live: "what if the colour of their logo is dark? Cannot be seen"). A
+  /// plain column update, not an upload — this never touches the logo file
+  /// itself, just how `ClientLogoMark` renders it (see that widget's own doc
+  /// comment for what 'light'/'dark' mean). `background` is expected to
+  /// already be validated to one of those two values by the caller (the
+  /// Branding card only ever offers those two options) — the column's own
+  /// check constraint (schema/037) is the real backstop against anything
+  /// else getting through.
+  Future<Client> updateClientLogoBackground(String clientId, String background) async {
+    final row = await supabase.from('clients').update({'logo_background': background}).eq('id', clientId).select().single();
+    return Client.fromMap(row);
+  }
+
   Future<int> getFiscalYearStartMonth() async {
     final row = await supabase.from('fiscal_year_settings').select('start_month').maybeSingle();
     return (row?['start_month'] as int?) ?? 3;
