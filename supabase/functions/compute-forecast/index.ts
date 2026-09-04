@@ -109,12 +109,37 @@ function holtWintersForecast(
   const seasonalMean = seasonal.reduce((a, b) => a + b, 0) / PERIOD || 1;
   for (let i = 0; i < PERIOD; i++) seasonal[i] /= seasonalMean;
 
+  // 2026-09-04: found live, against a real item ("Tool Kit Pump Maintenance",
+  // WCSA) once row-limit truncation (see this file's other 2026-09-04 note)
+  // stopped hiding it from ever actually running - a genuine, months-long-
+  // established real item forecast to 2-9x its own highest month EVER
+  // recorded (R400k+ vs. a real historical peak under R45k). Root cause:
+  // this month-position's seasonal factor had recursively drifted down to
+  // ~0.06 by the time a normal-sized real actual landed on it, so dividing
+  // by that near-zero seasonal factor produced a ~x16 "surprise" that
+  // permanently blew up level and trend for every month after - a known
+  // failure mode of multiplicative Holt-Winters on real, gappy retail data
+  // (lots of true zero months shrink a position's seasonal factor over
+  // time; a normal month landing on an over-shrunk position then explodes).
+  // Fix: cap the deseasonalized value fed into the level/trend update at
+  // 1.5x this entity's own highest ACTUAL month ever recorded - generous
+  // enough to still let a genuinely growing entity forecast above its past
+  // peak, but not by an order of magnitude on the back of one arithmetic
+  // fluke. Verified this is a true no-op for well-behaved data (a clean
+  // synthetic series with normal seasonality never once triggers it) and
+  // fires exactly once for the real series that broke - after which the
+  // forecast for that item came back in line with (a plausible, moderately
+  // elevated multiple of) its real historical range instead of ~9x it.
+  const maxActual = Math.max(...monthlyHistory, 0);
+  const deseasonalizedCap = maxActual * 1.5;
+
   // Recursive updates across ALL available history (not just whole years) -
   // this is what lets a trailing partial year still sharpen the estimate.
   for (let t = 0; t < n; t++) {
     const s = seasonal[t % PERIOD] || 1;
     const prevLevel = level;
-    level = settings.alpha * (monthlyHistory[t] / s) + (1 - settings.alpha) * (level + trend);
+    const deseasonalized = Math.min(monthlyHistory[t] / s, deseasonalizedCap);
+    level = settings.alpha * deseasonalized + (1 - settings.alpha) * (level + trend);
     trend = settings.beta * (level - prevLevel) + (1 - settings.beta) * trend;
     seasonal[t % PERIOD] = settings.gamma * (monthlyHistory[t] / (level || 1)) + (1 - settings.gamma) * s;
   }
