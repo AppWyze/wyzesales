@@ -295,6 +295,32 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   bool _dimensionLoading = false;
   String? _dimensionError;
 
+  /// 2026-09-04 (Decisions doc Section 82) — every call to `_loadDimension`
+  /// increments this and captures its own value; a completion only applies
+  /// its result if this still matches, i.e. no NEWER call has started since.
+  /// Needed because `_dimensionData` is a plain field `setState`-assigned
+  /// directly from `_loadDimension`'s own async completion, unlike
+  /// `_kpiFuture` (reassigned wholesale and read through a `FutureBuilder`
+  /// via `AsyncSection`, which already discards a stale Future's eventual
+  /// result the moment a newer Future replaces it — see AsyncSection's own
+  /// doc comment for why that's safe with no extra guard needed there).
+  /// Before this, the only staleness guard was "is the BREAKDOWN DIMENSION
+  /// still what it was" (`dimension != _dimension`) — real for the picker
+  /// changing, but blind to a GLOBAL FILTER change firing a second
+  /// `_loadDimension()` call (via the `ref.listen` below) while an earlier,
+  /// less-filtered call from before the filter was applied was still in
+  /// flight: if that earlier, larger, unfiltered query happened to take
+  /// LONGER and complete AFTER the newer, narrower one, its stale result
+  /// would silently overwrite the correct one, with the dimension-only guard
+  /// never catching it (the breakdown dimension hadn't changed, only the
+  /// filters had). Exactly what Craig caught: Customer + Item filtered,
+  /// "Customer breakdown" showed a handful of entirely different customers
+  /// (the page's own original, pre-filter top-5-ish load, arriving last) —
+  /// look correct at a glance, so previous review checked cross-dimension
+  /// consistency but never caught two REQUESTS for the SAME data
+  /// resolving out of order.
+  int _dimensionRequestId = 0;
+
   /// The active dimension filters, with Year/Month stripped — the KPI row
   /// and pies are already "as of right now" (MTD/YTD relative to today), so
   /// a global Year/Month filter has no well-defined meaning on this screen;
@@ -930,6 +956,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   Future<void> _loadDimension() async {
     final dimension = _dimension;
+    // Claim this call's own id BEFORE the first await — see
+    // `_dimensionRequestId`'s own doc comment for why this, not just
+    // `dimension != _dimension`, is the guard that actually matters here.
+    final requestId = ++_dimensionRequestId;
     try {
       final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
       final filters = _dashboardFilters(ref.read(globalFiltersProvider));
@@ -941,7 +971,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
         ref.read(referenceDataRepositoryProvider).namesFor(dimension),
       ]);
-      if (!mounted || dimension != _dimension) return; // a newer dimension pick already superseded this one
+      if (!mounted || requestId != _dimensionRequestId) return; // a newer load (filter change, dimension pick, or refresh) already superseded this one
       setState(() {
         _dimensionData = _DimensionRawData(
           rows: results[0] as List<DimensionMonthlySales>,
@@ -952,7 +982,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         _dimensionError = null;
       });
     } catch (error) {
-      if (!mounted || dimension != _dimension) return;
+      if (!mounted || requestId != _dimensionRequestId) return;
       setState(() {
         _dimensionLoading = false;
         _dimensionError = error.toString();
