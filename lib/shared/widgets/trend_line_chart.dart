@@ -39,6 +39,8 @@ class TrendLineChart extends StatefulWidget {
     required this.axisValueFormatter,
     required this.detailValueFormatter,
     this.targetBars,
+    this.targetShareBars,
+    this.targetBasisBars,
     this.targetLabel,
     this.targetColor,
     this.targetTooltip,
@@ -61,6 +63,23 @@ class TrendLineChart extends StatefulWidget {
   /// Left null entirely to render no overlay at all (the chart's original,
   /// bars-free appearance).
   final List<num?>? targetBars;
+
+  /// 2026-09-04: one entry per `categories` index, aligned to [targetBars]
+  /// — the share (0.422 for "42.2%") actually applied to derive that
+  /// month's bar, when it's a derived estimate rather than a real entered
+  /// figure. Shown alongside the bar's own value in the hover/tap detail
+  /// row (e.g. "Estimated Target (FY2027)  R675,974  (42.2% of Item:
+  /// Multistage Vertical Pump)") so the reader doesn't have to
+  /// reverse-engineer the percentage by hand. Leave null (or leave an
+  /// individual entry null) to omit the share from that row entirely —
+  /// a real, non-estimated target has no "share" to show.
+  final List<double?>? targetShareBars;
+
+  /// Paired with [targetShareBars]: which basis produced that month's
+  /// figure (e.g. "Item: Multistage Vertical Pump" or "Company"). Shown
+  /// together — a share with no basis label (or vice versa) is treated as
+  /// "nothing to add," same as either being null.
+  final List<String?>? targetBasisBars;
 
   /// Legend text for the overlay (e.g. "Target (FY2029)" or "Estimated
   /// Target (FY2029)" — see the caller for when each applies). Ignored if
@@ -100,6 +119,21 @@ class _TrendLineChartState extends State<TrendLineChart> {
     final rounded = count == 1 ? 0 : (relative * (count - 1)).round();
     final index = rounded < 0 ? 0 : (rounded > count - 1 ? count - 1 : rounded);
     if (index != _hoverIndex) setState(() => _hoverIndex = index);
+  }
+
+  /// 2026-09-04 — see [targetShareBars]'s own doc comment. `index` is only
+  /// ever called with `widget.targetBars![index] != null` already checked
+  /// by the caller, so the value itself is always safe to read here.
+  String _targetDetailText(int index) {
+    final value = widget.targetBars![index]!;
+    final base = '${widget.targetLabel}  ${widget.detailValueFormatter(value)}';
+    final shareBars = widget.targetShareBars;
+    final basisBars = widget.targetBasisBars;
+    if (shareBars == null || basisBars == null || index >= shareBars.length || index >= basisBars.length) return base;
+    final share = shareBars[index];
+    final basis = basisBars[index];
+    if (share == null || basis == null) return base;
+    return '$base  (${(share * 100).toStringAsFixed(1)}% of $basis)';
   }
 
   int? _lastIndexWithData() {
@@ -147,7 +181,7 @@ class _TrendLineChartState extends State<TrendLineChart> {
                               activeIndex < widget.targetBars!.length &&
                               widget.targetBars![activeIndex] != null)
                             Text(
-                              '${widget.targetLabel}  ${widget.detailValueFormatter(widget.targetBars![activeIndex]!)}',
+                              _targetDetailText(activeIndex),
                               style: textTheme.bodyMedium?.copyWith(
                                 color: widget.targetColor ?? Colors.grey,
                                 fontWeight: FontWeight.w600,

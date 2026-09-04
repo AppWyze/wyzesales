@@ -104,6 +104,137 @@ void main() {
       final result = deriveProportionalTarget(companyTarget: 1000, totalActual: 500, filteredActual: 0);
       expect(result, 0);
     });
+
+    test('null when totalActual is negative — a negative denominator would flip the derived sign in a way '
+        'nobody reading the chart would expect (2026-09-04)', () {
+      expect(deriveProportionalTarget(companyTarget: 1000, totalActual: -200, filteredActual: 10), isNull);
+    });
+
+    test('a negative filteredActual (heavier credit notes than invoices that period) floors the derived '
+        'target at 0 rather than going negative (2026-09-04)', () {
+      final result = deriveProportionalTarget(companyTarget: 1000, totalActual: 500, filteredActual: -50);
+      expect(result, 0);
+    });
+  });
+
+  group('sumTrailingWindow', () {
+    test('sums exactly the trailing N months ending at (and including) endMonth', () {
+      final series = [
+        (month: DateTime(2027, 7), value: 100),
+        (month: DateTime(2027, 8), value: 200),
+        (month: DateTime(2027, 9), value: 300),
+      ];
+      expect(sumTrailingWindow(series: series, endMonth: DateTime(2027, 9), windowMonths: 3), 600);
+    });
+
+    test('windowMonths: 1 is just the exact month, ignoring everything else in the series', () {
+      final series = [
+        (month: DateTime(2027, 8), value: 200),
+        (month: DateTime(2027, 9), value: 300),
+      ];
+      expect(sumTrailingWindow(series: series, endMonth: DateTime(2027, 9), windowMonths: 1), 300);
+    });
+
+    test('crosses a fiscal year boundary correctly — pure calendar-month arithmetic, not fiscal-aware', () {
+      final series = [
+        (month: DateTime(2026, 11), value: 10),
+        (month: DateTime(2026, 12), value: 20),
+        (month: DateTime(2027, 1), value: 30),
+      ];
+      expect(sumTrailingWindow(series: series, endMonth: DateTime(2027, 1), windowMonths: 3), 60);
+    });
+
+    test('a month with no matching entry contributes 0, not an error or a skipped window', () {
+      final series = [
+        (month: DateTime(2027, 7), value: 100),
+        // August missing entirely — e.g. genuinely zero activity that month.
+        (month: DateTime(2027, 9), value: 300),
+      ];
+      expect(sumTrailingWindow(series: series, endMonth: DateTime(2027, 9), windowMonths: 3), 400);
+    });
+
+    test('entries outside the window are ignored even though they\'re in the same series', () {
+      final series = [
+        (month: DateTime(2027, 6), value: 999), // one month before the window starts
+        (month: DateTime(2027, 7), value: 10),
+        (month: DateTime(2027, 8), value: 20),
+        (month: DateTime(2027, 9), value: 30),
+      ];
+      expect(sumTrailingWindow(series: series, endMonth: DateTime(2027, 9), windowMonths: 3), 60);
+    });
+
+    test('defaults to kTargetTrailingWindowMonths (3) when windowMonths is omitted', () {
+      final series = [
+        (month: DateTime(2027, 7), value: 10),
+        (month: DateTime(2027, 8), value: 20),
+        (month: DateTime(2027, 9), value: 30),
+      ];
+      expect(sumTrailingWindow(series: series, endMonth: DateTime(2027, 9)), 60);
+      expect(kTargetTrailingWindowMonths, 3);
+    });
+  });
+
+  group('deriveHierarchicalTarget', () {
+    test('uses the first candidate that has both a real target and a positive own-actual', () {
+      final result = deriveHierarchicalTarget(
+        candidates: const [
+          TargetBasisCandidate(label: 'Item: Multistage Vertical Pump', target: 400000, ownActual: 100000),
+          TargetBasisCandidate(label: 'Company', target: 1600646, ownActual: 556250),
+        ],
+        filteredActual: 30000,
+      );
+      expect(result, isNotNull);
+      expect(result!.basisLabel, 'Item: Multistage Vertical Pump');
+      expect(result.share, closeTo(0.3, 0.0001));
+      expect(result.value, closeTo(400000 * 0.3, 0.01));
+    });
+
+    test('skips a candidate with no real entered target and falls through to the next one', () {
+      final result = deriveHierarchicalTarget(
+        candidates: const [
+          TargetBasisCandidate(label: 'Item: Multistage Vertical Pump', target: null, ownActual: 100000),
+          TargetBasisCandidate(label: 'Company', target: 1600646, ownActual: 556250),
+        ],
+        filteredActual: 234912,
+      );
+      expect(result, isNotNull);
+      expect(result!.basisLabel, 'Company');
+    });
+
+    test('skips a candidate with a zero own-actual (nothing to take a share of) and falls through', () {
+      final result = deriveHierarchicalTarget(
+        candidates: const [
+          TargetBasisCandidate(label: 'Customer: Nelson Mandela Bay Utilities', target: 50000, ownActual: 0),
+          TargetBasisCandidate(label: 'Company', target: 1600646, ownActual: 556250),
+        ],
+        filteredActual: 234912,
+      );
+      expect(result, isNotNull);
+      expect(result!.basisLabel, 'Company');
+    });
+
+    test('null when every candidate fails to qualify, Company included', () {
+      final result = deriveHierarchicalTarget(
+        candidates: const [
+          TargetBasisCandidate(label: 'Item: Multistage Vertical Pump', target: null, ownActual: 100000),
+          TargetBasisCandidate(label: 'Company', target: null, ownActual: 556250),
+        ],
+        filteredActual: 234912,
+      );
+      expect(result, isNull);
+    });
+
+    test('null when filteredActual itself is null, regardless of how many candidates would otherwise qualify', () {
+      final result = deriveHierarchicalTarget(
+        candidates: const [TargetBasisCandidate(label: 'Company', target: 1600646, ownActual: 556250)],
+        filteredActual: null,
+      );
+      expect(result, isNull);
+    });
+
+    test('an empty candidate list always derives null', () {
+      expect(deriveHierarchicalTarget(candidates: const [], filteredActual: 1000), isNull);
+    });
   });
 
   group('resolveTarget', () {

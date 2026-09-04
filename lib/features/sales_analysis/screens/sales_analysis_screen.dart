@@ -149,13 +149,39 @@ class _GraphData {
   /// overlay" rather than breaking the whole chart.
   final List<num?> targetBars;
 
+  /// The share actually applied at each month (`targetBars[i] / that
+  /// month's winning basis's own actual`) — e.g. 0.422 for "42.2%". Only
+  /// meaningful alongside `targetIsEstimated: true`; every entry is null for
+  /// a real entered target (there's no "share" to speak of — it's just what
+  /// was typed into Budgets). 2026-09-04, Craig, after having to reverse-
+  /// engineer this exact percentage by hand to sanity-check a number:
+  /// surfaced directly so nobody else has to.
+  final List<double?> targetShareBars;
+
+  /// Which basis produced each month's derived figure — e.g. "Item:
+  /// Multistage Vertical Pump" or "Company" — see
+  /// core/utils/target_overlay.dart's `deriveHierarchicalTarget`. Can
+  /// genuinely differ month to month (one month's Item might have a real
+  /// entered target while another month's doesn't, falling through to
+  /// Company that month instead), which is why this is a per-month list
+  /// rather than one label for the whole overlay. Null wherever
+  /// `targetBars` is null, and always null for a real (non-estimated)
+  /// target.
+  final List<String?> targetBasisBars;
+
   /// True when `targetBars` is a derived, proportional estimate (2+
   /// dimension filters active at once — see core/utils/target_overlay.dart)
   /// rather than a real entered Budgets figure. Drives both the legend
   /// label and the bars' own visual treatment.
   final bool targetIsEstimated;
 
-  const _GraphData({required this.rows, required this.targetBars, required this.targetIsEstimated});
+  const _GraphData({
+    required this.rows,
+    required this.targetBars,
+    required this.targetShareBars,
+    required this.targetBasisBars,
+    required this.targetIsEstimated,
+  });
 }
 
 class _GraphTab extends ConsumerStatefulWidget {
@@ -178,6 +204,12 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   // month label itself (_groupByMonth), so a different rotation never
   // changes which value a point shows, only which month starts the x-axis.
   late final List<String> _months;
+  // Pulled out to its own field (2026-09-04) — the original single use in
+  // initState was a local, but _loadTargetBars' new trailing-window
+  // calculation needs the client's own fiscal start month too (to map a
+  // fiscal month label like 'Sep' back to the specific calendar date it
+  // falls on in the current fiscal year, via calendarMonthStartFor).
+  late final int _startMonth;
   late Future<_GraphData> _future;
 
   // Same overlapping-batch guard as dashboard_screen.dart's own
@@ -197,13 +229,13 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   @override
   void initState() {
     super.initState();
-    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
-    final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
+    _startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: _startMonth);
     final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     // Oldest-to-newest so the chart's series order (and its legend) reads
     // left-to-right the same way the lines do on screen.
     _fiscalYears = fiscalYearWindow(currentFy, historyYears);
-    _months = fiscalMonthOrderFor(startMonth: startMonth);
+    _months = fiscalMonthOrderFor(startMonth: _startMonth);
     _future = _load(ref.read(globalFiltersProvider))
       ..whenComplete(() {
         _initialLoadInFlight = false;
@@ -229,10 +261,34 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   Future<_GraphData> _load(GlobalFilters filters) async {
     final repo = ref.read(salesRepositoryProvider);
     final rows = await repo.fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: _graphFilters(filters));
-    final currentYearRows = rows.where((r) => r.fiscalYear == _fiscalYears.last).toList();
-    final target = await _loadTargetBars(filters: filters, currentYearActualRows: currentYearRows);
-    return _GraphData(rows: rows, targetBars: target.bars, targetIsEstimated: target.isEstimated);
+    final target = await _loadTargetBars(filters: filters);
+    return _GraphData(
+      rows: rows,
+      targetBars: target.bars,
+      targetShareBars: target.shares,
+      targetBasisBars: target.basisLabels,
+      targetIsEstimated: target.isEstimated,
+    );
   }
+
+  /// Builds a filters object with ONLY `dimension` set — used by the 2+
+  /// filter branch below to fetch one candidate basis's own actual revenue
+  /// in isolation, ignoring whatever ELSE is currently filtered. `company`
+  /// never reaches this (it's excluded from `SalesDimension.filterable`,
+  /// the only source of `dimension` values this is ever called with) — the
+  /// arm exists purely to satisfy the switch's exhaustiveness check.
+  GlobalFilters _onlyDimension(SalesDimension dimension, FilterSelection selection) {
+    return switch (dimension) {
+      SalesDimension.salesPerson => GlobalFilters(salesPerson: selection),
+      SalesDimension.category => GlobalFilters(category: selection),
+      SalesDimension.customer => GlobalFilters(customer: selection),
+      SalesDimension.item => GlobalFilters(item: selection),
+      SalesDimension.branch => GlobalFilters(branch: selection),
+      SalesDimension.company => const GlobalFilters(),
+    };
+  }
+
+  Iterable<MonthlyValue> _asSeries(List<ConsolidatedSales> rows) => rows.map((r) => (month: r.month, value: r.value));
 
   /// Target overlay bars for the CURRENT fiscal year only (Craig,
   /// 2026-09-03 — see _GraphData's own doc comment). Three cases, per
@@ -240,21 +296,28 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   ///   - 0 dimension filters active: the real, entered Company target.
   ///   - exactly 1 active: that dimension+entity's own real entered target.
   ///   - 2+ active at once: no real target exists for that exact
-  ///     combination (Decisions doc Section 58), so one is derived as this
-  ///     combination's share of whole-company actual, applied to the
-  ///     whole-company target — Craig's own worked example, confirmed with
-  ///     him before building this.
+  ///     combination (Decisions doc Section 58), so one is derived —
+  ///     originally (Section 61) as a single month's share of whole-company
+  ///     actual applied to the whole-company target; reworked 2026-09-04
+  ///     (Craig, reviewing the mechanism end to end: "please build these")
+  ///     into a trailing-window share against a hierarchical choice of
+  ///     basis — see core/utils/target_overlay.dart's own doc comments for
+  ///     the full reasoning behind both changes.
   /// Wrapped in try/catch: a failure here (a Budgets/Performance-side
   /// hiccup) degrades to "no overlay" rather than breaking the whole
   /// actual-revenue chart, which has nothing to do with Targets and
   /// worked fine long before this feature existed.
-  Future<({List<num?> bars, bool isEstimated})> _loadTargetBars({
+  Future<({List<num?> bars, List<double?> shares, List<String?> basisLabels, bool isEstimated})> _loadTargetBars({
     required GlobalFilters filters,
-    required List<ConsolidatedSales> currentYearActualRows,
   }) async {
+    final noOverlay = (
+      bars: List<num?>.filled(_months.length, null),
+      shares: List<double?>.filled(_months.length, null),
+      basisLabels: List<String?>.filled(_months.length, null),
+      isEstimated: false,
+    );
     try {
       final repo = ref.read(salesRepositoryProvider);
-      final currentFy = _fiscalYears.last;
       final single = singleActiveDimensionFilter(filters);
       final dimCount = activeDimensionFilterCount(filters);
 
@@ -275,39 +338,115 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
           entityCode: entityCode,
           fiscalMonthFilter: filters.fiscalMonth,
         );
-        return (bars: [for (final m in _months) byMonth[m]], isEstimated: false);
+        return (
+          bars: [for (final m in _months) byMonth[m]],
+          shares: List<double?>.filled(_months.length, null),
+          basisLabels: List<String?>.filled(_months.length, null),
+          isEstimated: false,
+        );
       }
 
-      // 2+ filters stacked: the proportional-share formula below is
-      // inherently a whole-company calculation (this combination's share OF
-      // the whole company), so it deliberately does NOT use
-      // defaultTargetScope — there's no "my own" analogue of "the whole
-      // company's actual/target" to substitute. For a non-admin login this
-      // resolves to null (schema/018 doesn't grant User/RegUser the
-      // 'company' dimension), which deriveProportionalTarget already
-      // degrades gracefully from — no estimated bar, rather than inventing
-      // a personal baseline Craig hasn't asked for.
+      // 2+ filters stacked. Every fetch below strips BOTH fiscalYear and
+      // fiscalMonth — unlike `_graphFilters` (which deliberately KEEPS
+      // fiscalMonth, narrowing the chart's own actual-revenue lines to just
+      // that one month when a global Month filter is active), the
+      // trailing-window sum below needs the months BEFORE whichever one
+      // the global filter narrows display down to, so it can't reuse the
+      // display-scoped `rows` this screen already fetched for the chart
+      // itself. Month-narrowing for the overlay is instead applied once, at
+      // the very end, to bars/shares/basisLabels together.
+      final unrestrictedFilters = filters.copyWith(fiscalYear: null, fiscalMonth: null);
+      final fullyFilteredSeries = _asSeries(
+        await repo.fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: unrestrictedFilters),
+      ).toList();
+      final totalActualSeries = _asSeries(await repo.fetchConsolidatedSales(fiscalYears: _fiscalYears)).toList();
+      // For a non-admin login this resolves to null throughout (schema/018
+      // doesn't grant User/RegUser the 'company' dimension) — the
+      // hierarchical candidate list below still tries every ACTIVELY
+      // filtered dimension's own target first, so this only matters as the
+      // final fallback, and `deriveHierarchicalTarget` already degrades
+      // gracefully (no estimated bar) if every candidate — Company
+      // included — comes up empty for a given month.
       final companyTargetByMonth = await _fetchTargetByMonth(
         dimension: SalesDimension.company,
         entityCode: 'ALL',
-        fiscalMonthFilter: filters.fiscalMonth,
+        fiscalMonthFilter: null,
       );
-      final totalActualRows = await repo.fetchConsolidatedSales(fiscalYears: [currentFy]);
 
-      final totalActualByMonth = {for (final r in totalActualRows) DateFormat('MMM').format(r.month): r.value};
-      final filteredActualByMonth = {for (final r in currentYearActualRows) DateFormat('MMM').format(r.month): r.value};
+      // One further actual-revenue fetch + one target fetch per ACTIVELY
+      // filtered dimension, in the app's canonical dimension order
+      // (SalesDimension.filterable) — each scoped to JUST that one filter,
+      // so its own trailing-window sum genuinely represents "how much of MY
+      // total came from this narrower slice," not diluted by whatever else
+      // happens to also be filtered right now. Realistically 2-3 of these
+      // for how this screen actually gets used (stacking all 5 at once
+      // isn't a real workflow), so the extra round trips stay modest.
+      final basisCandidates = <({String label, Map<String, num?> targetByMonth, List<MonthlyValue> ownSeries})>[];
+      for (final dimension in SalesDimension.filterable) {
+        final selection = filters.forDimension(dimension);
+        if (selection == null) continue;
+        final ownRows = await repo.fetchConsolidatedSales(
+          fiscalYears: _fiscalYears,
+          filters: _onlyDimension(dimension, selection),
+        );
+        final ownTargetByMonth = await _fetchTargetByMonth(
+          dimension: dimension,
+          entityCode: selection.code,
+          fiscalMonthFilter: null,
+        );
+        basisCandidates.add((label: '${dimension.label}: ${selection.label}', targetByMonth: ownTargetByMonth, ownSeries: _asSeries(ownRows).toList()));
+      }
 
-      final bars = [
-        for (final m in _months)
-          deriveProportionalTarget(
-            companyTarget: companyTargetByMonth[m],
-            totalActual: totalActualByMonth[m],
-            filteredActual: filteredActualByMonth[m],
+      final bars = <num?>[];
+      final shares = <double?>[];
+      final basisLabels = <String?>[];
+
+      for (final m in _months) {
+        final endMonth = calendarMonthStartFor(_fiscalYears.last, m, startMonth: _startMonth);
+        final filteredWindow = sumTrailingWindow(series: fullyFilteredSeries, endMonth: endMonth);
+
+        // Most-specific-first, Company last — see
+        // deriveHierarchicalTarget's own doc comment for why order matters
+        // here (a narrower candidate that qualifies dilutes the estimate
+        // through less unrelated data than Company would).
+        final candidates = <TargetBasisCandidate>[
+          for (final c in basisCandidates)
+            TargetBasisCandidate(
+              label: c.label,
+              target: c.targetByMonth[m],
+              ownActual: sumTrailingWindow(series: c.ownSeries, endMonth: endMonth),
+            ),
+          TargetBasisCandidate(
+            label: 'Company',
+            target: companyTargetByMonth[m],
+            ownActual: sumTrailingWindow(series: totalActualSeries, endMonth: endMonth),
           ),
-      ];
-      return (bars: bars, isEstimated: true);
+        ];
+
+        final result = deriveHierarchicalTarget(candidates: candidates, filteredActual: filteredWindow);
+        bars.add(result?.value);
+        shares.add(result?.share);
+        basisLabels.add(result?.basisLabel);
+      }
+
+      // Same scoping fetchDimensionPerformance's own p_fiscal_month param
+      // gives, and what `_fetchTargetByMonth`'s own tail used to do for
+      // this method before its fetches were all switched to
+      // fiscalMonthFilter: null above: with a global Month filter active,
+      // only that one month's bar (and its share/basis) should show.
+      if (filters.fiscalMonth != null) {
+        for (var i = 0; i < _months.length; i++) {
+          if (_months[i] != filters.fiscalMonth) {
+            bars[i] = null;
+            shares[i] = null;
+            basisLabels[i] = null;
+          }
+        }
+      }
+
+      return (bars: bars, shares: shares, basisLabels: basisLabels, isEstimated: true);
     } catch (_) {
-      return (bars: List<num?>.filled(_months.length, null), isEstimated: false);
+      return noOverlay;
     }
   }
 
@@ -502,14 +641,29 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // nothing entered) — same as the chart, no point in an all-dash column.
     final includeTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
     final targetHeader = includeTarget ? (data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})') : null;
+    // 2026-09-04, Craig — same "surface the actual percentage" request that
+    // added it to the chart's own hover row: only meaningful for a derived
+    // estimate (a real target has no "share"/"basis" to report), so these
+    // two extra columns are skipped entirely for the exact-single-dimension
+    // case, same as `includeTarget` itself already skips the whole Target
+    // column when nothing was ever entered at all.
+    final includeTargetBasis = includeTarget && data.targetIsEstimated;
     return ExportData(
-      headers: ['Month', for (final fy in _fiscalYears) 'FY$fy', if (targetHeader != null) targetHeader],
+      headers: [
+        'Month',
+        for (final fy in _fiscalYears) 'FY$fy',
+        if (targetHeader != null) targetHeader,
+        if (includeTargetBasis) 'Target Basis',
+        if (includeTargetBasis) 'Target Share %',
+      ],
       rows: [
         for (var i = 0; i < _months.length; i++)
           [
             _months[i],
             for (final fy in _fiscalYears) _formatOrDash(_valueFor(byMonth, _months[i], fy)),
             if (includeTarget) _formatOrDash(data.targetBars[i]),
+            if (includeTargetBasis) data.targetBasisBars[i] ?? '—',
+            if (includeTargetBasis) _formatShareOrDash(data.targetShareBars[i]),
           ],
       ],
       fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
@@ -518,6 +672,8 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   }
 
   String _formatOrDash(num? value) => value == null ? '—' : formatRand(value);
+
+  String _formatShareOrDash(double? share) => share == null ? '—' : '${(share * 100).toStringAsFixed(1)}%';
 
   Widget _buildChart(_GraphData data) {
     final byMonth = _groupByMonth(data.rows);
@@ -566,9 +722,17 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final showTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
     final targetColor = AppColors.info.withValues(alpha: data.targetIsEstimated ? 0.30 : 0.45);
     final targetLabel = data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})';
+    // 2026-09-04, reworded alongside the trailing-window + hierarchical-
+    // basis rework (target_overlay.dart) — the exact per-month percentage
+    // and which basis produced it now show directly in the hover/tap detail
+    // row (targetShareBars/targetBasisBars below), so this static blurb only
+    // needs to explain the MECHANISM once, not repeat numbers that are
+    // already on screen per month.
     const targetTooltip =
-        'No target is entered for this exact combination of filters — this is this combination\'s share of whole-company '
-        'actual revenue, applied to the whole-company target, one fiscal month at a time.';
+        'No target is entered for this exact combination of filters. One is derived instead: the most specific of the '
+        'currently-filtered dimensions that has its own real entered target (falling back to the whole company if none '
+        'does) is scaled by this combination\'s trailing-3-month share of that basis\'s own actual revenue. Hover a point '
+        'to see the exact share and basis used for that month.';
 
     return TrendLineChart(
       categories: _months,
@@ -576,6 +740,8 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       axisValueFormatter: _compactRand,
       detailValueFormatter: (v) => formatRand(v),
       targetBars: showTarget ? data.targetBars : null,
+      targetShareBars: showTarget ? data.targetShareBars : null,
+      targetBasisBars: showTarget ? data.targetBasisBars : null,
       targetLabel: showTarget ? targetLabel : null,
       targetColor: showTarget ? targetColor : null,
       targetTooltip: showTarget && data.targetIsEstimated ? targetTooltip : null,
