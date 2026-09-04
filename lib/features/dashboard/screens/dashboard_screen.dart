@@ -82,18 +82,35 @@ enum _RankMode {
 /// Person: Sarah Naidoo) wins over the viewer's own default scope, so an
 /// admin picking a rep sees THAT rep's actual vs target, same as if that
 /// rep were signed in themselves. Falls back to the old whole-
-/// viewer's-own-scope behavior when no filter is active (unchanged) or when
-/// 2+ are stacked at once — budget_figures has no per-dimension breakdown
-/// for a combined filter (the same reason a `company` row never had a
-/// Branch/Customer/etc split), so comparing an over-narrowed Actual against
-/// an unfiltered Target would be worse than just falling back — see
-/// `_fetchWholeCompanyTarget`'s own doc comment for the full reasoning.
+/// viewer's-own-scope behavior when no filter is active (unchanged).
+///
+/// 2026-09-04 (Decisions doc Section 81): with 2+ filters stacked, Craig
+/// found the SAME "still not working correctly" problem all over again —
+/// Customer + Item both set, and this tile (and Sales Coverage, which reads
+/// the same numbers) silently fell all the way back to the unfiltered
+/// whole-company Actual AND Target, exactly as if nothing were selected.
+/// Now derives an ESTIMATED target for the 2+ case instead of giving up —
+/// see `_fetchEstimatedWholeCompanyTarget`'s own doc comment.
 class _WholeCompanyTarget {
   final num actualMtd;
   final num actualYtd;
   final num targetMtd;
   final num targetYtd;
-  const _WholeCompanyTarget({required this.actualMtd, required this.actualYtd, required this.targetMtd, required this.targetYtd});
+
+  /// True when `targetMtd`/`targetYtd` are a derived, proportional estimate
+  /// (2+ dimension filters active) rather than a real entered Budgets/
+  /// Forecast figure — drives the Dashboard's own footnote, the same
+  /// "flagged/visible in the UI" requirement Craig already set for Sales
+  /// Coverage's company-wide-average fallback just below this tile.
+  final bool isEstimated;
+
+  const _WholeCompanyTarget({
+    required this.actualMtd,
+    required this.actualYtd,
+    required this.targetMtd,
+    required this.targetYtd,
+    required this.isEstimated,
+  });
 }
 
 /// 2026-08-27 — grew from 4 plain fields (Sales/GP MTD/YTD) to the full data
@@ -116,6 +133,11 @@ class _KpiData {
   final num companyActualYtd;
   final num companyTargetMtd;
   final num companyTargetYtd;
+
+  /// See `_WholeCompanyTarget.isEstimated`'s own doc comment — carried
+  /// through to `_KpiData` so the build() method can show the footnote
+  /// without reaching back into `_fetchWholeCompanyTarget`'s own internals.
+  final bool targetIsEstimated;
 
   // Sales Coverage (task #93/#103, replaced the Quote → Order Conversion
   // tile 2026-09-02 — see Wyzesales_Rebuild_Decisions.md Section 55 for why:
@@ -190,6 +212,7 @@ class _KpiData {
     required this.companyActualYtd,
     required this.companyTargetMtd,
     required this.companyTargetYtd,
+    required this.targetIsEstimated,
     required this.ownSalesHistory,
     required this.companySalesHistory,
     required this.elapsedMonthsYtd,
@@ -388,19 +411,24 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   /// `actualFilters`: when a single filter is driving `scope`, that filter
   /// is applied here too (so Actual and Target measure the SAME entity);
   /// with zero filters active, `actualFilters` stays null and RLS alone
-  /// scopes it to the viewer's own visible rows, unchanged from before. With
-  /// 2+ filters stacked, `scope` has already fallen back to the viewer's own
-  /// default (see `_effectiveScope`), so `actualFilters` falls back to null
-  /// too here — there's no real entered target for a combined filter
-  /// (budget_figures is keyed by one dimension at a time), and comparing an
-  /// over-narrowed Actual against an unfiltered Target would be worse than
-  /// this fallback. Sales Analysis's Graph tab handles that same 2+ filter
-  /// case with a full proportional-share derivation
-  /// (`deriveHierarchicalTarget`, target_overlay.dart) — worth reusing here
-  /// too if stacking filters on the Dashboard turns out to be a common real
+  /// scopes it to the viewer's own visible rows, unchanged from before.
+  ///
+  /// 2026-09-04 (Decisions doc Section 81), SAME DAY: with 2+ filters
+  /// stacked (Craig's real example: Customer + Item), this used to fall back
+  /// to the viewer's own default scope on BOTH sides — Actual and Target
+  /// both went fully unfiltered, exactly as if nothing were selected, which
+  /// read as the identical "still showing Company Wide" bug all over again.
+  /// That was a deliberate, documented trade-off at the time ("worth
+  /// reusing [Sales Analysis's proportional-share mechanism] here too if
+  /// stacking filters on the Dashboard turns out to be a common real
   /// workflow, but that's a bigger mechanism than this compact KPI tile
-  /// needs today.
+  /// needs today") — Craig's own screenshot confirmed it IS a real workflow,
+  /// so this now delegates to `_fetchEstimatedWholeCompanyTarget`, which
+  /// does exactly that reuse.
   Future<_WholeCompanyTarget> _fetchWholeCompanyTarget(int currentFiscalYear, DateTime monthStart, GlobalFilters filters) async {
+    if (activeDimensionFilterCount(filters) >= 2) {
+      return _fetchEstimatedWholeCompanyTarget(currentFiscalYear, monthStart, filters);
+    }
     final scope = _effectiveScope(filters);
     final actualFilters = singleActiveDimensionFilter(filters) != null ? filters : null;
     final results = await Future.wait([
@@ -437,7 +465,148 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final targetMtd = targetByMonth[currentMonthLabel] ?? 0;
     final targetYtd = elapsedMonthLabels.fold<num>(0, (sum, label) => sum + (targetByMonth[label] ?? 0));
 
-    return _WholeCompanyTarget(actualMtd: actualMtd, actualYtd: actualYtd, targetMtd: targetMtd, targetYtd: targetYtd);
+    return _WholeCompanyTarget(actualMtd: actualMtd, actualYtd: actualYtd, targetMtd: targetMtd, targetYtd: targetYtd, isEstimated: false);
+  }
+
+  /// The 2+-filter branch of `_fetchWholeCompanyTarget` (Decisions doc
+  /// Section 81) — split into its own method purely for readability. Mirrors
+  /// Sales Analysis's own `_GraphTabState._loadTargetBars` 2+-filter branch
+  /// (sales_analysis_screen.dart) using the exact same, already-proven
+  /// core/utils/target_overlay.dart primitives
+  /// (`sumTrailingWindow`/`TargetBasisCandidate`/`deriveHierarchicalTarget`),
+  /// just scoped down to the two numbers this compact KPI tile actually
+  /// needs (one MTD value, one summed YTD value) instead of a full 12-month
+  /// bar array.
+  ///
+  /// The ACTUAL side now applies the FULL active filter set unconditionally
+  /// (matching Gross Profit Margin/Top 5 Customer Concentration/Returns Rate,
+  /// which have always done this) — no more falling back to unfiltered
+  /// company revenue just because 2+ filters are stacked. The TARGET side,
+  /// per fiscal month needed (the current month, plus every month YTD has
+  /// already elapsed), derives an estimate: each actively-filtered
+  /// dimension's OWN real entered target, scaled by this filter
+  /// combination's trailing-3-calendar-month share of that dimension's own
+  /// revenue — trying each candidate most-specific-first, Company last,
+  /// exactly like Sales Analysis's own ordering (a narrower candidate that
+  /// qualifies dilutes the estimate through less unrelated data than Company
+  /// would).
+  Future<_WholeCompanyTarget> _fetchEstimatedWholeCompanyTarget(
+    int currentFiscalYear,
+    DateTime monthStart,
+    GlobalFilters filters,
+  ) async {
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final salesRepo = ref.read(salesRepositoryProvider);
+    final budgetRepo = ref.read(budgetRepositoryProvider);
+    final currentMonthLabel = fiscalMonthLabelFor(monthStart);
+    // One fiscal year further back than the KPI row's other fetches need,
+    // purely so `sumTrailingWindow`'s trailing 3-CALENDAR-month windows
+    // always have real data to sum even for a fiscal month near the start of
+    // the year (e.g. a Mar-start fiscal year's own first month needs
+    // Dec/Jan/Feb, which fall in the PRIOR fiscal year) — same reasoning as
+    // Sales Analysis's own multi-year `_fiscalYears` history window.
+    final windowYears = [currentFiscalYear - 1, currentFiscalYear];
+
+    Future<Map<String, num?>> targetByMonthFor(SalesDimension dimension, String entityCode) async {
+      final results = await Future.wait([
+        budgetRepo.fetchBudget(dimension: dimension.dbValue, entityCode: entityCode),
+        budgetRepo.fetchForecast(dimension: dimension.dbValue, entityCode: entityCode),
+      ]);
+      final budgetByMonth = <String, num>{for (final b in results[0] as List<BudgetFigure>) b.fiscalMonth: b.budgetValue};
+      final forecastByMonth = <String, num>{
+        for (final f in results[1] as List<SalesForecastFigure>) f.fiscalMonth: f.forecastValue,
+      };
+      return {
+        for (final month in {...budgetByMonth.keys, ...forecastByMonth.keys})
+          month: resolveTarget(budgetValue: budgetByMonth[month], forecastValue: forecastByMonth[month]),
+      };
+    }
+
+    // Same as Sales Analysis's own `_onlyDimension` — a filters object with
+    // ONLY this one dimension set, so a candidate's "own actual" ignores
+    // whatever ELSE is currently filtered.
+    GlobalFilters onlyDimension(SalesDimension dimension, FilterSelection selection) {
+      return switch (dimension) {
+        SalesDimension.salesPerson => GlobalFilters(salesPerson: selection),
+        SalesDimension.category => GlobalFilters(category: selection),
+        SalesDimension.customer => GlobalFilters(customer: selection),
+        SalesDimension.item => GlobalFilters(item: selection),
+        SalesDimension.branch => GlobalFilters(branch: selection),
+        SalesDimension.company => const GlobalFilters(),
+      };
+    }
+
+    // One further actual-revenue fetch + one target fetch per ACTIVELY
+    // filtered dimension, in the app's canonical dimension order — same
+    // reasoning as Sales Analysis's own `basisCandidates` loop
+    // (realistically 2-3 of these; stacking all 5 at once isn't a real
+    // workflow, so the extra round trips stay modest).
+    final basisCandidates = <({String label, Map<String, num?> targetByMonth, List<MonthlyValue> ownSeries})>[];
+    for (final dimension in SalesDimension.filterable) {
+      final selection = filters.forDimension(dimension);
+      if (selection == null) continue;
+      final results = await Future.wait([
+        salesRepo.fetchConsolidatedSales(fiscalYears: windowYears, filters: onlyDimension(dimension, selection)),
+        targetByMonthFor(dimension, selection.code),
+      ]);
+      final ownRows = results[0] as List<ConsolidatedSales>;
+      basisCandidates.add((
+        label: '${dimension.label}: ${selection.label}',
+        targetByMonth: results[1] as Map<String, num?>,
+        ownSeries: [for (final r in ownRows) (month: r.month, value: r.value)],
+      ));
+    }
+
+    final companyResults = await Future.wait([
+      salesRepo.fetchConsolidatedSales(fiscalYears: windowYears),
+      targetByMonthFor(SalesDimension.company, 'ALL'),
+      salesRepo.fetchConsolidatedSales(fiscalYears: windowYears, filters: filters),
+    ]);
+    final totalActualSeries = [
+      for (final r in companyResults[0] as List<ConsolidatedSales>) (month: r.month, value: r.value),
+    ];
+    final companyTargetByMonth = companyResults[1] as Map<String, num?>;
+    final fullyFilteredRows = companyResults[2] as List<ConsolidatedSales>;
+    final fullyFilteredSeries = [for (final r in fullyFilteredRows) (month: r.month, value: r.value)];
+
+    // ACTUAL: the full active filter set, restricted back down to the
+    // current fiscal year (fullyFilteredRows spans windowYears, one year
+    // wider, purely for the trailing-window math below).
+    num actualMtd = 0, actualYtd = 0;
+    for (final row in fullyFilteredRows) {
+      if (row.fiscalYear != currentFiscalYear) continue;
+      actualYtd += row.value;
+      if (row.month.year == monthStart.year && row.month.month == monthStart.month) actualMtd += row.value;
+    }
+    final elapsedMonthLabels = fullyFilteredRows
+        .where((r) => r.fiscalYear == currentFiscalYear)
+        .map((r) => fiscalMonthLabelFor(r.month))
+        .toSet();
+
+    // TARGET: one hierarchical derivation per month actually needed (the
+    // current month for MTD, every elapsed month for YTD) — see this
+    // method's own doc comment for the exact mechanism.
+    final monthsNeeded = {currentMonthLabel, ...elapsedMonthLabels};
+    final derivedTargetByMonth = <String, num>{};
+    for (final m in monthsNeeded) {
+      final endMonth = calendarMonthStartFor(currentFiscalYear, m, startMonth: startMonth);
+      final filteredWindow = sumTrailingWindow(series: fullyFilteredSeries, endMonth: endMonth);
+      final candidates = <TargetBasisCandidate>[
+        for (final c in basisCandidates)
+          TargetBasisCandidate(label: c.label, target: c.targetByMonth[m], ownActual: sumTrailingWindow(series: c.ownSeries, endMonth: endMonth)),
+        TargetBasisCandidate(
+          label: 'Company',
+          target: companyTargetByMonth[m],
+          ownActual: sumTrailingWindow(series: totalActualSeries, endMonth: endMonth),
+        ),
+      ];
+      derivedTargetByMonth[m] = deriveHierarchicalTarget(candidates: candidates, filteredActual: filteredWindow)?.value ?? 0;
+    }
+
+    final targetMtd = derivedTargetByMonth[currentMonthLabel] ?? 0;
+    final targetYtd = elapsedMonthLabels.fold<num>(0, (sum, label) => sum + (derivedTargetByMonth[label] ?? 0));
+
+    return _WholeCompanyTarget(actualMtd: actualMtd, actualYtd: actualYtd, targetMtd: targetMtd, targetYtd: targetYtd, isEstimated: true);
   }
 
   Future<_KpiData> _loadKpis() async {
@@ -585,6 +754,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         }
       }
     }
+    // 2026-09-04 (Decisions doc Section 81): with 2+ filters stacked,
+    // `coverageScope` has already fallen back to the viewer's own scope
+    // (`_effectiveScope`) — that's a real history, just not THIS filter
+    // combination's own history, and using it here without saying so would
+    // silently mislabel a stacked-filter estimate as "your own" data.
+    // Forcing `own` to null here routes it through `computeCoverage`'s
+    // ALREADY-BUILT, already-flagged company-wide-average fallback (Craig's
+    // own requirement: a fallback "must be flagged/visible in the UI") —
+    // the same footnote just gets an extra reason to show, rather than this
+    // needing a new mechanism of its own.
+    if (activeDimensionFilterCount(filters) >= 2) ownSalesHistory = null;
     final customerMonthlyRows = results[3] as List<DimensionMonthlySales>;
     final repBudgetRows = results[4] as List<BudgetFigure>;
     final repMonthlyRows = results[5] as List<DimensionMonthlySales>;
@@ -727,6 +907,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       companyActualYtd: wholeCompanyTarget.actualYtd,
       companyTargetMtd: wholeCompanyTarget.targetMtd,
       companyTargetYtd: wholeCompanyTarget.targetYtd,
+      targetIsEstimated: wholeCompanyTarget.isEstimated,
       ownSalesHistory: ownSalesHistory,
       companySalesHistory: companySalesHistory,
       elapsedMonthsYtd: elapsedFiscalMonths.length,
@@ -1204,6 +1385,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       // instead of taking up a KPI slot here.
                     ],
                   ),
+                  // Estimated-target flag (2026-09-04, Decisions doc Section
+                  // 81) — shown whenever 2+ dimension filters are stacked at
+                  // once, the same "must be flagged/visible in the UI"
+                  // requirement Craig set for Sales Coverage's own fallback
+                  // footnote just below. Covers BOTH tiles it affects
+                  // (Revenue Target Attainment directly, Sales Coverage's Gap
+                  // since it reads the same target/actual numbers) in one
+                  // note rather than repeating the explanation twice.
+                  if (kpis.targetIsEstimated) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '* Revenue Target Attainment and Sales Coverage show an estimated target — '
+                      'no target is entered for this exact combination of filters, so it\'s derived '
+                      'as a proportional share of one of your filters\' own target.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic, color: neutralMuted),
+                    ),
+                  ],
                   // Sales Coverage's fallback flag (2026-09-03, Section 68) —
                   // Craig required this be "flagged/visible in the UI when
                   // this fallback is used," same requirement Performance
