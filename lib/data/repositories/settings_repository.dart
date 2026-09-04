@@ -110,9 +110,12 @@ class SettingsRepository {
   /// their own at every call site.
   Future<DataLoadRun?> getLatestDataLoadRun() async {
     try {
-      final row = await supabase.from('data_load_runs').select().order('started_at', ascending: false).limit(1).maybeSingle();
-      if (row == null) return null;
-      return DataLoadRun.fromMap(row);
+      // .order().limit(1) then index into the list - same shape as
+      // lastDataUpdateProvider's own query (app_providers.dart) - rather than
+      // chaining .maybeSingle(), which nothing else in this codebase does yet.
+      final rows = await supabase.from('data_load_runs').select().order('started_at', ascending: false).limit(1);
+      if (rows.isEmpty) return null;
+      return DataLoadRun.fromMap(rows.first);
     } catch (_) {
       return null;
     }
