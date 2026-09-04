@@ -69,12 +69,25 @@ enum _RankMode {
   final String label;
 }
 
-/// Whole-company Actual vs Target, MTD/YTD — read by the KPI row's Revenue
-/// Target Attainment tile. Deliberately NOT filtered by the 5 global
-/// dimension filters: budget_figures has no per-Branch/Customer/etc
-/// breakdown for a `dimension = 'company'` row, so filtering only the
-/// Actual side would produce a mismatched comparison against an unfiltered
-/// Target.
+/// Actual vs Target, MTD/YTD — read by the KPI row's Revenue Target
+/// Attainment tile. Despite the name (kept to avoid a wider rename — this
+/// used to always be whole-company), this is no longer always the literal
+/// company total: 2026-09-04, Craig reported "I have selected a sales
+/// person but it is still showing Company Wide. If I log in as a Sales
+/// Person then it is correct" — this used to resolve its scope from
+/// `defaultTargetScope(profile)` alone (the SIGNED-IN user's own level),
+/// completely ignoring whatever global dimension filter an admin had
+/// manually picked on screen. Now resolves via `_effectiveScope` (see its
+/// own doc comment) instead: a single active global filter (e.g. Sales
+/// Person: Sarah Naidoo) wins over the viewer's own default scope, so an
+/// admin picking a rep sees THAT rep's actual vs target, same as if that
+/// rep were signed in themselves. Falls back to the old whole-
+/// viewer's-own-scope behavior when no filter is active (unchanged) or when
+/// 2+ are stacked at once — budget_figures has no per-dimension breakdown
+/// for a combined filter (the same reason a `company` row never had a
+/// Branch/Customer/etc split), so comparing an over-narrowed Actual against
+/// an unfiltered Target would be worse than just falling back — see
+/// `_fetchWholeCompanyTarget`'s own doc comment for the full reasoning.
 class _WholeCompanyTarget {
   final num actualMtd;
   final num actualYtd;
@@ -96,7 +109,8 @@ class _KpiData {
   final num profitYtd;
 
   // Revenue Target Attainment reads these — see _WholeCompanyTarget's doc
-  // comment for why this is whole-company, and _fetchWholeCompanyTarget's
+  // comment for what scope these actually resolve to (no longer always
+  // whole-company, despite the field names), and _fetchWholeCompanyTarget's
   // doc comment for the one call site that computes them.
   final num companyActualMtd;
   final num companyActualYtd;
@@ -142,10 +156,14 @@ class _KpiData {
   final num totalCustomerValueYtd;
   final int top5CustomerCountYtd;
 
-  // Rep Target Attainment — also whole-company; budget_figures carries no
-  // per-Branch/Category/etc split on top of the rep themselves, so the 5
-  // dashboard filters have no clean way to narrow "which reps" beyond what
-  // a Sales Person filter already would on every other screen.
+  // Rep Target Attainment — whole roster (every rep with a target this
+  // period) by default, since budget_figures carries no per-Branch/
+  // Category/etc split on top of the rep themselves for the other 4
+  // dashboard filters to narrow by. 2026-09-04: when a Sales Person filter
+  // IS active, `_loadKpis` narrows these four down to that one rep (1 of 1 /
+  // 0 of 1) instead — see the "narrow to the filtered rep" block in
+  // `_loadKpis` for why a Sales Person filter specifically gets this
+  // treatment when the other 4 don't.
   final int repsAtTargetMtd;
   final int repsTotalMtd;
   final int repsAtTargetYtd;
@@ -299,6 +317,24 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     _loadDimension();
   }
 
+  /// Resolves which single (dimension, entityCode) pair Revenue Target
+  /// Attainment and Sales Coverage's own-history baseline should measure
+  /// against — 2026-09-04, fixing Craig's report that these tiles ignored a
+  /// manually applied global filter (see `_fetchWholeCompanyTarget`'s own
+  /// doc comment for the full story). Reuses the exact same
+  /// `singleActiveDimensionFilter` mechanism Sales Analysis's own Target
+  /// overlay already established for this identical problem
+  /// (target_overlay.dart, sales_analysis_screen.dart's `_loadTargetBars`) —
+  /// a single active filter (exactly one of the 5 filterable dimensions)
+  /// wins over the viewer's own `defaultTargetScope`; zero or 2+ active
+  /// filters fall back to `defaultTargetScope` unchanged, same as before
+  /// this fix.
+  ({SalesDimension dimension, String entityCode}) _effectiveScope(GlobalFilters filters) {
+    final single = singleActiveDimensionFilter(filters);
+    if (single != null) return (dimension: single.dimension, entityCode: single.selection.code);
+    return defaultTargetScope(ref.read(sessionProvider).value);
+  }
+
   /// Actual (v_consolidated_sales) vs Target (budget_figures) numbers for
   /// the KPI row's Revenue Target Attainment tile (`_KpiData.companyActualMtd`
   /// /etc. — field names kept even though this is no longer always
@@ -337,10 +373,38 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   /// already does this same `resolveTarget` fallback, Section 62 — showed
   /// the real number for the exact same rep/month). Same gap existed for
   /// Rep Target Attainment below, fixed the same way.
-  Future<_WholeCompanyTarget> _fetchWholeCompanyTarget(int currentFiscalYear, DateTime monthStart) async {
-    final scope = defaultTargetScope(ref.read(sessionProvider).value);
+  ///
+  /// 2026-09-04: `scope` used to come from `defaultTargetScope(profile)`
+  /// alone — the SIGNED-IN user's own level — with no way for a manually
+  /// applied global dimension filter to ever change it. Craig: "I have
+  /// selected a sales person but it is still showing Company Wide. If I log
+  /// in as a Sales Person then it is correct" — exactly this: an admin's own
+  /// `defaultTargetScope` is always `company`, so picking Sales Person:
+  /// Sarah Naidoo on the filter bar had zero effect here even though it
+  /// correctly narrowed Gross Profit Margin and the Customer pies right next
+  /// to it. `scope` now comes from `_effectiveScope` (see its own doc
+  /// comment) — a single active global filter wins over the viewer's own
+  /// default scope. The ACTUAL side follows the same rule via
+  /// `actualFilters`: when a single filter is driving `scope`, that filter
+  /// is applied here too (so Actual and Target measure the SAME entity);
+  /// with zero filters active, `actualFilters` stays null and RLS alone
+  /// scopes it to the viewer's own visible rows, unchanged from before. With
+  /// 2+ filters stacked, `scope` has already fallen back to the viewer's own
+  /// default (see `_effectiveScope`), so `actualFilters` falls back to null
+  /// too here — there's no real entered target for a combined filter
+  /// (budget_figures is keyed by one dimension at a time), and comparing an
+  /// over-narrowed Actual against an unfiltered Target would be worse than
+  /// this fallback. Sales Analysis's Graph tab handles that same 2+ filter
+  /// case with a full proportional-share derivation
+  /// (`deriveHierarchicalTarget`, target_overlay.dart) — worth reusing here
+  /// too if stacking filters on the Dashboard turns out to be a common real
+  /// workflow, but that's a bigger mechanism than this compact KPI tile
+  /// needs today.
+  Future<_WholeCompanyTarget> _fetchWholeCompanyTarget(int currentFiscalYear, DateTime monthStart, GlobalFilters filters) async {
+    final scope = _effectiveScope(filters);
+    final actualFilters = singleActiveDimensionFilter(filters) != null ? filters : null;
     final results = await Future.wait([
-      ref.read(salesRepositoryProvider).fetchConsolidatedSales(fiscalYears: [currentFiscalYear]),
+      ref.read(salesRepositoryProvider).fetchConsolidatedSales(fiscalYears: [currentFiscalYear], filters: actualFilters),
       ref.read(budgetRepositoryProvider).fetchBudget(dimension: scope.dimension.dbValue, entityCode: scope.entityCode),
       ref.read(budgetRepositoryProvider).fetchForecast(dimension: scope.dimension.dbValue, entityCode: scope.entityCode),
     ]);
@@ -403,34 +467,47 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // Sales Coverage's historical average revenue per period — trailing
     // 3/5-year window, same `fiscalYearWindow` convention Performance
     // Analysis uses for the identical per-entity calc
-    // (core/utils/sales_coverage.dart). Deliberately NOT narrowed by
-    // `filters`, same as companyActualMtd/companyTargetMtd above — an
-    // entity's coverage baseline shouldn't shift just because a global
-    // dimension filter is active (see schema/023's own header comment).
+    // (core/utils/sales_coverage.dart).
     //
-    // 2026-09-03: this now reads the VIEWER'S OWN scope
-    // (`defaultTargetScope`, same as `_fetchWholeCompanyTarget` above) rather
-    // than always `dimension: 'company'` — see `_KpiData.ownSalesHistory`'s
-    // doc comment for why the old always-company version was wrong for any
-    // non-admin login. Admin's own scope IS `company`, so the "own" fetch
-    // would just be a second, redundant copy of the exact same query in that
-    // case — skipped entirely, reusing the company row as `own` too.
+    // 2026-09-04: this now goes through `_effectiveScope` — a single active
+    // global filter (e.g. Sales Person: Sarah Naidoo) wins over the viewer's
+    // own scope, same fix and same reasoning as `_fetchWholeCompanyTarget`'s
+    // own doc comment. schema/023's own header comment already frames
+    // Coverage as a per-entity measure (it mirrors Performance Analysis'
+    // identical per-row column there) — the OLD "deliberately not narrowed
+    // by filters" reasoning here was really just inherited from
+    // companyActualMtd/companyTargetMtd's own (since-fixed) bug, not an
+    // independent design decision, so there's nothing worth preserving by
+    // keeping this un-narrowed once that bug is fixed.
+    //
+    // 2026-09-03: this reads the RESOLVED scope's own history rather than
+    // always `dimension: 'company'` — see `_KpiData.ownSalesHistory`'s doc
+    // comment for why the old always-company version was wrong for any
+    // non-admin login. When the resolved scope IS `company` (no filter
+    // active and an Admin is looking), the "own" fetch would just be a
+    // second, redundant copy of the exact same query — skipped entirely,
+    // reusing the company row as `own` too (see the `coverageScope.dimension
+    // == SalesDimension.company` check below).
     final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     final historyWindow = fiscalYearWindow(currentFiscalYear, historyYears);
-    final coverageScope = defaultTargetScope(ref.read(sessionProvider).value);
+    final coverageScope = _effectiveScope(filters);
 
     final results = await Future.wait([
       salesRepo.fetchConsolidatedSales(fiscalYears: [currentFiscalYear], filters: filters),
-      _fetchWholeCompanyTarget(currentFiscalYear, monthStart),
+      _fetchWholeCompanyTarget(currentFiscalYear, monthStart, filters),
       salesRepo.fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
       salesRepo.fetchDimensionMonthlySales(
         dimension: SalesDimension.customer,
         fiscalYears: [currentFiscalYear],
         filters: filters,
       ),
-      // Rep Target Attainment is deliberately whole-company — no `filters`
-      // — see _KpiData's doc comment for why the 5 dashboard filters don't
-      // apply here the way they do to the rest of the row.
+      // Rep Target Attainment's own roster fetch is always whole-roster,
+      // unfiltered — narrowing down to one rep (when a Sales Person filter
+      // is active) happens AFTER these results come back, by picking that
+      // one rep out of the roster rather than querying differently — see
+      // the "narrow to the filtered rep" block below. See _KpiData's own
+      // doc comment for why the other 4 dashboard filters don't narrow this
+      // tile the way they do the rest of the row.
       ref.read(budgetRepositoryProvider).fetchBudget(dimension: 'sales_person'),
       salesRepo.fetchDimensionMonthlySales(dimension: SalesDimension.salesPerson, fiscalYears: [currentFiscalYear]),
       // Returns / Credit Note Rate — invoice and credit_note totals fetched
@@ -603,6 +680,44 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       return actualYtdForRep >= targetYtdForRep;
     }).length;
 
+    // 2026-09-04: narrow Rep Target Attainment down to just the one rep when
+    // a Sales Person global filter is active, rather than always the
+    // whole-roster count — Craig's report ("still showing Company Wide")
+    // covered this tile too, and a "0 of 6" sitting next to a dashboard
+    // that's otherwise entirely about Sarah Naidoo reads as if her own
+    // filter selection was ignored here. Only Sales Person narrows this
+    // particular tile (unlike Revenue Target Attainment/Sales Coverage
+    // above, which any of the 5 filters can drive via `_effectiveScope`) —
+    // "which reps" has no well-defined narrower meaning for a Branch/
+    // Customer/Item/Category filter or for 2+ filters stacked, so every
+    // other combination keeps the full-roster counts computed above
+    // unchanged.
+    final filteredRepCode = filters.salesPerson?.code;
+    final repsTotalMtdFinal = filteredRepCode == null ? repsWithMtdTarget.length : (repsWithMtdTarget.contains(filteredRepCode) ? 1 : 0);
+    final repsAtTargetMtdFinal = filteredRepCode == null
+        ? repsAtTargetMtd
+        : (repsWithMtdTarget.contains(filteredRepCode) &&
+                (repActualByMonth[filteredRepCode]?[currentMonthLabel] ?? 0) >= repTargetByMonth[filteredRepCode]![currentMonthLabel]!
+            ? 1
+            : 0);
+    final repsTotalYtdFinal = filteredRepCode == null ? repsWithYtdTarget.length : (repsWithYtdTarget.contains(filteredRepCode) ? 1 : 0);
+    int repsAtTargetYtdFinal;
+    if (filteredRepCode == null) {
+      repsAtTargetYtdFinal = repsAtTargetYtd;
+    } else if (repsWithYtdTarget.contains(filteredRepCode)) {
+      final targetYtdForRep = repTargetByMonth[filteredRepCode]!
+          .entries
+          .where((e) => elapsedFiscalMonths.contains(e.key))
+          .fold<num>(0, (sum, e) => sum + e.value);
+      final actualYtdForRep = (repActualByMonth[filteredRepCode] ?? const {})
+          .entries
+          .where((e) => elapsedFiscalMonths.contains(e.key))
+          .fold<num>(0, (sum, e) => sum + e.value);
+      repsAtTargetYtdFinal = actualYtdForRep >= targetYtdForRep ? 1 : 0;
+    } else {
+      repsAtTargetYtdFinal = 0;
+    }
+
     return _KpiData(
       salesMtd: salesMtd,
       salesYtd: salesYtd,
@@ -621,10 +736,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       top5CustomerValueYtd: top5Sum(customerYtdTotals),
       totalCustomerValueYtd: totalSum(customerYtdTotals),
       top5CustomerCountYtd: customerYtdTotals.length < 5 ? customerYtdTotals.length : 5,
-      repsAtTargetMtd: repsAtTargetMtd,
-      repsTotalMtd: repsWithMtdTarget.length,
-      repsAtTargetYtd: repsAtTargetYtd,
-      repsTotalYtd: repsWithYtdTarget.length,
+      repsAtTargetMtd: repsAtTargetMtdFinal,
+      repsTotalMtd: repsTotalMtdFinal,
+      repsAtTargetYtd: repsAtTargetYtdFinal,
+      repsTotalYtd: repsTotalYtdFinal,
       grossInvoicedMtd: invoiceTotalsMtd.value,
       creditNoteMtd: creditNoteTotalsMtd.value.abs(),
       grossInvoicedYtd: invoiceTotalsYtd.value,

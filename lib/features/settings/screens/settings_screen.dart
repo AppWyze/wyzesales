@@ -9,6 +9,7 @@ import '../../../data/models/client.dart';
 import '../../../data/models/data_load_run.dart';
 import '../../../data/models/license.dart';
 import '../../../data/models/profile.dart';
+import '../../../data/models/reference_data.dart';
 import '../../../shared/utils/responsive.dart';
 import '../../../shared/widgets/app_shell.dart';
 
@@ -1120,19 +1121,44 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _repCodeController = TextEditingController();
-  final _branchCodeController = TextEditingController();
+  // Picked from a dropdown now, not typed (2026-09-04, Craig — see
+  // _codeDropdown's own doc comment) — plain nullable Strings, not
+  // TextEditingControllers, since there's no free-text entry left to
+  // control.
+  String? _repCode;
+  String? _branchCode;
+  List<CodeName> _reps = const [];
+  List<CodeName> _branches = const [];
   UserLevel _level = UserLevel.user;
   bool _isLoading = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCodes();
+  }
+
+  // Fetched once, up front — the same "own picker list" ReferenceDataRepository
+  // already backs the global filter bar/Budgets' entity list with (schema/001
+  // Section 2). Starts empty; `_codeDropdown` shows just "— None —" (or,
+  // for a required field, nothing yet) until this resolves, same as
+  // `_EditCompanyDialog`'s async-seeded fiscal fields.
+  Future<void> _loadCodes() async {
+    final repo = ref.read(referenceDataRepositoryProvider);
+    final results = await Future.wait([repo.salesReps(), repo.branches()]);
+    if (!mounted) return;
+    setState(() {
+      _reps = results[0] as List<CodeName>;
+      _branches = results[1] as List<CodeName>;
+    });
+  }
 
   @override
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
-    _repCodeController.dispose();
-    _branchCodeController.dispose();
     super.dispose();
   }
 
@@ -1150,7 +1176,7 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
       setState(() => _error = 'Please fill in all required fields.');
       return;
     }
-    if (_repBranchRequired && (_repCodeController.text.trim().isEmpty || _branchCodeController.text.trim().isEmpty)) {
+    if (_repBranchRequired && (_repCode == null || _branchCode == null)) {
       setState(() => _error = 'Rep code and Branch code are required for User and RegUser levels.');
       return;
     }
@@ -1164,8 +1190,8 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
             password: _passwordController.text.trim(),
             name: _nameController.text.trim(),
             level: _level,
-            repCode: _repCodeController.text.trim().isEmpty ? null : _repCodeController.text.trim(),
-            branchCode: _branchCodeController.text.trim().isEmpty ? null : _branchCodeController.text.trim(),
+            repCode: _repCode,
+            branchCode: _branchCode,
           );
       // Bare `mounted`, not `context.mounted` — State.context, no shadowing.
       if (mounted) Navigator.of(context).pop(true);
@@ -1208,9 +1234,27 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        Expanded(child: _tf(_repBranchRequired ? 'Rep code *' : 'Rep code (optional)', _repCodeController, isDark)),
+                        Expanded(
+                          child: _codeDropdown(
+                            label: 'Rep code',
+                            options: _reps,
+                            value: _repCode,
+                            required: _repBranchRequired,
+                            isDark: isDark,
+                            onChanged: (v) => setState(() => _repCode = v),
+                          ),
+                        ),
                         const SizedBox(width: 12),
-                        Expanded(child: _tf(_repBranchRequired ? 'Branch code *' : 'Branch code (optional)', _branchCodeController, isDark)),
+                        Expanded(
+                          child: _codeDropdown(
+                            label: 'Branch code',
+                            options: _branches,
+                            value: _branchCode,
+                            required: _repBranchRequired,
+                            isDark: isDark,
+                            onChanged: (v) => setState(() => _branchCode = v),
+                          ),
+                        ),
                       ],
                     ),
                     if (_error != null) ...[
@@ -1279,8 +1323,12 @@ class _EditUserDialog extends ConsumerStatefulWidget {
 class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _contactNumberController;
-  late final TextEditingController _repCodeController;
-  late final TextEditingController _branchCodeController;
+  // Picked from a dropdown now, not typed — see _AddUserDialogState's own
+  // copy of this field/comment.
+  String? _repCode;
+  String? _branchCode;
+  List<CodeName> _reps = const [];
+  List<CodeName> _branches = const [];
   late UserLevel _level;
   bool _isLoading = false;
   String? _error;
@@ -1290,17 +1338,27 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
     super.initState();
     _nameController = TextEditingController(text: widget.user.name);
     _contactNumberController = TextEditingController(text: widget.user.contactNumber ?? '');
-    _repCodeController = TextEditingController(text: widget.user.repCode ?? '');
-    _branchCodeController = TextEditingController(text: widget.user.branchCode ?? '');
+    _repCode = widget.user.repCode;
+    _branchCode = widget.user.branchCode;
     _level = widget.user.level;
+    _loadCodes();
+  }
+
+  // See _AddUserDialogState's own copy of this method/comment.
+  Future<void> _loadCodes() async {
+    final repo = ref.read(referenceDataRepositoryProvider);
+    final results = await Future.wait([repo.salesReps(), repo.branches()]);
+    if (!mounted) return;
+    setState(() {
+      _reps = results[0] as List<CodeName>;
+      _branches = results[1] as List<CodeName>;
+    });
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _contactNumberController.dispose();
-    _repCodeController.dispose();
-    _branchCodeController.dispose();
     super.dispose();
   }
 
@@ -1314,7 +1372,7 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
       setState(() => _error = 'Full name is required.');
       return;
     }
-    if (_repBranchRequired && (_repCodeController.text.trim().isEmpty || _branchCodeController.text.trim().isEmpty)) {
+    if (_repBranchRequired && (_repCode == null || _branchCode == null)) {
       setState(() => _error = 'Rep code and Branch code are required for User and RegUser levels.');
       return;
     }
@@ -1327,8 +1385,8 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
         'name': _nameController.text.trim(),
         'contact_number': _contactNumberController.text.trim().isEmpty ? null : _contactNumberController.text.trim(),
         'level': _level.name,
-        'rep_code': _repCodeController.text.trim().isEmpty ? null : _repCodeController.text.trim(),
-        'branch_code': _branchCodeController.text.trim().isEmpty ? null : _branchCodeController.text.trim(),
+        'rep_code': _repCode,
+        'branch_code': _branchCode,
       });
       // Bare `mounted`, not `context.mounted` — State.context, no shadowing.
       if (mounted) Navigator.of(context).pop(true);
@@ -1366,9 +1424,27 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        Expanded(child: _tf(_repBranchRequired ? 'Rep code *' : 'Rep code (optional)', _repCodeController, isDark)),
+                        Expanded(
+                          child: _codeDropdown(
+                            label: 'Rep code',
+                            options: _reps,
+                            value: _repCode,
+                            required: _repBranchRequired,
+                            isDark: isDark,
+                            onChanged: (v) => setState(() => _repCode = v),
+                          ),
+                        ),
                         const SizedBox(width: 12),
-                        Expanded(child: _tf(_repBranchRequired ? 'Branch code *' : 'Branch code (optional)', _branchCodeController, isDark)),
+                        Expanded(
+                          child: _codeDropdown(
+                            label: 'Branch code',
+                            options: _branches,
+                            value: _branchCode,
+                            required: _repBranchRequired,
+                            isDark: isDark,
+                            onChanged: (v) => setState(() => _branchCode = v),
+                          ),
+                        ),
                       ],
                     ),
                     if (_error != null) ...[
@@ -2064,6 +2140,60 @@ Widget _tf(
           contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           isDense: true,
         ),
+      ),
+    ],
+  );
+}
+
+/// Rep code/Branch code picker for the Add/Edit User dialogs (2026-09-04,
+/// Craig: "Can we have a drop down to pick the required Rep Code or Branch
+/// Code from the available list" — a free-text field let an admin type a
+/// code that matches no real `sales_reps`/`branches` row at all, which for a
+/// User/RegUser login silently breaks every screen under schema/018's
+/// rep_code/branch_code-driven RLS rather than failing loudly at save time).
+/// `options` is the full picker list (ReferenceDataRepository.salesReps()/
+/// .branches()); `value` is the code currently selected, or null. When
+/// `required` is false, a leading "— None —" entry lets the field be
+/// cleared, matching what leaving the old text field blank used to do for
+/// an Admin login that doesn't need either code.
+Widget _codeDropdown({
+  required String label,
+  required List<CodeName> options,
+  required String? value,
+  required bool required,
+  required bool isDark,
+  required ValueChanged<String?> onChanged,
+}) {
+  // A `value` that no longer matches any current option — a code typed
+  // before this dropdown existed, or a rep/branch since renamed/removed —
+  // would otherwise trip DropdownButtonFormField's own assertion that
+  // `initialValue` must be one of `items`. Falls back to "nothing selected"
+  // instead, so an existing user record with a stale code doesn't make this
+  // dialog unopenable; the admin just has to re-pick it from the list.
+  final validValue = value != null && options.any((o) => o.code == value) ? value : null;
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        required ? '$label *' : '$label (optional)',
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+      ),
+      const SizedBox(height: 4),
+      DropdownButtonFormField<String?>(
+        key: ValueKey(validValue),
+        initialValue: validValue,
+        isExpanded: true,
+        decoration: const InputDecoration(
+          contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          isDense: true,
+        ),
+        style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+        items: [
+          if (!required) const DropdownMenuItem<String?>(value: null, child: Text('— None —')),
+          for (final o in options)
+            DropdownMenuItem<String?>(value: o.code, child: Text('${o.code} — ${o.displayLabel}', overflow: TextOverflow.ellipsis)),
+        ],
+        onChanged: onChanged,
       ),
     ],
   );
