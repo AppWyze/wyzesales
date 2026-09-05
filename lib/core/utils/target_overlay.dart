@@ -29,13 +29,9 @@ class ActiveDimensionFilter {
 /// selection. Year/Month/Document deliberately don't count here — they
 /// narrow WHICH period or rows are summed, not WHICH dimension's target
 /// applies to what's shown.
-int activeDimensionFilterCount(GlobalFilters filters) => [
-      filters.salesPerson,
-      filters.category,
-      filters.customer,
-      filters.item,
-      filters.branch,
-    ].where((v) => v != null).length;
+int activeDimensionFilterCount(GlobalFilters filters) => SalesDimension.filterable
+    .where((d) => filters.forDimension(d) != null)
+    .length;
 
 /// The single active dimension filter, or null when zero or more than one
 /// of the 5 real dimensions is active (see [activeDimensionFilterCount] —
@@ -43,11 +39,11 @@ int activeDimensionFilterCount(GlobalFilters filters) => [
 /// separately, since there's no `FilterSelection` to return for it).
 ActiveDimensionFilter? singleActiveDimensionFilter(GlobalFilters filters) {
   if (activeDimensionFilterCount(filters) != 1) return null;
-  if (filters.salesPerson != null) return ActiveDimensionFilter(SalesDimension.salesPerson, filters.salesPerson!);
-  if (filters.category != null) return ActiveDimensionFilter(SalesDimension.category, filters.category!);
-  if (filters.customer != null) return ActiveDimensionFilter(SalesDimension.customer, filters.customer!);
-  if (filters.item != null) return ActiveDimensionFilter(SalesDimension.item, filters.item!);
-  return ActiveDimensionFilter(SalesDimension.branch, filters.branch!);
+  for (final dimension in SalesDimension.filterable) {
+    final selection = filters.forDimension(dimension);
+    if (selection != null) return ActiveDimensionFilter(dimension, selection);
+  }
+  return null;
 }
 
 /// Craig's own worked example (2026-09-03, walked through with real

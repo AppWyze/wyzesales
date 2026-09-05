@@ -5,6 +5,7 @@ import '../../core/app_providers.dart';
 import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/models/client_dimension_config.dart';
 import '../../data/models/filter_preset.dart';
 import '../../data/models/reference_data.dart';
 import 'boxed_dropdown.dart';
@@ -28,16 +29,26 @@ class GlobalFilterBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final filters = ref.watch(globalFiltersProvider);
     final notifier = ref.read(globalFiltersProvider.notifier);
+    // 2026-09-05 (multi-tenant dimension model Step 2): this client's own
+    // configured dimension list (client_dimensions, schema/038) replaces the
+    // hardcoded `SalesDimension.filterable` this loop used to iterate —
+    // `drivesCrossFilter`, not every configured dimension, mirrors
+    // `filterable` excluding `company` exactly (see schema/038's WCSA seed
+    // comment). `valueOrNull ?? const []` (not `.when`/a loading spinner) —
+    // same "don't block rendering, just show nothing yet" approach every
+    // other FutureProvider-backed picker in this file already takes (see
+    // `_handleAdd`'s own `fiscalYearDataAvailabilityProvider` read) — WCSA's
+    // own six rows load fast enough that this is only ever visible for a
+    // single frame.
+    final filterableDimensions =
+        ref.watch(clientDimensionsProvider).valueOrNull?.where((d) => d.drivesCrossFilter).toList() ?? const <ClientDimensionConfig>[];
 
     final chips = <Widget>[
-      // `filterable`, not `values` — excludes `company` (2026-09-02, Section
-      // 57), which is never a global filter target in the first place; see
-      // `SalesDimension.filterable`'s own doc comment.
-      for (final dimension in SalesDimension.filterable)
-        if (filters.forDimension(dimension) != null)
+      for (final dimension in filterableDimensions)
+        if (filters.forKey(dimension.dimensionKey) != null)
           _RemovableChip(
-            label: '${dimension.label}: ${filters.forDimension(dimension)!.label}',
-            onDeleted: () => notifier.clearDimension(dimension),
+            label: '${dimension.displayLabel}: ${filters.forKey(dimension.dimensionKey)!.label}',
+            onDeleted: () => notifier.clearDimension(dimension.dimensionKey),
           ),
       if (filters.fiscalYear != null)
         _RemovableChip(label: 'Year: FY${filters.fiscalYear}', onDeleted: () => notifier.setFiscalYear(null)),
@@ -79,12 +90,13 @@ class GlobalFilterBar extends ConsumerWidget {
             width: 160,
             hint: const Text('Add filter'),
             items: [
-              // `filterable`, not `values` — "Company" isn't something you
-              // can narrow everything down to (it already means "no
-              // narrowing at all"), so it's deliberately not offered here
-              // (2026-09-02, Section 57; see SalesDimension.filterable).
-              for (final dimension in SalesDimension.filterable)
-                DropdownMenuItem<String?>(value: dimension.dbValue, child: Text(dimension.label)),
+              // This client's own dimensions again (see `filterableDimensions`
+              // above) — "Company" isn't something you can narrow everything
+              // down to (it already means "no narrowing at all"), so it's
+              // deliberately excluded via `drivesCrossFilter` the same way
+              // `SalesDimension.filterable` always excluded it.
+              for (final dimension in filterableDimensions)
+                DropdownMenuItem<String?>(value: dimension.dimensionKey, child: Text(dimension.displayLabel)),
               const DropdownMenuItem<String?>(value: '_year', child: Text('Year')),
               const DropdownMenuItem<String?>(value: '_month', child: Text('Month')),
               // 2026-08-27, Craig: "We need to add Document to the Filters
@@ -92,7 +104,7 @@ class GlobalFilterBar extends ConsumerWidget {
               const DropdownMenuItem<String?>(value: '_document', child: Text('Document')),
             ],
             onChanged: (key) {
-              if (key != null) _handleAdd(context, ref, notifier, filters, key);
+              if (key != null) _handleAdd(context, ref, notifier, filters, key, filterableDimensions);
             },
           ),
           // 2026-09-04, Craig: "Saved filter presets" — save/reapply the 5
@@ -123,6 +135,7 @@ class GlobalFilterBar extends ConsumerWidget {
     GlobalFiltersNotifier notifier,
     GlobalFilters filters,
     String key,
+    List<ClientDimensionConfig> filterableDimensions,
   ) async {
     // .valueOrNull ?? 3 — fiscalYearStartMonthProvider's own fallback while
     // it's still loading, matching fiscal.dart's pre-feature default exactly
@@ -192,9 +205,20 @@ class GlobalFilterBar extends ConsumerWidget {
       if (document != null) notifier.setDocument(document.isEmpty ? null : document);
       return;
     }
-    final dimension = SalesDimension.values.firstWhere((d) => d.dbValue == key);
+    final dimensionConfig = filterableDimensions.firstWhere((d) => d.dimensionKey == key);
+    // `asSalesDimension` is null for a 'fact_column'/'customer_attribute'
+    // dimension — Step 2 deliberately doesn't teach the entity picker
+    // (`_pickEntity` below, and `entitiesFor`/`searchAllDimensions` it
+    // depends on) how to search anything beyond the 6 'existing' dimensions
+    // yet, since that's real RPC/reference-data generalization work the
+    // design doc's own sequencing plan defers to Step 3. WCSA never reaches
+    // this branch — every one of its rows is 'existing' — so this is a
+    // silent no-op rather than a crash for the first client that DOES add a
+    // generic dimension, until Step 3 teaches this how to pick one.
+    final dimension = dimensionConfig.asSalesDimension;
+    if (dimension == null) return;
     final selection = await _pickEntity(context, dimension);
-    if (selection != null) notifier.setDimension(dimension, selection);
+    if (selection != null) notifier.setDimension(dimensionConfig.dimensionKey, selection);
   }
 }
 
@@ -387,12 +411,7 @@ class _PresetsDialogState extends ConsumerState<_PresetsDialog> {
   /// meaningful — the name field + Save button are hidden in favor of an
   /// explanatory line instead, rather than letting Craig save an empty
   /// preset and wonder later why applying it didn't do anything.
-  bool get _hasDimensionFilter =>
-      widget.filters.salesPerson != null ||
-      widget.filters.category != null ||
-      widget.filters.customer != null ||
-      widget.filters.item != null ||
-      widget.filters.branch != null;
+  bool get _hasDimensionFilter => widget.filters.hasAnyDimensionSelected;
 
   Future<void> _save() async {
     final name = _nameController.text.trim();
@@ -417,7 +436,7 @@ class _PresetsDialogState extends ConsumerState<_PresetsDialog> {
   /// rather than a merge. Year/Month/Document are never touched.
   void _apply(FilterPreset preset) {
     for (final dimension in SalesDimension.filterable) {
-      widget.notifier.setDimension(dimension, preset.forDimension(dimension));
+      widget.notifier.setDimension(dimension.dbValue, preset.forDimension(dimension));
     }
     Navigator.of(context).pop();
   }

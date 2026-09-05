@@ -20,21 +20,21 @@ void main() {
 
     test('counts each of the 5 real dimensions independently', () {
       const salesPerson = FilterSelection('R01', 'Johan Botha');
-      expect(activeDimensionFilterCount(const GlobalFilters(salesPerson: salesPerson)), 1);
+      expect(activeDimensionFilterCount(GlobalFilters.only('sales_person', salesPerson)), 1);
 
-      const twoActive = GlobalFilters(
-        salesPerson: salesPerson,
-        item: FilterSelection('I001', 'Flange Coupling 100mm'),
+      final twoActive = GlobalFilters.only('sales_person', salesPerson).withDimension(
+        'item',
+        const FilterSelection('I001', 'Flange Coupling 100mm'),
       );
       expect(activeDimensionFilterCount(twoActive), 2);
 
-      const allFive = GlobalFilters(
-        salesPerson: salesPerson,
-        category: FilterSelection('CAT1', 'Pumps'),
-        customer: FilterSelection('C001', 'Acme Corp'),
-        item: FilterSelection('I001', 'Widget'),
-        branch: FilterSelection('CPT', 'Cape Town'),
-      );
+      const allFive = GlobalFilters(dimensions: {
+        'sales_person': salesPerson,
+        'category': FilterSelection('CAT1', 'Pumps'),
+        'customer': FilterSelection('C001', 'Acme Corp'),
+        'item': FilterSelection('I001', 'Widget'),
+        'branch': FilterSelection('CPT', 'Cape Town'),
+      });
       expect(activeDimensionFilterCount(allFive), 5);
     });
   });
@@ -45,22 +45,22 @@ void main() {
     });
 
     test('null when 2 or more dimensions are active at once', () {
-      const filters = GlobalFilters(
-        customer: FilterSelection('C001', 'Johannesburg City Utilities'),
-        item: FilterSelection('I001', 'Flange Coupling 100mm'),
-      );
+      const filters = GlobalFilters(dimensions: {
+        'customer': FilterSelection('C001', 'Johannesburg City Utilities'),
+        'item': FilterSelection('I001', 'Flange Coupling 100mm'),
+      });
       expect(singleActiveDimensionFilter(filters), isNull);
     });
 
     test('returns the one active dimension + its selection, for each of the 5', () {
       const salesPerson = FilterSelection('R01', 'Johan Botha');
-      final result = singleActiveDimensionFilter(const GlobalFilters(salesPerson: salesPerson));
+      final result = singleActiveDimensionFilter(GlobalFilters.only('sales_person', salesPerson));
       expect(result, isNotNull);
       expect(result!.dimension, SalesDimension.salesPerson);
       expect(result.selection, salesPerson);
 
       const branch = FilterSelection('CPT', 'Cape Town');
-      final branchResult = singleActiveDimensionFilter(const GlobalFilters(branch: branch));
+      final branchResult = singleActiveDimensionFilter(GlobalFilters.only('branch', branch));
       expect(branchResult!.dimension, SalesDimension.branch);
       expect(branchResult.selection, branch);
     });

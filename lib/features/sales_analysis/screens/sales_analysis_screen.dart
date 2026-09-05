@@ -271,23 +271,6 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     );
   }
 
-  /// Builds a filters object with ONLY `dimension` set — used by the 2+
-  /// filter branch below to fetch one candidate basis's own actual revenue
-  /// in isolation, ignoring whatever ELSE is currently filtered. `company`
-  /// never reaches this (it's excluded from `SalesDimension.filterable`,
-  /// the only source of `dimension` values this is ever called with) — the
-  /// arm exists purely to satisfy the switch's exhaustiveness check.
-  GlobalFilters _onlyDimension(SalesDimension dimension, FilterSelection selection) {
-    return switch (dimension) {
-      SalesDimension.salesPerson => GlobalFilters(salesPerson: selection),
-      SalesDimension.category => GlobalFilters(category: selection),
-      SalesDimension.customer => GlobalFilters(customer: selection),
-      SalesDimension.item => GlobalFilters(item: selection),
-      SalesDimension.branch => GlobalFilters(branch: selection),
-      SalesDimension.company => const GlobalFilters(),
-    };
-  }
-
   Iterable<MonthlyValue> _asSeries(List<ConsolidatedSales> rows) => rows.map((r) => (month: r.month, value: r.value));
 
   /// Target overlay bars for the CURRENT fiscal year only (Craig,
@@ -387,7 +370,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         if (selection == null) continue;
         final ownRows = await repo.fetchConsolidatedSales(
           fiscalYears: _fiscalYears,
-          filters: _onlyDimension(dimension, selection),
+          filters: GlobalFilters.only(dimension.dbValue, selection),
         );
         final ownTargetByMonth = await _fetchTargetByMonth(
           dimension: dimension,

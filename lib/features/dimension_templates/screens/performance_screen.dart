@@ -218,8 +218,9 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       '[PerformanceScreen] _load() dimension=${widget.dimension.dbValue} '
       'effectiveYear=$effectiveYear effectiveMonth=$effectiveMonth '
       'rawFilters(year=${filters.fiscalYear}, month=${filters.fiscalMonth}, '
-      'salesPerson=${filters.salesPerson?.code}, category=${filters.category?.code}, '
-      'customer=${filters.customer?.code}, item=${filters.item?.code}, branch=${filters.branch?.code})',
+      'salesPerson=${filters.forDimension(SalesDimension.salesPerson)?.code}, category=${filters.forDimension(SalesDimension.category)?.code}, '
+      'customer=${filters.forDimension(SalesDimension.customer)?.code}, item=${filters.forDimension(SalesDimension.item)?.code}, '
+      'branch=${filters.forDimension(SalesDimension.branch)?.code})',
     );
     // currentFy/historyYears computed up front (not just inside the
     // effectiveYear==null branch below) because the coverage history fetch

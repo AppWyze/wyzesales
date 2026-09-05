@@ -1,6 +1,7 @@
 import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/supabase/supabase_config.dart';
+import '../models/client_dimension_config.dart';
 import '../models/reference_data.dart';
 
 /// Picker/lookup data for the filter bar and the Budgets screen's entity
@@ -149,13 +150,27 @@ class ReferenceDataRepository {
       'p_dimension': dimension.dbValue,
       'p_fiscal_year': filters.fiscalYear,
       'p_fiscal_month': filters.fiscalMonth,
-      'p_filter_sales_person': dimension == SalesDimension.salesPerson ? null : filters.salesPerson?.code,
-      'p_filter_customer': dimension == SalesDimension.customer ? null : filters.customer?.code,
-      'p_filter_item': dimension == SalesDimension.item ? null : filters.item?.code,
-      'p_filter_category': dimension == SalesDimension.category ? null : filters.category?.code,
-      'p_filter_branch': dimension == SalesDimension.branch ? null : filters.branch?.code,
+      'p_filter_sales_person': dimension == SalesDimension.salesPerson ? null : filters.forDimension(SalesDimension.salesPerson)?.code,
+      'p_filter_customer': dimension == SalesDimension.customer ? null : filters.forDimension(SalesDimension.customer)?.code,
+      'p_filter_item': dimension == SalesDimension.item ? null : filters.forDimension(SalesDimension.item)?.code,
+      'p_filter_category': dimension == SalesDimension.category ? null : filters.forDimension(SalesDimension.category)?.code,
+      'p_filter_branch': dimension == SalesDimension.branch ? null : filters.forDimension(SalesDimension.branch)?.code,
     });
     return (rows as List).map<String>((r) => r['entity_code'] as String).toSet();
+  }
+
+  /// This client's configured Sales Analysis dimensions (client_dimensions,
+  /// schema/038) — GlobalFilterBar's chips/"Add filter" dropdown source their
+  /// dimension list from here now instead of the hardcoded
+  /// `SalesDimension.filterable` (2026-09-05, multi-tenant dimension model
+  /// Step 2). Ordered by `sort_order` — WCSA's own seed matches
+  /// `SalesDimension.filterable`'s previous declared order exactly, so this
+  /// is a zero-behaviour-change swap for WCSA today; RLS (schema/038 Section
+  /// 3) already scopes this to the caller's own `client_id` with no filter
+  /// needed here.
+  Future<List<ClientDimensionConfig>> clientDimensions() async {
+    final rows = await supabase.from('client_dimensions').select().order('sort_order');
+    return rows.map<ClientDimensionConfig>((r) => ClientDimensionConfig.fromMap(r)).toList();
   }
 
   /// Top-bar search (Craig, 2026-08-26: "search on the dimensions, then
@@ -170,7 +185,7 @@ class ReferenceDataRepository {
     if (query.trim().isEmpty) return [];
     // `filterable`, not `values` — 2026-09-02, once `company` became a real
     // SalesDimension (Section 57): picking a search result calls
-    // `notifier.setDimension(result.dimension, ...)` (top_bar_search.dart),
+    // `notifier.setDimension(result.dimension.dbValue, ...)` (top_bar_search.dart),
     // the exact same global-filter mechanism GlobalFilterBar's "Add filter"
     // dropdown uses — and `company` is deliberately excluded from that
     // everywhere else (`SalesDimension.filterable`'s own doc comment), so

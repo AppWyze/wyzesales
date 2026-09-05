@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/supabase/supabase_config.dart';
 import '../models/filter_preset.dart';
@@ -27,16 +28,16 @@ class FilterPresetRepository {
     try {
       await supabase.from('filter_presets').insert({
         'name': name,
-        'sales_person_code': filters.salesPerson?.code,
-        'sales_person_label': filters.salesPerson?.label,
-        'category_code': filters.category?.code,
-        'category_label': filters.category?.label,
-        'customer_code': filters.customer?.code,
-        'customer_label': filters.customer?.label,
-        'item_code': filters.item?.code,
-        'item_label': filters.item?.label,
-        'branch_code': filters.branch?.code,
-        'branch_label': filters.branch?.label,
+        'sales_person_code': filters.forDimension(SalesDimension.salesPerson)?.code,
+        'sales_person_label': filters.forDimension(SalesDimension.salesPerson)?.label,
+        'category_code': filters.forDimension(SalesDimension.category)?.code,
+        'category_label': filters.forDimension(SalesDimension.category)?.label,
+        'customer_code': filters.forDimension(SalesDimension.customer)?.code,
+        'customer_label': filters.forDimension(SalesDimension.customer)?.label,
+        'item_code': filters.forDimension(SalesDimension.item)?.code,
+        'item_label': filters.forDimension(SalesDimension.item)?.label,
+        'branch_code': filters.forDimension(SalesDimension.branch)?.code,
+        'branch_label': filters.forDimension(SalesDimension.branch)?.label,
       });
     } on PostgrestException catch (e) {
       if (e.code == '23505') {

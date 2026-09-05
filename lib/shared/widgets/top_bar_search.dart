@@ -190,7 +190,7 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
       // navigation: exactly like picking the same entity from
       // GlobalFilterBar's "Add filter" dropdown, this just re-filters
       // whatever screen the user is already on.
-      ref.read(globalFiltersProvider.notifier).setDimension(dimension, FilterSelection(entity.code, entity.displayLabel));
+      ref.read(globalFiltersProvider.notifier).setDimension(dimension.dbValue, FilterSelection(entity.code, entity.displayLabel));
       setState(() {}); // clears the search field's own visible text immediately
       return;
     }

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/models/active_alert.dart';
 import '../data/models/client.dart';
+import '../data/models/client_dimension_config.dart';
 import '../data/models/data_load_run.dart';
 import '../data/models/filter_preset.dart';
 import '../data/models/profile.dart';
@@ -296,6 +297,23 @@ final currentClientProvider = FutureProvider<Client?>((ref) {
   final clientId = ref.watch(sessionProvider).value?.clientId;
   if (clientId == null) return Future.value(null);
   return ref.watch(settingsRepositoryProvider).getClient(clientId);
+});
+
+/// This client's configured Sales Analysis dimensions (client_dimensions,
+/// schema/038) — added 2026-09-05 for the multi-tenant dimension model's
+/// Step 2 (GlobalFilters + filter bar rework): GlobalFilterBar
+/// (shared/widgets/global_filter_bar.dart) reads this to render its chips/
+/// "Add filter" dropdown from whatever dimensions THIS client actually has,
+/// instead of the hardcoded `SalesDimension.filterable` every screen shared
+/// before this existed. Same plain (non-autoDispose) FutureProvider +
+/// `ref.watch(sessionProvider)` convention as filterPresetsProvider/
+/// currentClientProvider above — without it, a same-tab sign-out/sign-in as
+/// a DIFFERENT CLIENT's user would keep showing the previous client's
+/// dimension rows (the exact gap those two providers' own doc comments
+/// describe, here for `client_id` instead of `user_id`).
+final clientDimensionsProvider = FutureProvider<List<ClientDimensionConfig>>((ref) {
+  ref.watch(sessionProvider);
+  return ref.watch(referenceDataRepositoryProvider).clientDimensions();
 });
 
 final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability>((ref) async {

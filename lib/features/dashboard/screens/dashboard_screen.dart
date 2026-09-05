@@ -548,20 +548,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       };
     }
 
-    // Same as Sales Analysis's own `_onlyDimension` — a filters object with
-    // ONLY this one dimension set, so a candidate's "own actual" ignores
-    // whatever ELSE is currently filtered.
-    GlobalFilters onlyDimension(SalesDimension dimension, FilterSelection selection) {
-      return switch (dimension) {
-        SalesDimension.salesPerson => GlobalFilters(salesPerson: selection),
-        SalesDimension.category => GlobalFilters(category: selection),
-        SalesDimension.customer => GlobalFilters(customer: selection),
-        SalesDimension.item => GlobalFilters(item: selection),
-        SalesDimension.branch => GlobalFilters(branch: selection),
-        SalesDimension.company => const GlobalFilters(),
-      };
-    }
-
     // One further actual-revenue fetch + one target fetch per ACTIVELY
     // filtered dimension, in the app's canonical dimension order — same
     // reasoning as Sales Analysis's own `basisCandidates` loop
@@ -572,7 +558,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       final selection = filters.forDimension(dimension);
       if (selection == null) continue;
       final results = await Future.wait([
-        salesRepo.fetchConsolidatedSales(fiscalYears: windowYears, filters: onlyDimension(dimension, selection)),
+        salesRepo.fetchConsolidatedSales(fiscalYears: windowYears, filters: GlobalFilters.only(dimension.dbValue, selection)),
         targetByMonthFor(dimension, selection.code),
       ]);
       final ownRows = results[0] as List<ConsolidatedSales>;
@@ -713,39 +699,39 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         documentKinds: const ['invoice'],
         fiscalYear: currentFiscalYear,
         fiscalMonth: currentMonthLabel,
-        categoryCode: filters.category?.code,
-        itemCode: filters.item?.code,
-        repCode: filters.salesPerson?.code,
-        branchCode: filters.branch?.code,
-        customerCode: filters.customer?.code,
+        categoryCode: filters.forDimension(SalesDimension.category)?.code,
+        itemCode: filters.forDimension(SalesDimension.item)?.code,
+        repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
+        branchCode: filters.forDimension(SalesDimension.branch)?.code,
+        customerCode: filters.forDimension(SalesDimension.customer)?.code,
       ),
       salesRepo.fetchSalesDocumentsTotals(
         documentKinds: const ['credit_note'],
         fiscalYear: currentFiscalYear,
         fiscalMonth: currentMonthLabel,
-        categoryCode: filters.category?.code,
-        itemCode: filters.item?.code,
-        repCode: filters.salesPerson?.code,
-        branchCode: filters.branch?.code,
-        customerCode: filters.customer?.code,
+        categoryCode: filters.forDimension(SalesDimension.category)?.code,
+        itemCode: filters.forDimension(SalesDimension.item)?.code,
+        repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
+        branchCode: filters.forDimension(SalesDimension.branch)?.code,
+        customerCode: filters.forDimension(SalesDimension.customer)?.code,
       ),
       salesRepo.fetchSalesDocumentsTotals(
         documentKinds: const ['invoice'],
         fiscalYear: currentFiscalYear,
-        categoryCode: filters.category?.code,
-        itemCode: filters.item?.code,
-        repCode: filters.salesPerson?.code,
-        branchCode: filters.branch?.code,
-        customerCode: filters.customer?.code,
+        categoryCode: filters.forDimension(SalesDimension.category)?.code,
+        itemCode: filters.forDimension(SalesDimension.item)?.code,
+        repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
+        branchCode: filters.forDimension(SalesDimension.branch)?.code,
+        customerCode: filters.forDimension(SalesDimension.customer)?.code,
       ),
       salesRepo.fetchSalesDocumentsTotals(
         documentKinds: const ['credit_note'],
         fiscalYear: currentFiscalYear,
-        categoryCode: filters.category?.code,
-        itemCode: filters.item?.code,
-        repCode: filters.salesPerson?.code,
-        branchCode: filters.branch?.code,
-        customerCode: filters.customer?.code,
+        categoryCode: filters.forDimension(SalesDimension.category)?.code,
+        itemCode: filters.forDimension(SalesDimension.item)?.code,
+        repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
+        branchCode: filters.forDimension(SalesDimension.branch)?.code,
+        customerCode: filters.forDimension(SalesDimension.customer)?.code,
       ),
       // Every rep's sales_forecast row alongside repBudgetRows above (index
       // 4) — Rep Target Attainment needs the same budget-or-forecast
@@ -898,7 +884,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // Customer/Item/Category filter or for 2+ filters stacked, so every
     // other combination keeps the full-roster counts computed above
     // unchanged.
-    final filteredRepCode = filters.salesPerson?.code;
+    final filteredRepCode = filters.forDimension(SalesDimension.salesPerson)?.code;
     final repsTotalMtdFinal = filteredRepCode == null ? repsWithMtdTarget.length : (repsWithMtdTarget.contains(filteredRepCode) ? 1 : 0);
     final repsAtTargetMtdFinal = filteredRepCode == null
         ? repsAtTargetMtd

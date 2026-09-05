@@ -38,8 +38,8 @@ class FilterPreset {
 
   /// Mirrors `GlobalFilters.forDimension` — lets the "apply this preset"
   /// code (global_filter_bar.dart) loop over `SalesDimension.filterable` and
-  /// call `GlobalFiltersNotifier.setDimension(dimension, preset.forDimension
-  /// (dimension))` for each, which both sets the dimensions the preset has
+  /// call `GlobalFiltersNotifier.setDimension(dimension.dbValue, preset
+  /// .forDimension(dimension))` for each, which both sets the dimensions the preset has
   /// and clears the ones it doesn't (a `null` here is a real "not part of
   /// this preset," not a missing value) — so applying a preset always
   /// replaces the current 5 dimension filters wholesale rather than merging

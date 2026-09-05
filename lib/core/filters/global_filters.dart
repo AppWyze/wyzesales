@@ -28,12 +28,32 @@ const _unset = Object();
 /// Riverpod provider — not screen-local State — so the SAME instance
 /// survives go_router navigation between screens; every screen reads and
 /// writes this one object for the life of the signed-in session.
+///
+/// 2026-09-05 (multi-tenant dimension model, design doc Step 2): rewritten
+/// from 5 fixed named fields (salesPerson/category/customer/item/branch) to
+/// one `Map<String, FilterSelection>` keyed by dimension_key — the exact
+/// string `client_dimensions.dimension_key` (schema/038) uses, which for an
+/// 'existing' dimension is the same string as `SalesDimension.dbValue`. This
+/// is what lets `GlobalFilterBar` (shared/widgets/global_filter_bar.dart)
+/// render its chips/"Add filter" dropdown from a CLIENT's actual configured
+/// dimension list instead of a hardcoded 5-field class that could only ever
+/// describe WCSA. `forDimension(SalesDimension)` is kept as a thin bridge
+/// over the map for every call site this step deliberately leaves alone
+/// (the RPC-backed repositories, Sales By/Performance/Budgets/Dashboard's
+/// own dimension switchers — see design doc Section 6 steps 3/4) — none of
+/// those need to change in Step 2 since WCSA's own dimension set is
+/// unchanged; `forKey(String)` is the new, more general accessor for code
+/// that already has a raw dimension_key rather than a `SalesDimension`
+/// (GlobalFilterBar's own dynamic loop).
+///
+/// Year/Month/Document stay plain fields, unchanged — none of the three is a
+/// "dimension" in the client_dimensions sense (see `client_dimensions`'
+/// own header comment, schema/038): Year/Month narrow WHICH period is
+/// summed regardless of client, and Document is WCSA-specific raw text with
+/// no separate display label (see its own field doc comment below).
 class GlobalFilters {
-  final FilterSelection? salesPerson;
-  final FilterSelection? category;
-  final FilterSelection? customer;
-  final FilterSelection? item;
-  final FilterSelection? branch;
+  final Map<String, FilterSelection> _dimensions;
+
   final int? fiscalYear;
   final String? fiscalMonth; // 'Mar'..'Feb'
 
@@ -49,72 +69,83 @@ class GlobalFilters {
   final String? document;
 
   const GlobalFilters({
-    this.salesPerson,
-    this.category,
-    this.customer,
-    this.item,
-    this.branch,
+    Map<String, FilterSelection> dimensions = const {},
     this.fiscalYear,
     this.fiscalMonth,
     this.document,
-  });
+  }) : _dimensions = dimensions;
 
-  bool get isEmpty =>
-      salesPerson == null &&
-      category == null &&
-      customer == null &&
-      item == null &&
-      branch == null &&
-      fiscalYear == null &&
-      fiscalMonth == null &&
-      document == null;
+  /// A `GlobalFilters` with exactly ONE dimension selection set, nothing
+  /// else — replaces the old per-screen `onlyDimension`/`_onlyDimension`
+  /// local helpers (dashboard_screen.dart, sales_analysis_screen.dart) that
+  /// used to construct `GlobalFilters(salesPerson: selection)` etc. by hand
+  /// via a switch over `SalesDimension`. `dimensionKey` is normally
+  /// `dimension.dbValue` at these call sites.
+  factory GlobalFilters.only(String dimensionKey, FilterSelection selection) =>
+      GlobalFilters(dimensions: {dimensionKey: selection});
 
-  int get activeCount =>
-      [salesPerson, category, customer, item, branch, fiscalYear, fiscalMonth, document].where((v) => v != null).length;
+  /// The selection for a raw dimension_key (client_dimensions.dimension_key,
+  /// schema/038) — the primitive accessor everything else in this class is
+  /// built from. Returns null when that dimension has no active selection,
+  /// including for a key this client has never even configured.
+  FilterSelection? forKey(String dimensionKey) => _dimensions[dimensionKey];
 
-  FilterSelection? forDimension(SalesDimension dimension) {
-    switch (dimension) {
-      case SalesDimension.salesPerson:
-        return salesPerson;
-      case SalesDimension.category:
-        return category;
-      case SalesDimension.customer:
-        return customer;
-      case SalesDimension.item:
-        return item;
-      case SalesDimension.branch:
-        return branch;
-      // 2026-09-02: `company` has no field of its own here at all — see
-      // `SalesDimension.filterable`'s doc comment (fiscal.dart) for why it's
-      // never actually offered anywhere a global filter TARGET is picked
-      // (GlobalFilterBar, the top-bar entity search). This arm only exists
-      // to satisfy the switch's exhaustiveness check and should never
-      // actually be reached.
-      case SalesDimension.company:
-        return null;
+  /// Bridge for every call site still keyed on the fixed `SalesDimension`
+  /// enum (see this class's own doc comment) — `dimension.dbValue` is always
+  /// exactly the dimension_key an 'existing'-resolution client_dimensions row
+  /// uses for that dimension, so this is a pure `forKey` lookup, not a
+  /// separate mechanism. `company` has no meaningful selection (see
+  /// `SalesDimension.filterable`'s own doc comment) and simply looks up a key
+  /// nothing ever sets — always null, same as before this class changed.
+  FilterSelection? forDimension(SalesDimension dimension) => forKey(dimension.dbValue);
+
+  /// Every dimension_key with an active selection right now — read-only
+  /// view; callers should go through `withDimension`/`GlobalFiltersNotifier
+  /// .setDimension` to change one, never mutate this directly.
+  Map<String, FilterSelection> get dimensions => Map.unmodifiable(_dimensions);
+
+  /// True the moment ANY dimension has a selection — replaces the old
+  /// hand-written `salesPerson != null || category != null || ...` chains
+  /// that used to appear at every call site needing "is at least one of the
+  /// 5 real dimensions filtered" (sales_repository.dart's `_hasCrossFilters`/
+  /// `hasDimensionFilters`, the Presets dialog's `_hasDimensionFilter`).
+  /// Generalizes automatically as new dimensions are added in a later step —
+  /// none of those call sites will need to change again for that.
+  bool get hasAnyDimensionSelected => _dimensions.isNotEmpty;
+
+  bool get isEmpty => _dimensions.isEmpty && fiscalYear == null && fiscalMonth == null && document == null;
+
+  int get activeCount => _dimensions.length + [fiscalYear, fiscalMonth, document].where((v) => v != null).length;
+
+  /// Returns a copy with `dimensionKey`'s selection replaced (or, when
+  /// `selection` is null, cleared) — the one place a dimension selection is
+  /// ever actually added/changed/removed; `GlobalFiltersNotifier.setDimension
+  /// `/`clearDimension` are thin wrappers over this.
+  GlobalFilters withDimension(String dimensionKey, FilterSelection? selection) {
+    final next = Map<String, FilterSelection>.of(_dimensions);
+    if (selection == null) {
+      next.remove(dimensionKey);
+    } else {
+      next[dimensionKey] = selection;
     }
+    return copyWith(dimensions: next);
   }
 
   /// `_unset` sentinel lets a field be explicitly set to null (clearing it)
   /// while every other field keeps its current value — a plain `copyWith`
   /// with nullable named params can't tell "leave unchanged" apart from
-  /// "set to null" otherwise.
+  /// "set to null" otherwise. `dimensions`, unlike the other params, has no
+  /// such ambiguity to resolve (there's no meaningful "set the whole map to
+  /// null"), so it stays a plain nullable positional-by-name param —
+  /// omitted or null both mean "keep the current map."
   GlobalFilters copyWith({
-    Object? salesPerson = _unset,
-    Object? category = _unset,
-    Object? customer = _unset,
-    Object? item = _unset,
-    Object? branch = _unset,
+    Map<String, FilterSelection>? dimensions,
     Object? fiscalYear = _unset,
     Object? fiscalMonth = _unset,
     Object? document = _unset,
   }) {
     return GlobalFilters(
-      salesPerson: identical(salesPerson, _unset) ? this.salesPerson : salesPerson as FilterSelection?,
-      category: identical(category, _unset) ? this.category : category as FilterSelection?,
-      customer: identical(customer, _unset) ? this.customer : customer as FilterSelection?,
-      item: identical(item, _unset) ? this.item : item as FilterSelection?,
-      branch: identical(branch, _unset) ? this.branch : branch as FilterSelection?,
+      dimensions: dimensions ?? _dimensions,
       fiscalYear: identical(fiscalYear, _unset) ? this.fiscalYear : fiscalYear as int?,
       fiscalMonth: identical(fiscalMonth, _unset) ? this.fiscalMonth : fiscalMonth as String?,
       document: identical(document, _unset) ? this.document : document as String?,
@@ -157,23 +188,16 @@ class GlobalFiltersNotifier extends StateNotifier<GlobalFilters> {
 
   String? _lastUserId;
 
-  void setDimension(SalesDimension dimension, FilterSelection? selection) {
-    state = switch (dimension) {
-      SalesDimension.salesPerson => state.copyWith(salesPerson: selection),
-      SalesDimension.category => state.copyWith(category: selection),
-      SalesDimension.customer => state.copyWith(customer: selection),
-      SalesDimension.item => state.copyWith(item: selection),
-      SalesDimension.branch => state.copyWith(branch: selection),
-      // See `forDimension`'s matching arm above — `company` is never
-      // actually passed here by anything in the UI (GlobalFilterBar and the
-      // top-bar search both iterate `SalesDimension.filterable`, which
-      // excludes it), so this is a same-state no-op purely to satisfy
-      // exhaustiveness.
-      SalesDimension.company => state,
-    };
+  /// `dimensionKey` is a raw client_dimensions.dimension_key (an 'existing'
+  /// dimension's key is the same string as its `SalesDimension.dbValue`) —
+  /// every caller that still only has a `SalesDimension` in hand passes
+  /// `dimension.dbValue` (see GlobalFilterBar's Presets `_apply`,
+  /// top_bar_search.dart's `_selectResult`).
+  void setDimension(String dimensionKey, FilterSelection? selection) {
+    state = state.withDimension(dimensionKey, selection);
   }
 
-  void clearDimension(SalesDimension dimension) => setDimension(dimension, null);
+  void clearDimension(String dimensionKey) => setDimension(dimensionKey, null);
 
   void setFiscalYear(int? year) => state = state.copyWith(fiscalYear: year);
 
