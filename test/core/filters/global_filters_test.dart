@@ -165,6 +165,41 @@ void main() {
     });
   });
 
+  group('GlobalFilters.toFilterParams', () {
+    test('empty when no dimension is active', () {
+      const filters = GlobalFilters(fiscalYear: 2027, fiscalMonth: 'Aug');
+      expect(filters.toFilterParams(), <String, String>{});
+    });
+
+    test('every active dimension reduced to just its code, keyed by dimension_key', () {
+      const filters = GlobalFilters(dimensions: {
+        'sales_person': FilterSelection('R01', 'Johan Botha'),
+        'branch': FilterSelection('CPT', 'Cape Town'),
+        'dim_7': FilterSelection('ONLINE', 'Online Channel'),
+      });
+
+      expect(filters.toFilterParams(), {
+        'sales_person': 'R01',
+        'branch': 'CPT',
+        'dim_7': 'ONLINE',
+      });
+    });
+
+    test('excludeDimensionKey drops just that one key, leaving every other active filter', () {
+      const filters = GlobalFilters(dimensions: {
+        'sales_person': FilterSelection('R01', 'Johan Botha'),
+        'customer': FilterSelection('C001', 'Acme Corp'),
+      });
+
+      final withoutCustomer = filters.toFilterParams(excludeDimensionKey: 'customer');
+      expect(withoutCustomer, {'sales_person': 'R01'});
+
+      // A key with no active selection is simply a no-op to exclude.
+      final withoutBranch = filters.toFilterParams(excludeDimensionKey: 'branch');
+      expect(withoutBranch, {'sales_person': 'R01', 'customer': 'C001'});
+    });
+  });
+
   group('copyWith', () {
     test('leaves dimensions untouched when not passed', () {
       const selection = FilterSelection('R01', 'Johan Botha');

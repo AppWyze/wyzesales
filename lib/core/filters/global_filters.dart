@@ -113,6 +113,26 @@ class GlobalFilters {
   /// none of those call sites will need to change again for that.
   bool get hasAnyDimensionSelected => _dimensions.isNotEmpty;
 
+  /// The `p_filters` jsonb map schema/042's generalized RPC functions
+  /// (fn_dimension_monthly_sales_filtered, fn_consolidated_sales_filtered,
+  /// fn_dimension_performance_filtered, fn_dimension_filter_options) expect —
+  /// this map's own dimension_key -> FilterSelection entries, reduced to just
+  /// each selection's `code` (the RPC only ever matches on the code, never
+  /// the display label). `excludeDimensionKey`, when given, drops that one
+  /// key even if it has an active selection — `filterOptionCodes`
+  /// (reference_data_repository.dart) needs this: a dimension's own current
+  /// selection must never narrow that SAME dimension's own picker list (see
+  /// fn_dimension_filter_options' own doc comment, schema/017/042). Every
+  /// other caller omits it and gets every active dimension, unfiltered —
+  /// matching the five RPC functions' pre-042 named-parameter calls exactly,
+  /// which never excluded a dimension from filtering itself either.
+  Map<String, String> toFilterParams({String? excludeDimensionKey}) {
+    return {
+      for (final entry in _dimensions.entries)
+        if (entry.key != excludeDimensionKey) entry.key: entry.value.code,
+    };
+  }
+
   bool get isEmpty => _dimensions.isEmpty && fiscalYear == null && fiscalMonth == null && document == null;
 
   int get activeCount => _dimensions.length + [fiscalYear, fiscalMonth, document].where((v) => v != null).length;

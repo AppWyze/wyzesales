@@ -205,11 +205,7 @@ class SalesRepository {
       'p_entity_code': entityCode,
       'p_fiscal_years': fiscalYears,
       'p_fiscal_month': filters!.fiscalMonth,
-      'p_filter_sales_person': filters.forDimension(SalesDimension.salesPerson)?.code,
-      'p_filter_customer': filters.forDimension(SalesDimension.customer)?.code,
-      'p_filter_item': filters.forDimension(SalesDimension.item)?.code,
-      'p_filter_category': filters.forDimension(SalesDimension.category)?.code,
-      'p_filter_branch': filters.forDimension(SalesDimension.branch)?.code,
+      'p_filters': filters.toFilterParams(),
     });
     return (rows as List).map<DimensionMonthlySales>((r) => DimensionMonthlySales.fromMap(r as Map<String, dynamic>)).toList();
   }
@@ -233,11 +229,7 @@ class SalesRepository {
     final rows = await supabase.rpc('fn_consolidated_sales_filtered', params: {
       'p_fiscal_years': fiscalYears,
       'p_fiscal_month': filters!.fiscalMonth,
-      'p_filter_sales_person': filters.forDimension(SalesDimension.salesPerson)?.code,
-      'p_filter_customer': filters.forDimension(SalesDimension.customer)?.code,
-      'p_filter_item': filters.forDimension(SalesDimension.item)?.code,
-      'p_filter_category': filters.forDimension(SalesDimension.category)?.code,
-      'p_filter_branch': filters.forDimension(SalesDimension.branch)?.code,
+      'p_filters': filters.toFilterParams(),
     });
     return (rows as List).map<ConsolidatedSales>((r) => ConsolidatedSales.fromMap(r as Map<String, dynamic>)).toList();
   }
@@ -273,11 +265,7 @@ class SalesRepository {
       'p_entity_code': entityCode,
       'p_fiscal_year': fiscalYear,
       'p_fiscal_month': fiscalMonth,
-      'p_filter_sales_person': filters.forDimension(SalesDimension.salesPerson)?.code,
-      'p_filter_customer': filters.forDimension(SalesDimension.customer)?.code,
-      'p_filter_item': filters.forDimension(SalesDimension.item)?.code,
-      'p_filter_category': filters.forDimension(SalesDimension.category)?.code,
-      'p_filter_branch': filters.forDimension(SalesDimension.branch)?.code,
+      'p_filters': filters.toFilterParams(),
     });
     return (rows as List).map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r as Map<String, dynamic>)).toList();
   }

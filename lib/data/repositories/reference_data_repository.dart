@@ -150,11 +150,7 @@ class ReferenceDataRepository {
       'p_dimension': dimension.dbValue,
       'p_fiscal_year': filters.fiscalYear,
       'p_fiscal_month': filters.fiscalMonth,
-      'p_filter_sales_person': dimension == SalesDimension.salesPerson ? null : filters.forDimension(SalesDimension.salesPerson)?.code,
-      'p_filter_customer': dimension == SalesDimension.customer ? null : filters.forDimension(SalesDimension.customer)?.code,
-      'p_filter_item': dimension == SalesDimension.item ? null : filters.forDimension(SalesDimension.item)?.code,
-      'p_filter_category': dimension == SalesDimension.category ? null : filters.forDimension(SalesDimension.category)?.code,
-      'p_filter_branch': dimension == SalesDimension.branch ? null : filters.forDimension(SalesDimension.branch)?.code,
+      'p_filters': filters.toFilterParams(excludeDimensionKey: dimension.dbValue),
     });
     return (rows as List).map<String>((r) => r['entity_code'] as String).toSet();
   }
