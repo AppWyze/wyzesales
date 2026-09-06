@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/app_providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
+import '../../../data/models/client_dimension_config.dart';
 import '../../../data/models/pricing_plan.dart';
 import '../../../shared/utils/responsive.dart';
 import '../../../shared/widgets/app_shell.dart';
+import '../../../shared/widgets/boxed_dropdown.dart';
 
 /// Clients / Licenses / Pricing — the cross-tenant screen only an
 /// is_platform_admin account can reach (schema/008's RLS policies enforce
@@ -38,6 +40,7 @@ class _PlatformAdminScreenState extends ConsumerState<PlatformAdminScreen> {
     _AdminNavItem(icon: Icons.business_outlined, label: 'Clients'),
     _AdminNavItem(icon: Icons.verified_outlined, label: 'Licenses'),
     _AdminNavItem(icon: Icons.sell_outlined, label: 'Pricing'),
+    _AdminNavItem(icon: Icons.dashboard_customize_outlined, label: 'Dimensions'),
   ];
 
   @override
@@ -107,6 +110,7 @@ class _PlatformAdminScreenState extends ConsumerState<PlatformAdminScreen> {
                     _mobileNavItem(0, 'Clients', isDark),
                     _mobileNavItem(1, 'Licenses', isDark),
                     _mobileNavItem(2, 'Pricing', isDark),
+                    _mobileNavItem(3, 'Dimensions', isDark),
                   ],
                 ),
               ),
@@ -164,6 +168,7 @@ class _PlatformAdminScreenState extends ConsumerState<PlatformAdminScreen> {
                 _navItem(1, isDark),
                 _navSection('Configuration', isDark),
                 _navItem(2, isDark),
+                _navItem(3, isDark),
               ],
             ),
           ),
@@ -298,6 +303,8 @@ class _PlatformAdminScreenState extends ConsumerState<PlatformAdminScreen> {
         return _LicensesTab(isDark: isDark);
       case 2:
         return _PricingTab(isDark: isDark);
+      case 3:
+        return _DimensionsTab(isDark: isDark);
       default:
         return const SizedBox();
     }
@@ -1270,6 +1277,988 @@ class _EditPlanDialogState extends ConsumerState<_EditPlanDialog> {
   }
 }
 
+// ── Dimensions tab ───────────────────────────────────────────────────────
+// Platform Admin config for the multi-tenant dimension model (schema/038,
+// docs/Wyzesales_MultiTenant_Dimension_Design.md Section 4: "Platform Admin
+// gains a new 'Dimensions' tab: CRUD for a client's client_dimensions rows,
+// and for populating client_dimension_values"). WCSA's own six dimensions
+// were seeded directly by migration 038 and need no attention here; this
+// tab exists so EdgeTec's and Morgenster's own dimension sets (Market, Area,
+// Revenue Split, ...) can be entered once their extractors are rewritten to
+// populate them (design doc Section 6 step 5), without hand-writing SQL
+// against client_dimensions/client_dimension_values.
+
+const List<String> _kExistingDimensionKeys = ['sales_person', 'customer', 'item', 'category', 'branch', 'company'];
+const List<String> _kGenericDimensionKeys = [
+  'dim_1', 'dim_2', 'dim_3', 'dim_4', 'dim_5', 'dim_6',
+  'dim_7', 'dim_8', 'dim_9', 'dim_10', 'dim_11', 'dim_12',
+];
+const Map<String, String> _kExistingDimensionLabels = {
+  'sales_person': 'Sales Person',
+  'customer': 'Customer',
+  'item': 'Item',
+  'category': 'Category',
+  'branch': 'Branch',
+  'company': 'Company',
+};
+
+String _dimensionKeyLabel(String key) => _kExistingDimensionLabels[key] ?? '$key (new slot)';
+
+class _DimensionsTab extends ConsumerStatefulWidget {
+  final bool isDark;
+  const _DimensionsTab({required this.isDark});
+
+  @override
+  ConsumerState<_DimensionsTab> createState() => _DimensionsTabState();
+}
+
+class _DimensionsTabState extends ConsumerState<_DimensionsTab> {
+  late Future<List<Map<String, dynamic>>> _clientsFuture;
+  String? _selectedClientId;
+  Future<List<ClientDimensionConfig>>? _dimensionsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    // Reuses the same client+license query the Clients/Licenses tabs already
+    // fetch — only `id`/`name` are used here, but this is the one client
+    // list already wired up in this repository, and platform admins are few
+    // enough visits that a second, leaner query isn't worth adding.
+    _clientsFuture = ref.read(platformAdminRepositoryProvider).fetchClientsWithLicense();
+  }
+
+  void _selectClient(String id) {
+    setState(() {
+      _selectedClientId = id;
+      _dimensionsFuture = ref.read(platformAdminRepositoryProvider).fetchClientDimensions(id);
+    });
+  }
+
+  void _reloadDimensions() {
+    final clientId = _selectedClientId;
+    if (clientId == null) return;
+    setState(() => _dimensionsFuture = ref.read(platformAdminRepositoryProvider).fetchClientDimensions(clientId));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _clientsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text('Error: ${snapshot.error}'));
+          }
+          final clients = snapshot.data ?? const [];
+          // Auto-select the first client alphabetically the first time this
+          // list arrives, so the tab shows real data immediately rather than
+          // an empty picker — same "don't make the first click just be to
+          // see anything" convention every other admin tab already follows.
+          if (_selectedClientId == null && clients.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _selectedClientId == null) _selectClient(clients.first['id'] as String);
+            });
+          }
+          return _Card(
+            title: 'Dimensions',
+            isDark: isDark,
+            action: _selectedClientId == null
+                ? null
+                : _PrimaryBtn(
+                    label: 'Add dimension',
+                    icon: Icons.add,
+                    onTap: () async {
+                      final dimensions = await (_dimensionsFuture ?? Future.value(const <ClientDimensionConfig>[]));
+                      if (!context.mounted) return;
+                      await showDialog(
+                        context: context,
+                        builder: (_) => _EditDimensionDialog(
+                          clientId: _selectedClientId!,
+                          existing: null,
+                          otherDimensions: dimensions,
+                          isDark: isDark,
+                        ),
+                      );
+                      _reloadDimensions();
+                    },
+                  ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      _fieldLabel('Client', isDark),
+                      const SizedBox(width: 10),
+                      BoxedDropdown<String>(
+                        value: _selectedClientId ?? '',
+                        width: 220,
+                        items: [
+                          for (final c in clients) DropdownMenuItem(value: c['id'] as String, child: Text(c['name'] as String? ?? '')),
+                          if (_selectedClientId == null || !clients.any((c) => c['id'] == _selectedClientId))
+                            const DropdownMenuItem(value: '', child: Text('Select a client')),
+                        ],
+                        onChanged: (id) {
+                          if (id != null && id.isNotEmpty) _selectClient(id);
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (_selectedClientId == null)
+                    const Padding(padding: EdgeInsets.all(20), child: Center(child: Text('Select a client to view its dimensions.')))
+                  else
+                    _dimensionsList(isDark),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _dimensionsList(bool isDark) {
+    return FutureBuilder<List<ClientDimensionConfig>>(
+      future: _dimensionsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
+        }
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+        final dimensions = snapshot.data ?? const [];
+        if (dimensions.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.all(20),
+            child: Center(child: Text('No dimensions configured for this client yet.')),
+          );
+        }
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+            width: 900,
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isDark ? AppColors.navyMid : const Color(0xFFF8FAFC),
+                    border: Border(bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000))),
+                  ),
+                  child: const Row(
+                    children: [
+                      SizedBox(width: 50, child: _HeaderCell('Order')),
+                      Expanded(child: _HeaderCell('Dimension')),
+                      SizedBox(width: 140, child: _HeaderCell('Kind')),
+                      SizedBox(width: 260, child: _HeaderCell('Flags')),
+                      SizedBox(width: 100, child: _HeaderCell('')),
+                    ],
+                  ),
+                ),
+                for (final d in dimensions)
+                  _DimensionRow(
+                    dimension: d,
+                    otherDimensions: dimensions.where((o) => o.dimensionKey != d.dimensionKey).toList(),
+                    clientId: _selectedClientId!,
+                    isDark: isDark,
+                    onChanged: _reloadDimensions,
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DimensionRow extends ConsumerWidget {
+  final ClientDimensionConfig dimension;
+  final List<ClientDimensionConfig> otherDimensions;
+  final String clientId;
+  final bool isDark;
+  final VoidCallback onChanged;
+
+  const _DimensionRow({
+    required this.dimension,
+    required this.otherDimensions,
+    required this.clientId,
+    required this.isDark,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final canHaveValues = dimension.resolutionKind != 'existing';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000)))),
+      child: Row(
+        children: [
+          SizedBox(width: 50, child: Text('${dimension.sortOrder}', style: _bodyStyle(isDark))),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  dimension.displayLabel,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkText : AppColors.lightText),
+                ),
+                Text(
+                  dimension.dimensionKey,
+                  style: TextStyle(fontSize: 10, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: 140, child: Text(_kindLabel(dimension.resolutionKind), style: _bodyStyle(isDark))),
+          SizedBox(
+            width: 260,
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                if (dimension.isRlsScope) _flagBadge('RLS scope', AppColors.teal),
+                if (dimension.drivesBudgets) _flagBadge('Budgets', AppColors.positive),
+                if (dimension.drivesCrossFilter) _flagBadge('Cross-filter', AppColors.caution),
+                if (dimension.showsOnDashboardTop5) _flagBadge('Dashboard', AppColors.negative),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 100,
+            child: Row(
+              children: [
+                if (canHaveValues)
+                  _IconBtn(
+                    icon: Icons.list_alt_outlined,
+                    isDark: isDark,
+                    label: 'Manage ${dimension.displayLabel} values',
+                    onTap: () async {
+                      await showDialog(
+                        context: context,
+                        builder: (_) => _DimensionValuesDialog(clientId: clientId, dimension: dimension, isDark: isDark),
+                      );
+                    },
+                  ),
+                const SizedBox(width: 4),
+                _IconBtn(
+                  icon: Icons.edit_outlined,
+                  isDark: isDark,
+                  label: 'Edit ${dimension.displayLabel}',
+                  onTap: () async {
+                    await showDialog(
+                      context: context,
+                      builder: (_) => _EditDimensionDialog(
+                        clientId: clientId,
+                        existing: dimension,
+                        otherDimensions: otherDimensions,
+                        isDark: isDark,
+                      ),
+                    );
+                    onChanged();
+                  },
+                ),
+                const SizedBox(width: 4),
+                _IconBtn(
+                  icon: Icons.delete_outline,
+                  isDark: isDark,
+                  label: 'Delete ${dimension.displayLabel}',
+                  onTap: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (_) => _ConfirmDialog(
+                        title: 'Delete dimension',
+                        message:
+                            'Delete "${dimension.displayLabel}"? This cannot be undone, and fails safely if any '
+                            'budget, target, or sales data still uses it.',
+                        isDark: isDark,
+                      ),
+                    );
+                    if (confirmed != true || !context.mounted) return;
+                    try {
+                      await ref.read(platformAdminRepositoryProvider).deleteClientDimension(clientId, dimension.dimensionKey);
+                      onChanged();
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not delete: $e')));
+                      }
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _kindLabel(String kind) {
+    switch (kind) {
+      case 'existing':
+        return 'Existing';
+      case 'fact_column':
+        return 'Transaction line';
+      case 'customer_attribute':
+        return 'Customer attribute';
+      default:
+        return kind;
+    }
+  }
+
+  Widget _flagBadge(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w500)),
+    );
+  }
+
+  TextStyle _bodyStyle(bool isDark) => TextStyle(fontSize: 11, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary);
+}
+
+/// A reusable Yes/No confirmation — this screen's first delete-capable
+/// control (Clients/Licenses/Pricing only ever add/edit), so there's no
+/// existing confirm-dialog pattern in this file to match; kept in the same
+/// visual language as every other dialog here (`_dialogHeader`, bordered
+/// footer) rather than a plain `AlertDialog`.
+class _ConfirmDialog extends StatelessWidget {
+  final String title;
+  final String message;
+  final bool isDark;
+  const _ConfirmDialog({required this.title, required this.message, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      insetPadding: dialogInsetPadding,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight(context, 260)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogHeader(title, isDark),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(message, style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText)),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              decoration: BoxDecoration(border: Border(top: BorderSide(color: isDark ? const Color(0x0FFFFFFF) : const Color(0x0F000000)))),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 34,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.negative),
+                      onPressed: () => Navigator.of(context).pop(true),
+                      child: const Text('Delete'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Add/edit one client_dimensions row. `dimensionKey` and `resolutionKind`
+/// are only settable when ADDING a brand-new row — editing either one after
+/// a client's extractor may already be writing dim_N_code/attr_N_code data
+/// keyed by them would silently reinterpret rows already on disk (design
+/// doc Section 3.3's whole point of dimension_key being "stable and
+/// internal"). Everything else (label, order, parent, and every flag) stays
+/// editable at any time, same as WCSA's own six dimensions could always be
+/// relabelled/reordered without touching what backs them.
+class _EditDimensionDialog extends ConsumerStatefulWidget {
+  const _EditDimensionDialog({required this.clientId, required this.existing, required this.otherDimensions, required this.isDark});
+
+  final String clientId;
+  final ClientDimensionConfig? existing;
+
+  /// Every OTHER dimension already configured for this client — used both to
+  /// exclude already-used keys from the picker (when adding) and to offer a
+  /// parent choice (excludes `existing` itself, so a dimension can't be
+  /// offered as its own parent).
+  final List<ClientDimensionConfig> otherDimensions;
+  final bool isDark;
+
+  @override
+  ConsumerState<_EditDimensionDialog> createState() => _EditDimensionDialogState();
+}
+
+class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
+  String? _dimensionKey;
+  String _resolutionKind = 'fact_column';
+  late final TextEditingController _labelController;
+  late final TextEditingController _sortOrderController;
+  String? _parentDimensionKey;
+  bool _drivesBudgets = true;
+  bool _drivesCrossFilter = true;
+  bool _isRlsScope = false;
+  bool _showsOnDashboardTop5 = false;
+  bool _saving = false;
+  String? _error;
+
+  bool get _isNew => widget.existing == null;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    _dimensionKey = existing?.dimensionKey;
+    _resolutionKind = existing?.resolutionKind ?? 'fact_column';
+    _labelController = TextEditingController(text: existing?.displayLabel ?? '');
+    _sortOrderController = TextEditingController(text: '${existing?.sortOrder ?? widget.otherDimensions.length}');
+    _parentDimensionKey = existing?.parentDimensionKey;
+    _drivesBudgets = existing?.drivesBudgets ?? true;
+    _drivesCrossFilter = existing?.drivesCrossFilter ?? true;
+    _isRlsScope = existing?.isRlsScope ?? false;
+    _showsOnDashboardTop5 = existing?.showsOnDashboardTop5 ?? false;
+  }
+
+  @override
+  void dispose() {
+    _labelController.dispose();
+    _sortOrderController.dispose();
+    super.dispose();
+  }
+
+  List<String> get _availableKeys {
+    final used = widget.otherDimensions.map((d) => d.dimensionKey).toSet();
+    return [..._kExistingDimensionKeys, ..._kGenericDimensionKeys].where((k) => !used.contains(k)).toList();
+  }
+
+  void _onKeyChanged(String? key) {
+    if (key == null) return;
+    setState(() {
+      _dimensionKey = key;
+      if (_kExistingDimensionKeys.contains(key)) {
+        _resolutionKind = 'existing';
+      } else if (_resolutionKind == 'existing') {
+        _resolutionKind = 'fact_column';
+      }
+      if (_labelController.text.isEmpty && _kExistingDimensionLabels.containsKey(key)) {
+        _labelController.text = _kExistingDimensionLabels[key]!;
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    final key = _dimensionKey;
+    final label = _labelController.text.trim();
+    if (key == null) {
+      setState(() => _error = 'Choose a dimension key.');
+      return;
+    }
+    if (label.isEmpty) {
+      setState(() => _error = 'Display label is required.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final data = <String, dynamic>{
+      'display_label': label,
+      'sort_order': int.tryParse(_sortOrderController.text) ?? 0,
+      'parent_dimension_key': _resolutionKind == 'customer_attribute' ? _parentDimensionKey : null,
+      'drives_budgets': _drivesBudgets,
+      'drives_cross_filter': _drivesCrossFilter,
+      'is_rls_scope': _isRlsScope,
+      'shows_on_dashboard_top5': _showsOnDashboardTop5,
+    };
+    try {
+      final repo = ref.read(platformAdminRepositoryProvider);
+      if (_isNew) {
+        data['dimension_key'] = key;
+        data['resolution_kind'] = _resolutionKind;
+        await repo.createClientDimension(widget.clientId, data);
+      } else {
+        await repo.updateClientDimension(widget.clientId, key, data);
+      }
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final showResolutionKind = _dimensionKey != null && !_kExistingDimensionKeys.contains(_dimensionKey);
+    return Dialog(
+      backgroundColor: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      insetPadding: dialogInsetPadding,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 480, maxHeight: dialogMaxHeight(context, 700)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogHeader(_isNew ? 'Add dimension' : 'Edit dimension', isDark),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _fieldLabel('Dimension key', isDark),
+                    const SizedBox(height: 4),
+                    _isNew
+                        ? DropdownButtonFormField<String>(
+                            initialValue: _dimensionKey,
+                            isExpanded: true,
+                            style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+                            decoration: _dropdownDecoration(isDark),
+                            hint: const Text('Select a key'),
+                            items: [for (final k in _availableKeys) DropdownMenuItem(value: k, child: Text(_dimensionKeyLabel(k)))],
+                            onChanged: _onKeyChanged,
+                          )
+                        : Text(
+                            '${widget.existing!.dimensionKey} — locked after creation',
+                            style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                          ),
+                    const SizedBox(height: 12),
+                    if (showResolutionKind) ...[
+                      _fieldLabel('Resolution kind', isDark),
+                      const SizedBox(height: 4),
+                      _isNew
+                          ? DropdownButtonFormField<String>(
+                              initialValue: _resolutionKind == 'existing' ? 'fact_column' : _resolutionKind,
+                              isExpanded: true,
+                              style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+                              decoration: _dropdownDecoration(isDark),
+                              items: const [
+                                DropdownMenuItem(value: 'fact_column', child: Text('Set per transaction line')),
+                                DropdownMenuItem(value: 'customer_attribute', child: Text('Belongs to the customer')),
+                              ],
+                              onChanged: (v) => setState(() => _resolutionKind = v ?? 'fact_column'),
+                            )
+                          : Text(
+                              _resolutionKind == 'customer_attribute' ? 'Belongs to the customer — locked' : 'Set per transaction line — locked',
+                              style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                            ),
+                      const SizedBox(height: 12),
+                    ],
+                    _tf('Display label *', _labelController, isDark),
+                    const SizedBox(height: 10),
+                    _tf('Sort order', _sortOrderController, isDark, keyboardType: TextInputType.number),
+                    if (_resolutionKind == 'customer_attribute') ...[
+                      const SizedBox(height: 10),
+                      _fieldLabel('Parent dimension (optional — for a hierarchy, e.g. Region under Area)', isDark),
+                      const SizedBox(height: 4),
+                      DropdownButtonFormField<String?>(
+                        initialValue: _parentDimensionKey,
+                        isExpanded: true,
+                        style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+                        decoration: _dropdownDecoration(isDark),
+                        items: [
+                          const DropdownMenuItem(value: null, child: Text('None')),
+                          for (final d in widget.otherDimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+                        ],
+                        onChanged: (v) => setState(() => _parentDimensionKey = v),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    _switchTile(
+                      'Drives budgets',
+                      'Can carry a Budgets/Forecast figure of its own.',
+                      _drivesBudgets,
+                      (v) => setState(() => _drivesBudgets = v),
+                      isDark,
+                    ),
+                    _switchTile(
+                      'Drives cross-filter',
+                      'Offered as a global filter and a Sales By/Performance dimension.',
+                      _drivesCrossFilter,
+                      (v) => setState(() => _drivesCrossFilter = v),
+                      isDark,
+                    ),
+                    _switchTile(
+                      'RLS scope (RegUser boundary)',
+                      'Only one dimension per client can be this — turning it on here turns it off everywhere else for this client.',
+                      _isRlsScope,
+                      (v) => setState(() => _isRlsScope = v),
+                      isDark,
+                    ),
+                    _switchTile(
+                      'Shows on Dashboard breakdown',
+                      'Selectable in the Dashboard\'s ranking-breakdown dropdown.',
+                      _showsOnDashboardTop5,
+                      (v) => setState(() => _showsOnDashboardTop5 = v),
+                      isDark,
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(_error!, style: const TextStyle(fontSize: 12, color: AppColors.negative)),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            _dialogFooter(isDark, _saving, _save),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Lists/adds/edits/deletes one client's `client_dimension_values` rows for
+/// one `fact_column`/`customer_attribute` dimension (schema/038 Section
+/// 3.2) — e.g. entering Morgenster's Area/Region/Country codes once its
+/// extractor is ready to reference them. Not offered for
+/// `resolution_kind = 'existing'` dimensions (see `_DimensionRow`'s
+/// `canHaveValues` check) — those are backed by sales_reps/customers/items/
+/// categories/branches, which already have their own management elsewhere
+/// in the app, not this generic lookup table.
+class _DimensionValuesDialog extends ConsumerStatefulWidget {
+  const _DimensionValuesDialog({required this.clientId, required this.dimension, required this.isDark});
+
+  final String clientId;
+  final ClientDimensionConfig dimension;
+  final bool isDark;
+
+  @override
+  ConsumerState<_DimensionValuesDialog> createState() => _DimensionValuesDialogState();
+}
+
+class _DimensionValuesDialogState extends ConsumerState<_DimensionValuesDialog> {
+  late Future<List<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  void _reload() {
+    _future = ref.read(platformAdminRepositoryProvider).fetchClientDimensionValues(widget.clientId, widget.dimension.dimensionKey);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    return Dialog(
+      backgroundColor: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      insetPadding: dialogInsetPadding,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 520, maxHeight: dialogMaxHeight(context, 560)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogHeader('${widget.dimension.displayLabel} values', isDark),
+            Expanded(
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: _future,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Center(child: Text('Error: ${snapshot.error}'));
+                  }
+                  final values = snapshot.data ?? const [];
+                  return SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (values.isEmpty)
+                          const Padding(padding: EdgeInsets.all(12), child: Text('No values entered yet.'))
+                        else
+                          for (final v in values)
+                            _DimensionValueRow(
+                              clientId: widget.clientId,
+                              dimensionKey: widget.dimension.dimensionKey,
+                              value: v,
+                              otherValues: values.where((o) => o['code'] != v['code']).toList(),
+                              isDark: isDark,
+                              onChanged: () => setState(_reload),
+                            ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              decoration: BoxDecoration(border: Border(top: BorderSide(color: isDark ? const Color(0x0FFFFFFF) : const Color(0x0F000000)))),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _PrimaryBtn(
+                    label: 'Add value',
+                    icon: Icons.add,
+                    onTap: () async {
+                      final values = await _future;
+                      if (!context.mounted) return;
+                      await showDialog(
+                        context: context,
+                        builder: (_) => _EditDimensionValueDialog(
+                          clientId: widget.clientId,
+                          dimensionKey: widget.dimension.dimensionKey,
+                          existing: null,
+                          otherValues: values,
+                          isDark: isDark,
+                        ),
+                      );
+                      setState(_reload);
+                    },
+                  ),
+                  TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DimensionValueRow extends ConsumerWidget {
+  final String clientId;
+  final String dimensionKey;
+  final Map<String, dynamic> value;
+  final List<Map<String, dynamic>> otherValues;
+  final bool isDark;
+  final VoidCallback onChanged;
+
+  const _DimensionValueRow({
+    required this.clientId,
+    required this.dimensionKey,
+    required this.value,
+    required this.otherValues,
+    required this.isDark,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final code = value['code'] as String;
+    final name = value['name'] as String?;
+    final parentCode = value['parent_code'] as String?;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000)))),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name ?? code, style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText)),
+                Text(
+                  parentCode == null ? code : '$code · under $parentCode',
+                  style: TextStyle(fontSize: 10, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                ),
+              ],
+            ),
+          ),
+          _IconBtn(
+            icon: Icons.edit_outlined,
+            isDark: isDark,
+            label: 'Edit $code',
+            onTap: () async {
+              await showDialog(
+                context: context,
+                builder: (_) => _EditDimensionValueDialog(
+                  clientId: clientId,
+                  dimensionKey: dimensionKey,
+                  existing: value,
+                  otherValues: otherValues,
+                  isDark: isDark,
+                ),
+              );
+              onChanged();
+            },
+          ),
+          const SizedBox(width: 4),
+          _IconBtn(
+            icon: Icons.delete_outline,
+            isDark: isDark,
+            label: 'Delete $code',
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (_) => _ConfirmDialog(
+                  title: 'Delete value',
+                  message: 'Delete "${name ?? code}"? This fails safely if another value is nested under it.',
+                  isDark: isDark,
+                ),
+              );
+              if (confirmed != true || !context.mounted) return;
+              try {
+                await ref.read(platformAdminRepositoryProvider).deleteClientDimensionValue(clientId, dimensionKey, code);
+                onChanged();
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not delete: $e')));
+                }
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EditDimensionValueDialog extends ConsumerStatefulWidget {
+  const _EditDimensionValueDialog({
+    required this.clientId,
+    required this.dimensionKey,
+    required this.existing,
+    required this.otherValues,
+    required this.isDark,
+  });
+
+  final String clientId;
+  final String dimensionKey;
+  final Map<String, dynamic>? existing;
+  final List<Map<String, dynamic>> otherValues;
+  final bool isDark;
+
+  @override
+  ConsumerState<_EditDimensionValueDialog> createState() => _EditDimensionValueDialogState();
+}
+
+class _EditDimensionValueDialogState extends ConsumerState<_EditDimensionValueDialog> {
+  late final TextEditingController _codeController;
+  late final TextEditingController _nameController;
+  String? _parentCode;
+  bool _saving = false;
+  String? _error;
+
+  bool get _isNew => widget.existing == null;
+
+  @override
+  void initState() {
+    super.initState();
+    _codeController = TextEditingController(text: widget.existing?['code'] as String? ?? '');
+    _nameController = TextEditingController(text: widget.existing?['name'] as String? ?? '');
+    _parentCode = widget.existing?['parent_code'] as String?;
+  }
+
+  @override
+  void dispose() {
+    _codeController.dispose();
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final code = _codeController.text.trim();
+    if (code.isEmpty) {
+      setState(() => _error = 'Code is required.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final data = <String, dynamic>{
+      'name': _nameController.text.trim().isEmpty ? null : _nameController.text.trim(),
+      'parent_code': _parentCode,
+    };
+    try {
+      final repo = ref.read(platformAdminRepositoryProvider);
+      if (_isNew) {
+        await repo.createClientDimensionValue(widget.clientId, widget.dimensionKey, {'code': code, ...data});
+      } else {
+        await repo.updateClientDimensionValue(widget.clientId, widget.dimensionKey, widget.existing!['code'] as String, data);
+      }
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    return Dialog(
+      backgroundColor: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      insetPadding: dialogInsetPadding,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight(context, 420)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogHeader(_isNew ? 'Add value' : 'Edit value', isDark),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    _isNew
+                        ? _tf('Code *', _codeController, isDark)
+                        : Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Code: ${widget.existing!['code']} — locked after creation',
+                              style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                            ),
+                          ),
+                    const SizedBox(height: 10),
+                    _tf('Name', _nameController, isDark),
+                    const SizedBox(height: 10),
+                    Align(alignment: Alignment.centerLeft, child: _fieldLabel('Parent (optional)', isDark)),
+                    const SizedBox(height: 4),
+                    DropdownButtonFormField<String?>(
+                      initialValue: _parentCode,
+                      isExpanded: true,
+                      style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText),
+                      decoration: _dropdownDecoration(isDark),
+                      items: [
+                        const DropdownMenuItem(value: null, child: Text('None')),
+                        for (final v in widget.otherValues)
+                          DropdownMenuItem(value: v['code'] as String, child: Text((v['name'] as String?) ?? v['code'] as String)),
+                      ],
+                      onChanged: (v) => setState(() => _parentCode = v),
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(_error!, style: const TextStyle(fontSize: 12, color: AppColors.negative)),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            _dialogFooter(isDark, _saving, _save),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Add client dialog ────────────────────────────────────────────────────
 
 class _AddClientDialog extends ConsumerStatefulWidget {
@@ -1819,6 +2808,60 @@ Widget _dialogFooter(bool isDark, bool isLoading, VoidCallback onSave) {
                 : const Text('Save'),
           ),
         ),
+      ],
+    ),
+  );
+}
+
+Widget _fieldLabel(String text, bool isDark) {
+  return Text(text, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary));
+}
+
+/// Shared decoration for every hand-rolled `DropdownButtonFormField` in this
+/// file's dialogs (`_statusDropdown`/`_planDropdown` above, and the
+/// Dimensions tab's key/resolution-kind/parent pickers) — pulled out once
+/// this stopped being just two call sites.
+InputDecoration _dropdownDecoration(bool isDark) {
+  return InputDecoration(
+    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+    isDense: true,
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(6),
+      borderSide: BorderSide(color: isDark ? const Color(0x1FFFFFFF) : const Color(0x1F000000)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(6),
+      borderSide: const BorderSide(color: AppColors.teal),
+    ),
+  );
+}
+
+/// A labelled boolean toggle with a one-line explanation underneath — the
+/// Dimensions tab's edit dialog is this file's first dialog with more than
+/// one true/false flag to set (`_EditDimensionDialog`'s four flags), so
+/// there's no prior on/off control pattern in this file to match.
+Widget _switchTile(String title, String subtitle, bool value, ValueChanged<bool> onChanged, bool isDark) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkText : AppColors.lightText),
+              ),
+              Text(
+                subtitle,
+                style: TextStyle(fontSize: 10, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+              ),
+            ],
+          ),
+        ),
+        Switch(value: value, onChanged: onChanged),
       ],
     ),
   );
