@@ -1444,7 +1444,7 @@ class _DimensionsTabState extends ConsumerState<_DimensionsTab> {
         return SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: SizedBox(
-            width: 900,
+            width: 1070,
             child: Column(
               children: [
                 Container(
@@ -1459,7 +1459,8 @@ class _DimensionsTabState extends ConsumerState<_DimensionsTab> {
                       Expanded(child: _HeaderCell('Dimension')),
                       SizedBox(width: 140, child: _HeaderCell('Kind')),
                       SizedBox(width: 260, child: _HeaderCell('Flags')),
-                      SizedBox(width: 100, child: _HeaderCell('')),
+                      SizedBox(width: 170, child: _HeaderCell('Status')),
+                      SizedBox(width: 130, child: _HeaderCell('')),
                     ],
                   ),
                 ),
@@ -1534,9 +1535,41 @@ class _DimensionRow extends ConsumerWidget {
             ),
           ),
           SizedBox(
-            width: 100,
+            width: 170,
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                dimension.isLive ? _flagBadge('Live', AppColors.positive) : _flagBadge('Draft', AppColors.caution),
+                if (canHaveValues)
+                  _DataCheckBadge(clientId: clientId, dimension: dimension, isDark: isDark),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 130,
             child: Row(
               children: [
+                if (!dimension.isLive)
+                  _IconBtn(
+                    icon: Icons.publish_outlined,
+                    isDark: isDark,
+                    label: 'Publish ${dimension.displayLabel} — make it visible in the app',
+                    onTap: () async {
+                      try {
+                        await ref
+                            .read(platformAdminRepositoryProvider)
+                            .updateClientDimension(clientId, dimension.dimensionKey, {'is_live': true});
+                        onChanged();
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not publish: $e')));
+                        }
+                      }
+                    },
+                  ),
+                if (!dimension.isLive) const SizedBox(width: 4),
                 if (canHaveValues)
                   _IconBtn(
                     icon: Icons.list_alt_outlined,
@@ -1624,6 +1657,67 @@ class _DimensionRow extends ConsumerWidget {
   }
 
   TextStyle _bodyStyle(bool isDark) => TextStyle(fontSize: 11, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary);
+}
+
+/// schema/043 (2026-09-06) — the other half of Craig's WyzeSalesExtract-
+/// alignment safeguard alongside `is_live`: for a `fact_column`/
+/// `customer_attribute` dimension (never shown for `existing` — `_DimensionRow`
+/// only builds this when `canHaveValues`), fetches once via
+/// `checkDimensionDataCount` and shows a plain, honest "12,403 rows" vs
+/// "No data yet" signal — so drift between what's configured here and what
+/// that client's extractor actually writes is visible at a glance instead of
+/// assumed. A `ConsumerStatefulWidget` (not a plain FutureBuilder in
+/// `_DimensionRow.build`) so the RPC round-trip only fires once per row per
+/// build of the list, not on every rebuild of the parent.
+class _DataCheckBadge extends ConsumerStatefulWidget {
+  const _DataCheckBadge({required this.clientId, required this.dimension, required this.isDark});
+
+  final String clientId;
+  final ClientDimensionConfig dimension;
+  final bool isDark;
+
+  @override
+  ConsumerState<_DataCheckBadge> createState() => _DataCheckBadgeState();
+}
+
+class _DataCheckBadgeState extends ConsumerState<_DataCheckBadge> {
+  late Future<int?> _countFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _countFuture = ref
+        .read(platformAdminRepositoryProvider)
+        .checkDimensionDataCount(widget.clientId, widget.dimension.dimensionKey, widget.dimension.resolutionKind);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<int?>(
+      future: _countFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _badge('Checking…', widget.isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary);
+        }
+        if (snapshot.hasError) {
+          return _badge('Check failed', AppColors.negative);
+        }
+        final count = snapshot.data;
+        if (count == null || count == 0) {
+          return _badge('No data yet', AppColors.negative);
+        }
+        return _badge('${formatQuantity(count)} rows', AppColors.positive);
+      },
+    );
+  }
+
+  Widget _badge(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w500)),
+    );
+  }
 }
 
 /// A reusable Yes/No confirmation — this screen's first delete-capable
@@ -1714,6 +1808,17 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
   bool _drivesCrossFilter = true;
   bool _isRlsScope = false;
   bool _showsOnDashboardTop5 = false;
+
+  /// schema/043 (2026-09-06): whether this dimension is visible to the real
+  /// app yet — see `ClientDimensionConfig.isLive`'s own doc comment for the
+  /// WyzeSalesExtract-alignment gap this closes. A BRAND NEW dimension
+  /// defaults to `false` here (a draft, even though the DB column's own
+  /// default is `true` — that default only exists to backfill rows that
+  /// already worked before this migration): the whole point is that a
+  /// platform admin has to make a deliberate choice to publish it, once
+  /// they've confirmed the client's extractor is actually writing real data
+  /// for it. Editing an EXISTING dimension keeps whatever it already was.
+  bool _isLive = false;
   bool _saving = false;
   String? _error;
 
@@ -1732,6 +1837,7 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
     _drivesCrossFilter = existing?.drivesCrossFilter ?? true;
     _isRlsScope = existing?.isRlsScope ?? false;
     _showsOnDashboardTop5 = existing?.showsOnDashboardTop5 ?? false;
+    _isLive = existing?.isLive ?? false;
   }
 
   @override
@@ -1784,6 +1890,7 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
       'drives_cross_filter': _drivesCrossFilter,
       'is_rls_scope': _isRlsScope,
       'shows_on_dashboard_top5': _showsOnDashboardTop5,
+      'is_live': _isLive,
     };
     try {
       final repo = ref.read(platformAdminRepositoryProvider);
@@ -1906,6 +2013,15 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
                       'Selectable in the Dashboard\'s ranking-breakdown dropdown.',
                       _showsOnDashboardTop5,
                       (v) => setState(() => _showsOnDashboardTop5 = v),
+                      isDark,
+                    ),
+                    _switchTile(
+                      'Live',
+                      'Off keeps this dimension hidden from every filter/screen — a draft, '
+                          'safe to configure ahead of the client\'s extractor actually writing it. '
+                          'Turn on once real data is confirmed flowing.',
+                      _isLive,
+                      (v) => setState(() => _isLive = v),
                       isDark,
                     ),
                     if (_error != null) ...[

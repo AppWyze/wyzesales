@@ -177,6 +177,27 @@ class PlatformAdminRepository {
         .neq('dimension_key', exceptDimensionKey);
   }
 
+  /// schema/043 (2026-09-06): whether this `fact_column`/`customer_attribute`
+  /// dimension's backing column (`dim_N_code` on sales_document_facts, or
+  /// `attr_N_code` on customers) actually has any real data behind it yet for
+  /// this client — Craig's WyzeSalesExtract-alignment question ("If I added
+  /// a new Dimension to WCSA now, the WyzeSalesExtract would not know about
+  /// it??"), answered with an honest signal rather than an assumption:
+  /// `_DataCheckBadge` shows "12,403 rows" vs "No data yet" from whatever
+  /// this returns. Returns null for a `resolution_kind = 'existing'`
+  /// dimension (nothing to check — see `fn_dimension_data_check`'s own
+  /// comment) — never call this for one; `_DimensionRow` only renders the
+  /// badge when `canHaveValues` is true.
+  Future<int?> checkDimensionDataCount(String clientId, String dimensionKey, String resolutionKind) async {
+    final result = await supabase.rpc('fn_dimension_data_check', params: {
+      'p_client_id': clientId,
+      'p_dimension_key': dimensionKey,
+      'p_resolution_kind': resolutionKind,
+    });
+    if (result == null) return null;
+    return (result as num).toInt();
+  }
+
   /// Fails with a foreign-key error (surfaced to the dialog's `_error` text,
   /// same as every other save/delete failure in this screen) if any
   /// budget_figures/sales_forecast row still carries this dimension

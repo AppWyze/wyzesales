@@ -207,8 +207,18 @@ class ReferenceDataRepository {
   /// is a zero-behaviour-change swap for WCSA today; RLS (schema/038 Section
   /// 3) already scopes this to the caller's own `client_id` with no filter
   /// needed here.
+  ///
+  /// `is_live = true` (schema/043, 2026-09-06): this is the ONE shared read
+  /// path every real app screen (GlobalFilterBar, Sales By, Performance,
+  /// Budgets) uses to know "what dimensions does this client have" — so it's
+  /// the single choke point that keeps a brand-new, not-yet-wired-up
+  /// dimension invisible to the actual app until a platform admin publishes
+  /// it. The Platform Admin Dimensions tab itself reads through
+  /// `PlatformAdminRepository.fetchClientDimensions` instead, which
+  /// deliberately does NOT filter on `is_live` — an admin managing the
+  /// dimension needs to see and toggle drafts, not just live rows.
   Future<List<ClientDimensionConfig>> clientDimensions() async {
-    final rows = await supabase.from('client_dimensions').select().order('sort_order');
+    final rows = await supabase.from('client_dimensions').select().eq('is_live', true).order('sort_order');
     return rows.map<ClientDimensionConfig>((r) => ClientDimensionConfig.fromMap(r)).toList();
   }
 

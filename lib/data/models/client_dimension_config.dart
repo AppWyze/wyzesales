@@ -32,6 +32,25 @@ class ClientDimensionConfig {
   final bool isRlsScope;
   final bool showsOnDashboardTop5;
 
+  /// schema/043 (2026-09-06): whether this dimension is actually live in the
+  /// app yet. Craig, right after seeing the Dimensions tab: "How do we make
+  /// sure that the Client Dimensions and Client WyzeSalesExtract are
+  /// aligned? If I added a new Dimension to WCSA now, the WyzeSalesExtract
+  /// would not know about it??" — correct: WCSA's extractor writes a fixed,
+  /// hardcoded set of columns with zero awareness of client_dimensions, so a
+  /// brand-new dimension configured here would show up in every filter/
+  /// screen immediately while its backing column sits permanently null until
+  /// that client's extractor is separately rewritten and redeployed.
+  /// `ReferenceDataRepository.clientDimensions()` (the query behind
+  /// `clientDimensionsProvider`, which every app screen reads) filters to
+  /// `is_live = true` — so a new dimension can be entered ahead of time and
+  /// stays completely invisible to the real app until a platform admin
+  /// confirms real data is flowing and explicitly publishes it. Defaults to
+  /// `true` at the DB column level (safe for WCSA's existing six rows, which
+  /// already work today), but `_EditDimensionDialog` sends `false` explicitly
+  /// when creating any BRAND NEW dimension, so new ones start as drafts.
+  final bool isLive;
+
   const ClientDimensionConfig({
     required this.dimensionKey,
     required this.displayLabel,
@@ -42,6 +61,7 @@ class ClientDimensionConfig {
     required this.drivesCrossFilter,
     required this.isRlsScope,
     required this.showsOnDashboardTop5,
+    this.isLive = true,
   });
 
   /// Bridges back to the OLD fixed `SalesDimension` enum — null for any
@@ -80,6 +100,7 @@ class ClientDimensionConfig {
       drivesCrossFilter: row['drives_cross_filter'] as bool,
       isRlsScope: row['is_rls_scope'] as bool,
       showsOnDashboardTop5: row['shows_on_dashboard_top5'] as bool,
+      isLive: (row['is_live'] as bool?) ?? true,
     );
   }
 }
