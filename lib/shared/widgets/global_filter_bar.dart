@@ -211,18 +211,14 @@ class GlobalFilterBar extends ConsumerWidget {
       return;
     }
     final dimensionConfig = filterableDimensions.firstWhere((d) => d.dimensionKey == key);
-    // `asSalesDimension` is null for a 'fact_column'/'customer_attribute'
-    // dimension — Step 2 deliberately doesn't teach the entity picker
-    // (`_pickEntity` below, and `entitiesFor`/`searchAllDimensions` it
-    // depends on) how to search anything beyond the 6 'existing' dimensions
-    // yet, since that's real RPC/reference-data generalization work the
-    // design doc's own sequencing plan defers to Step 3. WCSA never reaches
-    // this branch — every one of its rows is 'existing' — so this is a
-    // silent no-op rather than a crash for the first client that DOES add a
-    // generic dimension, until Step 3 teaches this how to pick one.
-    final dimension = dimensionConfig.asSalesDimension;
-    if (dimension == null) return;
-    final selection = await _pickEntity(context, dimension);
+    // 2026-09-06 (multi-tenant dimension model Step 5): `_pickEntity` now
+    // works for ANY of this client's configured dimensions, not just the 6
+    // 'existing' ones — see entity_search_field.dart's own doc comment for
+    // how it routes a 'fact_column'/'customer_attribute' dimension through
+    // `entitiesForConfig`/`client_dimension_values` instead of the old
+    // `SalesDimension`-only `entitiesFor`. WCSA's own 6 dimensions are all
+    // 'existing' and take the exact same code path as before this changed.
+    final selection = await _pickEntity(context, dimensionConfig);
     if (selection != null) notifier.setDimension(dimensionConfig.dimensionKey, selection);
   }
 }
@@ -265,8 +261,12 @@ Future<T?> _pickFromList<T>(
 /// items (Craig: "Elastic search on filters"). An empty-code result means
 /// "All" was picked, which has no meaning for "add a new filter" (there's
 /// nothing to clear yet), so it's treated the same as a cancelled dialog.
-Future<FilterSelection?> _pickEntity(BuildContext context, SalesDimension dimension) async {
-  final picked = await showEntitySearchDialog(context, dimension: dimension, title: 'Filter by ${dimension.label}');
+///
+/// `ClientDimensionConfig`, not `SalesDimension` — 2026-09-06 (multi-tenant
+/// dimension model Step 5): generalized alongside `showEntitySearchDialog`
+/// itself so this works for any of this client's configured dimensions.
+Future<FilterSelection?> _pickEntity(BuildContext context, ClientDimensionConfig dimension) async {
+  final picked = await showEntitySearchDialog(context, dimension: dimension, title: 'Filter by ${dimension.displayLabel}');
   if (picked == null || picked.code.isEmpty) return null;
   return FilterSelection(picked.code, picked.displayLabel);
 }

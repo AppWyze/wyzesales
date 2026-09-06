@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/app_providers.dart';
-import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/models/client_dimension_config.dart';
 import '../../data/models/reference_data.dart';
 
 /// Top-bar "jump to a customer/item/rep/category/branch/document" search —
@@ -60,19 +60,23 @@ class TopBarSearch extends ConsumerStatefulWidget {
 }
 
 /// One row in the results dropdown, built fresh by `_runSearch` from
-/// whichever of the 5 dimensions or the Document search actually matched.
-/// Exactly one of (dimension, entity) or (document, route) is set: a
+/// whichever of this client's own dimensions or the Document search actually
+/// matched. Exactly one of (dimension, entity) or (document, route) is set: a
 /// dimension match applies a global filter directly (see _selectResult); a
 /// document match sets the global Document filter (2026-08-27, Craig: "We
 /// need to add Document to the Filters dropdown") AND navigates, since
-/// unlike the 5 dimensions, a document number only means anything on
-/// Sales/Quote/Sales Order Analysis — landing on the right one of those
-/// three is still worth doing, the global filter alone wouldn't get you
-/// there.
+/// unlike a dimension, a document number only means anything on Sales/Quote/
+/// Sales Order Analysis — landing on the right one of those three is still
+/// worth doing, the global filter alone wouldn't get you there.
+///
+/// `dimension` is a `ClientDimensionConfig`, not `SalesDimension` — 2026-09-06
+/// (multi-tenant dimension model Step 5): generalized alongside
+/// `ReferenceDataRepository.searchAllDimensions` so a match can come from any
+/// of this client's configured dimensions, not just the 6 'existing' ones.
 class _TopBarResult {
   final String title;
   final String tag;
-  final SalesDimension? dimension;
+  final ClientDimensionConfig? dimension;
   final CodeName? entity;
   final String? document;
   final String? route;
@@ -142,14 +146,18 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
 
   Future<void> _runSearch(String value) async {
     final refRepo = ref.read(referenceDataRepositoryProvider);
-    final fetched = await Future.wait([refRepo.searchAllDimensions(value), refRepo.searchDocuments(value)]);
+    // This client's own configured dimensions (client_dimensions,
+    // schema/038) — see `searchAllDimensions`'s own doc comment for why the
+    // repository itself can't read `clientDimensionsProvider` directly.
+    final clientDimensions = ref.read(clientDimensionsProvider).valueOrNull ?? const <ClientDimensionConfig>[];
+    final fetched = await Future.wait([refRepo.searchAllDimensions(value, clientDimensions), refRepo.searchDocuments(value)]);
     if (!mounted) return;
     final dimensionResults = fetched[0] as List<DimensionSearchResult>;
     final documentResults = fetched[1] as List<DocumentSearchResult>;
     setState(() {
       _results = [
         for (final r in dimensionResults)
-          _TopBarResult(title: r.entity.displayLabel, tag: r.dimension.label, dimension: r.dimension, entity: r.entity),
+          _TopBarResult(title: r.entity.displayLabel, tag: r.dimension.displayLabel, dimension: r.dimension, entity: r.entity),
         for (final r in documentResults)
           _TopBarResult(title: r.document, tag: 'Document', document: r.document, route: _routeForDocumentKind(r.documentKind)),
       ];
@@ -190,7 +198,7 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
       // navigation: exactly like picking the same entity from
       // GlobalFilterBar's "Add filter" dropdown, this just re-filters
       // whatever screen the user is already on.
-      ref.read(globalFiltersProvider.notifier).setDimension(dimension.dbValue, FilterSelection(entity.code, entity.displayLabel));
+      ref.read(globalFiltersProvider.notifier).setDimension(dimension.dimensionKey, FilterSelection(entity.code, entity.displayLabel));
       setState(() {}); // clears the search field's own visible text immediately
       return;
     }

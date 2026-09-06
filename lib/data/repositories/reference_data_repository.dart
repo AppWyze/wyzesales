@@ -230,18 +230,21 @@ class ReferenceDataRepository {
   /// branch that happens to share a word. Capped at 6 per dimension (30
   /// max total) — this is a quick jump-to-entity lookup, not a full search
   /// results page.
-  Future<List<DimensionSearchResult>> searchAllDimensions(String query) async {
+  ///
+  /// `clientDimensions`, not the old hardcoded `SalesDimension.filterable` —
+  /// 2026-09-06 (multi-tenant dimension model Step 5): generalized via
+  /// `entitiesForConfig` so this can search a brand-new client's own
+  /// 'fact_column'/'customer_attribute' dimension too, same as
+  /// GlobalFilterBar's "Add filter" entity picker. The caller (top_bar_
+  /// search.dart) passes this client's own `clientDimensionsProvider` list —
+  /// this repository has no `ref` of its own to read that provider itself.
+  /// Filtered here to `drivesCrossFilter`, exactly matching the old
+  /// `SalesDimension.filterable` exclusion of `company` (schema/038's WCSA
+  /// seed comment) — `company` has no meaningful entity to search for.
+  Future<List<DimensionSearchResult>> searchAllDimensions(String query, List<ClientDimensionConfig> clientDimensions) async {
     if (query.trim().isEmpty) return [];
-    // `filterable`, not `values` — 2026-09-02, once `company` became a real
-    // SalesDimension (Section 57): picking a search result calls
-    // `notifier.setDimension(result.dimension.dbValue, ...)` (top_bar_search.dart),
-    // the exact same global-filter mechanism GlobalFilterBar's "Add filter"
-    // dropdown uses — and `company` is deliberately excluded from that
-    // everywhere else (`SalesDimension.filterable`'s own doc comment), so
-    // it's excluded from this search too rather than surfacing a result that
-    // would silently do nothing when picked.
-    const dimensions = SalesDimension.filterable;
-    final byDimension = await Future.wait(dimensions.map((d) => entitiesFor(d, search: query)));
+    final dimensions = clientDimensions.where((d) => d.drivesCrossFilter).toList();
+    final byDimension = await Future.wait(dimensions.map((d) => entitiesForConfig(d, search: query)));
     final results = <DimensionSearchResult>[];
     for (var i = 0; i < dimensions.length; i++) {
       for (final entity in byDimension[i].take(6)) {

@@ -1,4 +1,4 @@
-import '../../core/constants/fiscal.dart';
+import 'client_dimension_config.dart';
 
 /// Lightweight reference/dimension rows — mirrors schema/001 Section 2.
 /// Kept as plain (code, name) pairs since that's all the pickers/filter bar
@@ -25,8 +25,13 @@ class CodeName {
 
 /// One top-bar search match, tagged with the dimension it came from — see
 /// ReferenceDataRepository.searchAllDimensions.
+///
+/// `ClientDimensionConfig`, not `SalesDimension` — 2026-09-06 (multi-tenant
+/// dimension model Step 5): generalized so a top-bar search match can come
+/// from any of this client's configured dimensions, not just the 6
+/// 'existing' ones built into `SalesDimension`.
 class DimensionSearchResult {
-  final SalesDimension dimension;
+  final ClientDimensionConfig dimension;
   final CodeName entity;
   const DimensionSearchResult({required this.dimension, required this.entity});
 }

@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/app_providers.dart';
-import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
+import '../../data/models/client_dimension_config.dart';
 import '../../data/models/reference_data.dart';
 
 /// Real, server-backed search dialog for picking one Category/Item/Sales
@@ -50,7 +50,23 @@ import '../../data/models/reference_data.dart';
 /// place that behaviour was asked for. See schema/017's own doc comment for
 /// the database side of this (`fn_dimension_filter_options`) and
 /// ReferenceDataRepository.filterOptionCodes for how it's called.
-Future<CodeName?> showEntitySearchDialog(BuildContext context, {required SalesDimension dimension, required String title}) {
+///
+/// 2026-09-06 (multi-tenant dimension model Step 4/5): generalized from a
+/// `SalesDimension` parameter to a full `ClientDimensionConfig` so this
+/// dialog can search a brand-new client's own 'fact_column'/
+/// 'customer_attribute' dimension (backed by `client_dimension_values`,
+/// via `entitiesForConfig`), not just the 6 'existing' dimensions built
+/// into `SalesDimension`. An 'existing' dimension still routes through the
+/// exact same `entitiesFor` call as before (`entitiesForConfig`'s own doc
+/// comment) — WCSA's own 6 dimensions are byte-for-byte unchanged. The
+/// "no data" greying feature above stays scoped to 'existing' dimensions
+/// only (see `_loadMatchingCodes` below) — `fn_dimension_filter_options`
+/// itself hasn't been generalized to a generic dimension_key yet, and
+/// that's real RPC work the design doc's own sequencing plan hasn't asked
+/// for here; a generic dimension simply never greys anything, which is
+/// already a legitimate state this dialog supports (see `_matchingCodes`'
+/// own doc comment).
+Future<CodeName?> showEntitySearchDialog(BuildContext context, {required ClientDimensionConfig dimension, required String title}) {
   return showDialog<CodeName>(
     context: context,
     builder: (context) => _EntitySearchDialog(dimension: dimension, title: title),
@@ -60,7 +76,7 @@ Future<CodeName?> showEntitySearchDialog(BuildContext context, {required SalesDi
 class _EntitySearchDialog extends ConsumerStatefulWidget {
   const _EntitySearchDialog({required this.dimension, required this.title});
 
-  final SalesDimension dimension;
+  final ClientDimensionConfig dimension;
   final String title;
 
   @override
@@ -94,8 +110,15 @@ class _EntitySearchDialogState extends ConsumerState<_EntitySearchDialog> {
   }
 
   Future<void> _loadMatchingCodes() async {
+    // `filterOptionCodes` (fn_dimension_filter_options) is still
+    // `SalesDimension`-only — see this dialog's own doc comment above — so a
+    // brand-new 'fact_column'/'customer_attribute' dimension (asSalesDimension
+    // == null) just leaves `_matchingCodes` null, i.e. "don't grey anything,"
+    // rather than calling an RPC that doesn't know about it.
+    final existing = widget.dimension.asSalesDimension;
+    if (existing == null) return;
     final filters = ref.read(globalFiltersProvider);
-    final codes = await ref.read(referenceDataRepositoryProvider).filterOptionCodes(widget.dimension, filters);
+    final codes = await ref.read(referenceDataRepositoryProvider).filterOptionCodes(existing, filters);
     if (!mounted || codes == null) return;
     setState(() => _matchingCodes = codes);
   }
@@ -115,7 +138,8 @@ class _EntitySearchDialogState extends ConsumerState<_EntitySearchDialog> {
   Future<void> _search(String value) async {
     setState(() => _loading = true);
     final trimmed = value.trim();
-    final results = await ref.read(referenceDataRepositoryProvider).entitiesFor(widget.dimension, search: trimmed.isEmpty ? null : trimmed);
+    final results =
+        await ref.read(referenceDataRepositoryProvider).entitiesForConfig(widget.dimension, search: trimmed.isEmpty ? null : trimmed);
     if (!mounted) return;
     setState(() {
       _results = results;
