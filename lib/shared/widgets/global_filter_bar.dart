@@ -107,14 +107,19 @@ class GlobalFilterBar extends ConsumerWidget {
               if (key != null) _handleAdd(context, ref, notifier, filters, key, filterableDimensions);
             },
           ),
-          // 2026-09-04, Craig: "Saved filter presets" — save/reapply the 5
-          // dimension filters by name (Decisions doc Section 79). A plain
+          // 2026-09-04, Craig: "Saved filter presets" — save/reapply the
+          // active dimension filters by name (Decisions doc Section 79;
+          // generalized off any 5 fixed dimensions by schema/045, 2026-09-06,
+          // same as GlobalFilters/this bar's own chips already were). A plain
           // icon+label button here, not another BoxedDropdown — this opens a
           // dialog rather than picking a value inline, so it isn't really a
           // "dropdown" the way Add filter/Year/Month are.
           TextButton.icon(
             style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(0, 32)),
-            onPressed: () => showDialog<void>(context: context, builder: (_) => _PresetsDialog(filters: filters, notifier: notifier)),
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (_) => _PresetsDialog(filters: filters, notifier: notifier, dimensions: filterableDimensions),
+            ),
             icon: const Icon(Icons.bookmark_outline, size: 16),
             label: const Text('Presets'),
           ),
@@ -380,17 +385,25 @@ class _DocumentSearchDialogState extends ConsumerState<_DocumentSearchDialog> {
   }
 }
 
-/// "Presets" button's dialog — save the current 5 dimension filters under a
-/// name, or reapply/delete one already saved (schema/035, filter_presets
-/// repository/provider, app_providers.dart). `filters`/`notifier` are passed
-/// in rather than watched here: this is a plain (non-Consumer) dialog over a
-/// snapshot of the filter bar's own already-current values, which can't
-/// change out from under it while the modal dialog is open anyway.
+/// "Presets" button's dialog — save the currently active dimension filters
+/// under a name, or reapply/delete one already saved (schema/035, generalized
+/// by schema/045; filter_presets repository/provider, app_providers.dart).
+/// `filters`/`notifier` are passed in rather than watched here: this is a
+/// plain (non-Consumer) dialog over a snapshot of the filter bar's own
+/// already-current values, which can't change out from under it while the
+/// modal dialog is open anyway.
 class _PresetsDialog extends ConsumerStatefulWidget {
-  const _PresetsDialog({required this.filters, required this.notifier});
+  const _PresetsDialog({required this.filters, required this.notifier, required this.dimensions});
 
   final GlobalFilters filters;
   final GlobalFiltersNotifier notifier;
+
+  /// This client's own filterable dimensions (schema/038's `drives_cross_
+  /// filter`, same list `GlobalFilterBar.build()` computed for its own chips
+  /// — passed in rather than re-fetched here so `_apply` loops over exactly
+  /// what the "Add filter" dropdown itself offers, generalized off
+  /// `SalesDimension.filterable` the same way that dropdown already is.
+  final List<ClientDimensionConfig> dimensions;
 
   @override
   ConsumerState<_PresetsDialog> createState() => _PresetsDialogState();
@@ -430,13 +443,14 @@ class _PresetsDialogState extends ConsumerState<_PresetsDialog> {
     }
   }
 
-  /// Loops over every filterable dimension, not just the ones this preset
-  /// has — see FilterPreset.forDimension's own doc comment for why that's
-  /// what makes this a wholesale replace of the current 5 dimension filters
-  /// rather than a merge. Year/Month/Document are never touched.
+  /// Loops over every filterable dimension THIS CLIENT has, not just the
+  /// ones this preset happens to mention — see FilterPreset.forKey's own doc
+  /// comment for why that's what makes this a wholesale replace of the
+  /// current dimension filters rather than a merge. Year/Month/Document are
+  /// never touched.
   void _apply(FilterPreset preset) {
-    for (final dimension in SalesDimension.filterable) {
-      widget.notifier.setDimension(dimension.dbValue, preset.forDimension(dimension));
+    for (final dimension in widget.dimensions) {
+      widget.notifier.setDimension(dimension.dimensionKey, preset.forKey(dimension.dimensionKey));
     }
     Navigator.of(context).pop();
   }
@@ -486,7 +500,7 @@ class _PresetsDialogState extends ConsumerState<_PresetsDialog> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
-                  'Select a Sales Person, Category, Customer, Item, or Branch filter above, then come back here to save it as a preset.',
+                  'Select a filter above, then come back here to save it as a preset.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               )

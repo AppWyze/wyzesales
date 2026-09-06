@@ -1,24 +1,25 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/supabase/supabase_config.dart';
 import '../models/filter_preset.dart';
 
-/// Saved filter presets (schema/035, 2026-09-04) — Craig's own choice
-/// ("Saved filter presets") for the polish item after the 2026-09-04
-/// Dashboard filter-scoping fix. Every row is scoped to the signed-in user
-/// by RLS (`user_id = auth.uid()`, defaulted server-side) — this repository
-/// never passes a user id itself, and `list()` can never return anyone
-/// else's presets.
+/// Saved filter presets (schema/035, 2026-09-04; generalized by schema/045,
+/// 2026-09-06). Every row is scoped to the signed-in user by RLS (`user_id =
+/// auth.uid()`, defaulted server-side) — this repository never passes a user
+/// id itself, and `list()` can never return anyone else's presets.
 class FilterPresetRepository {
   Future<List<FilterPreset>> list() async {
     final rows = await supabase.from('filter_presets').select().order('name');
     return rows.map<FilterPreset>((r) => FilterPreset.fromMap(r)).toList();
   }
 
-  /// Only the 5 dimension filters are persisted — see FilterPreset's own doc
-  /// comment for why Year/Month/Document are deliberately left out.
+  /// Persists whatever's currently in `filters.dimensions` — every ACTIVE
+  /// dimension filter, whichever dimensions this client actually has (see
+  /// FilterPreset's own doc comment for why this used to be 5 hardcoded
+  /// columns and no longer is). Year/Month/Document are separate
+  /// `GlobalFilters` fields, never part of `.dimensions`, so they're
+  /// excluded here the same structural way they always have been.
   ///
   /// Throws a plain `Exception` with a friendly message if `name` is already
   /// used by one of this user's own presets (schema/035's `unique(user_id,
@@ -28,16 +29,9 @@ class FilterPresetRepository {
     try {
       await supabase.from('filter_presets').insert({
         'name': name,
-        'sales_person_code': filters.forDimension(SalesDimension.salesPerson)?.code,
-        'sales_person_label': filters.forDimension(SalesDimension.salesPerson)?.label,
-        'category_code': filters.forDimension(SalesDimension.category)?.code,
-        'category_label': filters.forDimension(SalesDimension.category)?.label,
-        'customer_code': filters.forDimension(SalesDimension.customer)?.code,
-        'customer_label': filters.forDimension(SalesDimension.customer)?.label,
-        'item_code': filters.forDimension(SalesDimension.item)?.code,
-        'item_label': filters.forDimension(SalesDimension.item)?.label,
-        'branch_code': filters.forDimension(SalesDimension.branch)?.code,
-        'branch_label': filters.forDimension(SalesDimension.branch)?.label,
+        'dimensions': {
+          for (final entry in filters.dimensions.entries) entry.key: {'code': entry.value.code, 'label': entry.value.label},
+        },
       });
     } on PostgrestException catch (e) {
       if (e.code == '23505') {

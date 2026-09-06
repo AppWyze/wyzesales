@@ -10,6 +10,7 @@ import '../../../core/utils/dimension_ranking.dart';
 import '../../../core/utils/sales_coverage.dart';
 import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/budget_figure.dart';
+import '../../../data/models/client_dimension_config.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../data/models/dimension_monthly_sales.dart';
 import '../../../data/models/profile.dart';
@@ -288,7 +289,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   bool _profileReloadQueued = false;
 
   ValueMeasure _measure = ValueMeasure.rValue;
-  SalesDimension _dimension = SalesDimension.customer;
+  // 2026-09-06: a raw client_dimensions.dimension_key rather than a
+  // `SalesDimension` — see this class's own `rankableDimensions`/
+  // `dimensionLabel` locals in build() for why. 'customer' is still the
+  // same default WCSA has always opened to (SalesDimension.customer.dbValue
+  // is exactly this string), so this is a zero-behaviour-change swap.
+  String _dimension = 'customer';
   _RankMode _rankMode = _RankMode.top5;
 
   _DimensionRawData? _dimensionData;
@@ -949,13 +955,20 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     try {
       final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
       final filters = _dashboardFilters(ref.read(globalFiltersProvider));
+      // Resolved before the Future.wait below (not raced alongside it) since
+      // namesForConfig needs the ClientDimensionConfig itself, not just the
+      // raw key — same ordering PerformanceScreen's own dimension-aware
+      // fetch already uses.
+      final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(dimension);
       final results = await Future.wait([
         ref.read(salesRepositoryProvider).fetchDimensionMonthlySales(
-              dimension: dimension.dbValue,
+              dimension: dimension,
               fiscalYears: [currentFy - 1, currentFy],
               filters: filters,
             ),
-        ref.read(referenceDataRepositoryProvider).namesFor(dimension),
+        dimensionConfig == null
+            ? Future.value(<String, String>{})
+            : ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig),
       ]);
       if (!mounted || requestId != _dimensionRequestId) return; // a newer load (filter change, dimension pick, or refresh) already superseded this one
       setState(() {
@@ -976,7 +989,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     }
   }
 
-  void _onDimensionChanged(SalesDimension? value) {
+  void _onDimensionChanged(String? value) {
     if (value == null || value == _dimension) return;
     // Deliberately keep the previous dimension's charts on screen (just
     // dimmed via the small inline spinner next to the heading) rather than
@@ -1066,7 +1079,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   // which chart/mode was actually clicked.
   void _drillDown(PieSlice slice, {required String period}) {
     context.go(
-      '/sales-by/${_dimension.dbValue}'
+      '/sales-by/$_dimension'
       '?highlight=${Uri.encodeComponent(slice.entityCode)}'
       '&rank=${_rankMode.name}'
       '&period=$period'
@@ -1121,6 +1134,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     });
 
     final dimData = _dimensionData;
+
+    // 2026-09-06: the ranking-breakdown widget's own dimension picker,
+    // generalized off this client's configured dimension list rather than
+    // the fixed `SalesDimension.filterable` — schema/038's own comment on
+    // `shows_on_dashboard_top5` names this exact widget as what that flag
+    // was always meant to drive. `valueOrNull ?? const []` / the "still show
+    // the current value even if it's fallen out of the list" fallback below
+    // both match SalesByScreen/PerformanceScreen's identical Step 4
+    // precedent (see PerformanceScreen.build()'s own comment).
+    final rankableDimensions = (ref.watch(clientDimensionsProvider).valueOrNull ?? const <ClientDimensionConfig>[])
+        .where((d) => d.showsOnDashboardTop5)
+        .toList();
+    final dimensionLabel = rankableDimensions.forKey(_dimension)?.displayLabel ?? _dimension;
 
     List<PieSlice> mtdSlices = const [];
     List<PieSlice> ytdSlices = const [];
@@ -1491,7 +1517,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           spacing: 10,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            Text('${_dimension.label} breakdown', style: Theme.of(context).textTheme.titleMedium),
+                            Text('$dimensionLabel breakdown', style: Theme.of(context).textTheme.titleMedium),
                             if (_dimensionLoading)
                               const SizedBox(width: 14, height: 14, child: RepaintBoundary(child: CircularProgressIndicator(strokeWidth: 2))),
                           ],
@@ -1501,16 +1527,28 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         // Performance): Craig, "check the sizing and
                         // consistency of all of the filter boxes across the
                         // application."
-                        BoxedDropdown<SalesDimension>(
+                        BoxedDropdown<String>(
                           value: _dimension,
                           width: 160,
-                          // `filterable`, not `values` — this picker ranks
-                          // entities WITHIN a dimension (Top 5 reps, Top 5
-                          // branches, etc.); "Company" has only ever one
-                          // entity, nothing to rank (2026-09-02, Section 57;
-                          // the Dashboard's own KPI tiles above already cover
-                          // whole-company figures).
-                          items: SalesDimension.filterable.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
+                          // Built from this client's own `shows_on_dashboard_
+                          // top5` dimensions (schema/038) rather than the
+                          // fixed `SalesDimension.filterable` — "Company" has
+                          // never been one of those (only ever one entity,
+                          // nothing to rank, 2026-09-02 Section 57; the
+                          // Dashboard's own KPI tiles above already cover
+                          // whole-company figures), and neither is any other
+                          // dimension a client hasn't explicitly opted into
+                          // this widget. The trailing fallback entry (as in
+                          // SalesByScreen/PerformanceScreen) keeps the
+                          // currently-selected value renderable even for the
+                          // one frame before `clientDimensionsProvider`
+                          // resolves, or if a dimension was un-flagged after
+                          // being selected.
+                          items: [
+                            for (final d in rankableDimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+                            if (!rankableDimensions.any((d) => d.dimensionKey == _dimension))
+                              DropdownMenuItem(value: _dimension, child: Text(dimensionLabel)),
+                          ],
                           onChanged: _onDimensionChanged,
                         ),
                         BoxedDropdown<_RankMode>(
@@ -1549,13 +1587,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       childAspectRatio: 1.5,
                       children: [
                         _PieCard(
-                          title: '${_dimension.label} — MTD',
+                          title: '$dimensionLabel — MTD',
                           totalLabel: 'MTD',
                           slices: mtdSlices,
                           onSliceTap: (slice) => _drillDown(slice, period: 'mtd'),
                         ),
                         _PieCard(
-                          title: '${_dimension.label} — YTD',
+                          title: '$dimensionLabel — YTD',
                           totalLabel: 'YTD',
                           slices: ytdSlices,
                           onSliceTap: (slice) => _drillDown(slice, period: 'ytd'),
