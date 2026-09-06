@@ -1,4 +1,3 @@
-import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/supabase/supabase_config.dart';
 import '../../core/utils/sales_coverage.dart';
@@ -184,14 +183,26 @@ class SalesRepository {
   /// The shared tidy rollup — pass entityCode for a single-entity trend
   /// (Sales Analysis Graph tab, YTD Comparative) or leave it null for every
   /// entity in the dimension (Sales by [Dimension]).
+  ///
+  /// `dimension` is a plain dimension_key string (client_dimensions.
+  /// dimension_key, schema/038) rather than the fixed `SalesDimension` enum —
+  /// 2026-09-06 (multi-tenant dimension model Step 4): this was the only
+  /// thing stopping Sales By/Performance from ever showing a brand-new
+  /// client's own dim_1..dim_12 dimension, since both v_dimension_monthly_
+  /// sales (schema/039) and fn_dimension_monthly_sales_filtered (schema/042)
+  /// already accept any configured dimension_key — this method just forwarded
+  /// whichever value it was given either way (`dimension.dbValue` was always
+  /// the only thing read off the enum). Every existing caller passes
+  /// `SalesDimension.x.dbValue`, so this is a zero-behaviour-change signature
+  /// swap for WCSA.
   Future<List<DimensionMonthlySales>> fetchDimensionMonthlySales({
-    required SalesDimension dimension,
+    required String dimension,
     String? entityCode,
     List<int>? fiscalYears,
     GlobalFilters? filters,
   }) async {
     if (!_hasCrossFilters(filters)) {
-      var query = supabase.from('v_dimension_monthly_sales').select().eq('dimension', dimension.dbValue);
+      var query = supabase.from('v_dimension_monthly_sales').select().eq('dimension', dimension);
       if (entityCode != null) query = query.eq('entity_code', entityCode);
       if (fiscalYears != null && fiscalYears.isNotEmpty) {
         query = query.inFilter('fiscal_year', fiscalYears);
@@ -201,7 +212,7 @@ class SalesRepository {
     }
 
     final rows = await supabase.rpc('fn_dimension_monthly_sales_filtered', params: {
-      'p_dimension': dimension.dbValue,
+      'p_dimension': dimension,
       'p_entity_code': entityCode,
       'p_fiscal_years': fiscalYears,
       'p_fiscal_month': filters!.fiscalMonth,
@@ -242,8 +253,11 @@ class SalesRepository {
   /// performance_screen.dart, which now sources both its Year and Month
   /// dropdown values directly from GlobalFilters), so only the OTHER 5
   /// dimensions count toward whether this needs the RPC route.
+  ///
+  /// `dimension` is a plain dimension_key string — see
+  /// fetchDimensionMonthlySales' own doc comment (2026-09-06, Step 4) for why.
   Future<List<DimensionPerformance>> fetchDimensionPerformance({
-    required SalesDimension dimension,
+    required String dimension,
     String? entityCode,
     int? fiscalYear,
     String? fiscalMonth,
@@ -252,7 +266,7 @@ class SalesRepository {
     final hasDimensionFilters = filters != null && filters.hasAnyDimensionSelected;
 
     if (!hasDimensionFilters) {
-      var query = supabase.from('v_dimension_performance').select().eq('dimension', dimension.dbValue);
+      var query = supabase.from('v_dimension_performance').select().eq('dimension', dimension);
       if (entityCode != null) query = query.eq('entity_code', entityCode);
       if (fiscalYear != null) query = query.eq('fiscal_year', fiscalYear);
       if (fiscalMonth != null) query = query.eq('fiscal_month', fiscalMonth);
@@ -261,7 +275,7 @@ class SalesRepository {
     }
 
     final rows = await supabase.rpc('fn_dimension_performance_filtered', params: {
-      'p_dimension': dimension.dbValue,
+      'p_dimension': dimension,
       'p_entity_code': entityCode,
       'p_fiscal_year': fiscalYear,
       'p_fiscal_month': fiscalMonth,

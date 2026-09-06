@@ -678,7 +678,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       _fetchWholeCompanyTarget(currentFiscalYear, monthStart, filters),
       salesRepo.fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
       salesRepo.fetchDimensionMonthlySales(
-        dimension: SalesDimension.customer,
+        dimension: SalesDimension.customer.dbValue,
         fiscalYears: [currentFiscalYear],
         filters: filters,
       ),
@@ -690,7 +690,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       // doc comment for why the other 4 dashboard filters don't narrow this
       // tile the way they do the rest of the row.
       ref.read(budgetRepositoryProvider).fetchBudget(dimension: 'sales_person'),
-      salesRepo.fetchDimensionMonthlySales(dimension: SalesDimension.salesPerson, fiscalYears: [currentFiscalYear]),
+      salesRepo.fetchDimensionMonthlySales(dimension: SalesDimension.salesPerson.dbValue, fiscalYears: [currentFiscalYear]),
       // Returns / Credit Note Rate — invoice and credit_note totals fetched
       // SEPARATELY (fn_sales_documents_totals aggregates every document_kind
       // passed to it into one combined row, it doesn't split by kind), so
@@ -951,7 +951,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       final filters = _dashboardFilters(ref.read(globalFiltersProvider));
       final results = await Future.wait([
         ref.read(salesRepositoryProvider).fetchDimensionMonthlySales(
-              dimension: dimension,
+              dimension: dimension.dbValue,
               fiscalYears: [currentFy - 1, currentFy],
               filters: filters,
             ),

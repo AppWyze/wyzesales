@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import '../../core/constants/fiscal.dart';
 import '../../features/auth/screens/login_screen.dart';
 import '../../features/auth/screens/reset_password_screen.dart';
 import '../../features/dashboard/screens/dashboard_screen.dart';
@@ -120,9 +119,15 @@ final GoRouter appRouter = GoRouter(
   ],
 );
 
-SalesDimension _dimensionFromPath(String? value) {
-  return SalesDimension.values.firstWhere(
-    (d) => d.dbValue == value,
-    orElse: () => SalesDimension.salesPerson,
-  );
-}
+/// 2026-09-06 (Step 4): returns the raw dimension_key straight off the URL
+/// path segment now, rather than parsing it into the fixed `SalesDimension`
+/// enum (which had no way to represent a brand-new client's own dim_1..
+/// dim_12 dimension — a route like /sales-by/dim_7 used to silently fall
+/// back to Sales Person). SalesByScreen/BudgetsScreen/PerformanceScreen
+/// resolve the actual display label/config themselves, against whichever
+/// dimensions THIS client has (clientDimensionsProvider), once they're
+/// mounted — see those screens' own doc comments. 'sales_person' is kept as
+/// the fallback for a missing/empty path segment only (should never actually
+/// happen — every route below requires this segment) — the same default
+/// this used to fall back to.
+String _dimensionFromPath(String? value) => (value == null || value.isEmpty) ? 'sales_person' : value;

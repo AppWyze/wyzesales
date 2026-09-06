@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/performance_rollup.dart';
 import '../../../core/utils/sales_coverage.dart';
+import '../../../data/models/client_dimension_config.dart';
 import '../../../data/models/dimension_performance.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
@@ -83,7 +84,10 @@ class _PerformanceData {
 class PerformanceScreen extends ConsumerStatefulWidget {
   const PerformanceScreen({super.key, required this.dimension});
 
-  final SalesDimension dimension;
+  /// A plain dimension_key (client_dimensions.dimension_key, schema/038) —
+  /// 2026-09-06 (Step 4), see SalesByScreen.dimension's own doc comment for
+  /// the full reasoning; identical change, same reasons.
+  final String dimension;
 
   @override
   ConsumerState<PerformanceScreen> createState() => _PerformanceScreenState();
@@ -215,7 +219,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // the CORRECT values but the table still doesn't change, the bug is in
     // the fetch/query itself, not in when it's triggered.
     debugPrint(
-      '[PerformanceScreen] _load() dimension=${widget.dimension.dbValue} '
+      '[PerformanceScreen] _load() dimension=${widget.dimension} '
       'effectiveYear=$effectiveYear effectiveMonth=$effectiveMonth '
       'rawFilters(year=${filters.fiscalYear}, month=${filters.fiscalMonth}, '
       'salesPerson=${filters.forDimension(SalesDimension.salesPerson)?.code}, category=${filters.forDimension(SalesDimension.category)?.code}, '
@@ -233,6 +237,9 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
     final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     final historyWindow = fiscalYearWindow(currentFy, historyYears);
+    // .future, not .valueOrNull — see SalesByScreen._load()'s identical
+    // comment for why this is safe/correct inside an already-async load.
+    final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(widget.dimension);
     final results = await Future.wait([
       ref.read(salesRepositoryProvider).fetchDimensionPerformance(
             dimension: widget.dimension,
@@ -240,8 +247,10 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             fiscalMonth: effectiveMonth,
             filters: filters,
           ),
-      ref.read(referenceDataRepositoryProvider).namesFor(widget.dimension),
-      ref.read(salesRepositoryProvider).fetchSalesHistory(dimension: widget.dimension.dbValue, fiscalYears: historyWindow),
+      dimensionConfig == null
+          ? Future.value(<String, String>{})
+          : ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig),
+      ref.read(salesRepositoryProvider).fetchSalesHistory(dimension: widget.dimension, fiscalYears: historyWindow),
       ref.read(salesRepositoryProvider).fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
     ]);
     var rawRows = results[0] as List<DimensionPerformance>;
@@ -388,9 +397,14 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // registration is the point, not the return value.
     ref.watch(globalFiltersProvider);
 
+    // valueOrNull ?? const [] — see SalesByScreen.build()'s identical
+    // comment for the reasoning.
+    final dimensions = ref.watch(clientDimensionsProvider).valueOrNull ?? const <ClientDimensionConfig>[];
+    final dimensionLabel = dimensions.forKey(widget.dimension)?.displayLabel ?? widget.dimension;
+
     return AppShell(
-      title: 'Performance — ${widget.dimension.label}',
-      currentRoute: '/performance/${widget.dimension.dbValue}',
+      title: 'Performance — $dimensionLabel',
+      currentRoute: '/performance/${widget.dimension}',
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -400,18 +414,27 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 // 2026-08-27: Year/Month dropdowns dropped — Craig:
-                // "Performance: drop Year, Month." Only the SalesDimension
+                // "Performance: drop Year, Month." Only the dimension
                 // switcher stays inline (it navigates between
                 // /performance/:dimension routes, which isn't something
                 // GlobalFilterBar's "Add filter" could do); setting Year or
                 // Month now happens through GlobalFilterBar like every other
                 // filter.
-                BoxedDropdown<SalesDimension>(
+                //
+                // 2026-09-06 (Step 4): built from this client's own
+                // configured dimension list rather than the fixed
+                // `SalesDimension.values` — see SalesByScreen's own
+                // _DimensionSwitcher doc comment for the identical reasoning.
+                BoxedDropdown<String>(
                   value: widget.dimension,
                   width: 160,
-                  items: SalesDimension.values.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
+                  items: [
+                    for (final d in dimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+                    if (!dimensions.any((d) => d.dimensionKey == widget.dimension))
+                      DropdownMenuItem(value: widget.dimension, child: Text(widget.dimension)),
+                  ],
                   onChanged: (d) {
-                    if (d != null && d != widget.dimension) context.go('/performance/${d.dbValue}');
+                    if (d != null && d != widget.dimension) context.go('/performance/$d');
                   },
                 ),
                 DataExportButtons(onExport: _buildExportData),
@@ -428,7 +451,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                 key: ValueKey(_loadGeneration),
                 future: _future,
                 isEmpty: (data) => data.rows.isEmpty,
-                builder: (context, data) => _buildTable(context, data),
+                builder: (context, data) => _buildTable(context, data, dimensionLabel),
               ),
             ),
           ],
@@ -524,7 +547,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return AppColors.negative;
   }
 
-  Widget _buildTable(BuildContext context, _PerformanceData data) {
+  Widget _buildTable(BuildContext context, _PerformanceData data, String dimensionLabel) {
     final rows = [...data.rows]..sort((a, b) {
       final cmp = _compareRows(a, b, data, _sortColumnIndex);
       return _sortAscending ? cmp : -cmp;
@@ -544,7 +567,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             // don't lose them when scrolling down").
             pinnedRowCount: rows.isNotEmpty ? 1 : 0,
             columns: [
-              DataColumn(label: Text(widget.dimension.label), onSort: _onSort),
+              DataColumn(label: Text(dimensionLabel), onSort: _onSort),
               DataColumn(label: const Text('% Contribution'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Value'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Target'), numeric: true, onSort: _onSort),
@@ -654,9 +677,12 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   /// so there's no extra "fetch everything" fetch needed here.
   Future<ExportData> _buildExportData() async {
     final data = await _future;
+    // ref.read, not ref.watch — this runs from a button press, outside
+    // build(). See SalesByScreen._buildExportData's identical comment.
+    final dimensionLabel = ref.read(clientDimensionsProvider).valueOrNull?.forKey(widget.dimension)?.displayLabel ?? widget.dimension;
     final rows = data.rows;
     final headers = [
-      widget.dimension.label,
+      dimensionLabel,
       '% Contribution',
       'R Value',
       'R Target',
@@ -714,8 +740,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return ExportData(
       headers: headers,
       rows: dataRows,
-      fileNameBase: 'performance_${widget.dimension.dbValue}',
-      title: 'Performance — ${widget.dimension.label}',
+      fileNameBase: 'performance_${widget.dimension}',
+      title: 'Performance — $dimensionLabel',
     );
   }
 }

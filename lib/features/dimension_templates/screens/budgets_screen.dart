@@ -10,6 +10,7 @@ import '../../../core/filters/global_filters.dart';
 import '../../../core/supabase/supabase_config.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/budget_figure.dart';
+import '../../../data/models/client_dimension_config.dart';
 import '../../../data/models/profile.dart';
 import '../../../data/models/reference_data.dart';
 import '../../../shared/widgets/app_shell.dart';
@@ -96,7 +97,10 @@ class _BudgetMonthData {
 class BudgetsScreen extends ConsumerStatefulWidget {
   const BudgetsScreen({super.key, required this.dimension});
 
-  final SalesDimension dimension;
+  /// A plain dimension_key (client_dimensions.dimension_key, schema/038) —
+  /// 2026-09-06 (Step 4), see SalesByScreen.dimension's own doc comment for
+  /// the full reasoning; identical change, same reasons.
+  final String dimension;
 
   @override
   ConsumerState<BudgetsScreen> createState() => _BudgetsScreenState();
@@ -111,7 +115,23 @@ class BudgetsScreen extends ConsumerStatefulWidget {
 /// return zero rows for anyway — RLS is the only real enforcement, and this
 /// list is deliberately kept in lockstep with it rather than duplicating any
 /// row-level logic here.
-List<SalesDimension> _allowedDimensionsFor(Profile? profile) {
+///
+/// 2026-09-06 (Step 4): generalized from the fixed `SalesDimension` list to
+/// this client's own configured dimensions (`allDimensions`, from
+/// `clientDimensionsProvider`), so a brand-new client's own dimension is
+/// budget-pickable too. The two carve-outs above map onto flags every
+/// dimension already carries rather than a hardcoded per-dimension list:
+/// "not Company" is `dimensionKey != 'company'` (the reserved whole-company
+/// pseudo-dimension, same special key schema/042's SQL treats specially);
+/// "not Branch" for a plain User is `!isRlsScope` — Branch is WCSA's own
+/// is_rls_scope dimension (schema/038's WCSA seed), so this generalizes
+/// "the one dimension a RegUser is pinned to isn't something a plain User
+/// gets to pick an arbitrary OTHER entity's budget within" to any client.
+/// Checked against WCSA's exact 3 pre-existing lists: adminuser/superuser =
+/// all 6; reguser = all 6 minus company = the old 5-item list; user = that
+/// minus branch (WCSA's is_rls_scope dimension) = the old 4-item list —
+/// byte-for-byte the same 3 outcomes as before this generalized.
+List<ClientDimensionConfig> _allowedDimensionsFor(Profile? profile, List<ClientDimensionConfig> allDimensions) {
   switch (profile?.level) {
     case UserLevel.adminuser:
     // superuser is vestigial — schema/008 retired it outright and nothing
@@ -119,23 +139,12 @@ List<SalesDimension> _allowedDimensionsFor(Profile? profile) {
     // treated the same as adminuser here rather than falling through to
     // the narrowest case for a level nobody actually has.
     case UserLevel.superuser:
-      return SalesDimension.values;
+      return allDimensions;
     case UserLevel.reguser:
-      return const [
-        SalesDimension.salesPerson,
-        SalesDimension.category,
-        SalesDimension.customer,
-        SalesDimension.item,
-        SalesDimension.branch,
-      ];
+      return allDimensions.where((d) => d.dimensionKey != 'company').toList();
     case UserLevel.user:
     case null:
-      return const [
-        SalesDimension.salesPerson,
-        SalesDimension.category,
-        SalesDimension.customer,
-        SalesDimension.item,
-      ];
+      return allDimensions.where((d) => d.dimensionKey != 'company' && !d.isRlsScope).toList();
   }
 }
 
@@ -179,11 +188,16 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   /// there's no equivalent gap for that level.
   Future<_BudgetEntityData> _loadEntities() async {
     final profile = ref.read(sessionProvider).value;
-    final restrictToOwnCustomers = widget.dimension == SalesDimension.customer && profile?.level == UserLevel.user;
-    final list = await ref.read(referenceDataRepositoryProvider).entitiesFor(
-          widget.dimension,
-          customerAssignedRepCode: restrictToOwnCustomers ? profile?.repCode : null,
-        );
+    final restrictToOwnCustomers = widget.dimension == 'customer' && profile?.level == UserLevel.user;
+    // .future, not .valueOrNull — see SalesByScreen._load()'s identical
+    // comment for why this is safe/correct inside an already-async load.
+    final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(widget.dimension);
+    final list = dimensionConfig == null
+        ? <CodeName>[]
+        : await ref.read(referenceDataRepositoryProvider).entitiesForConfig(
+            dimensionConfig,
+            customerAssignedRepCode: restrictToOwnCustomers ? profile?.repCode : null,
+          );
     final data = _BudgetEntityData(list);
     _applyGlobalFilterSelection(data);
     return data;
@@ -202,7 +216,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   /// pass only partially wires up, rather than silently pretending it's
   /// fully filterable.
   void _applyGlobalFilterSelection(_BudgetEntityData data) {
-    final selection = ref.read(globalFiltersProvider).forDimension(widget.dimension);
+    final selection = ref.read(globalFiltersProvider).forKey(widget.dimension);
     if (selection == null || !mounted) return;
     final match = data.entities.where((e) => e.code == selection.code).toList();
     if (match.isEmpty) return;
@@ -220,7 +234,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   Future<_BudgetMonthData> _loadMonthData(String entityCode) async {
     final budgetRepo = ref.read(budgetRepositoryProvider);
     final results = await Future.wait([
-      budgetRepo.fetchBudget(dimension: widget.dimension.dbValue, entityCode: entityCode),
+      budgetRepo.fetchBudget(dimension: widget.dimension, entityCode: entityCode),
       _fetchForecast(entityCode),
     ]);
     final budgetRows = results[0] as List<BudgetFigure>;
@@ -239,13 +253,18 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     return supabase
         .from('sales_forecast')
         .select('fiscal_month, forecast_value, confidence')
-        .eq('dimension', widget.dimension.dbValue)
+        .eq('dimension', widget.dimension)
         .eq('entity_code', entityCode);
   }
 
   @override
   Widget build(BuildContext context) {
     final profileAsync = ref.watch(sessionProvider);
+    // valueOrNull ?? const [] — see SalesByScreen.build()'s identical
+    // comment for the reasoning. Computed up front so it's available to
+    // both the loading branch below and the fully-rendered body.
+    final dimensions = ref.watch(clientDimensionsProvider).valueOrNull ?? const <ClientDimensionConfig>[];
+    final dimensionLabel = dimensions.forKey(widget.dimension)?.displayLabel ?? widget.dimension;
 
     // Mirrors dashboard_screen.dart's own fix for the identical race
     // (Craig, 2026-09-03: "Dashboard opens and it shows 0 target. I
@@ -265,7 +284,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     // profile-dependently.
     ref.listen<AsyncValue<Profile?>>(sessionProvider, (previous, next) {
       if (previous?.value != null || next.value == null) return;
-      if (widget.dimension == SalesDimension.customer) {
+      if (widget.dimension == 'customer') {
         setState(() => _entitiesFuture = _loadEntities());
       }
     });
@@ -277,15 +296,15 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     // value arrives.
     if (profileAsync.isLoading) {
       return AppShell(
-        title: 'Budgets — ${widget.dimension.label}',
-        currentRoute: '/budgets/${widget.dimension.dbValue}',
+        title: 'Budgets — $dimensionLabel',
+        currentRoute: '/budgets/${widget.dimension}',
         body: const Center(child: RepaintBoundary(child: CircularProgressIndicator())),
       );
     }
 
     final profile = profileAsync.value;
     final canEditBudgets = profile?.canEditBudgets ?? false;
-    final allowedDimensions = _allowedDimensionsFor(profile);
+    final allowedDimensions = _allowedDimensionsFor(profile, dimensions);
 
     // Every level can view Budgets now (Section 70) — the screen itself no
     // longer has a hard access-denied state. What's left to guard against
@@ -296,20 +315,28 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     // migration 031's RLS would return zero rows for regardless. Deferred
     // to a post-frame callback since build() itself must return a widget,
     // not navigate mid-build.
-    if (!allowedDimensions.contains(widget.dimension)) {
+    //
+    // `allowedDimensions.isNotEmpty` guards the one other reason this can be
+    // empty besides a genuine access issue: `clientDimensionsProvider`
+    // hasn't resolved yet on a cold load. Skipping the redirect in that
+    // case (rather than crashing on `.first` of an empty list) just falls
+    // through to the normal render below, which itself tolerates an
+    // empty/still-loading dimension list — see the dropdown's own fallback
+    // item and `_loadEntities`' `dimensionConfig == null` branch.
+    if (allowedDimensions.isNotEmpty && !allowedDimensions.any((d) => d.dimensionKey == widget.dimension)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) context.go('/budgets/${allowedDimensions.first.dbValue}');
+        if (mounted) context.go('/budgets/${allowedDimensions.first.dimensionKey}');
       });
       return AppShell(
         title: 'Budgets',
-        currentRoute: '/budgets/${widget.dimension.dbValue}',
+        currentRoute: '/budgets/${widget.dimension}',
         body: const Center(child: RepaintBoundary(child: CircularProgressIndicator())),
       );
     }
 
     return AppShell(
-      title: 'Budgets — ${widget.dimension.label}',
-      currentRoute: '/budgets/${widget.dimension.dbValue}',
+      title: 'Budgets — $dimensionLabel',
+      currentRoute: '/budgets/${widget.dimension}',
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -319,12 +346,19 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
               children: [
                 Padding(
                   padding: const EdgeInsets.all(12),
-                  child: BoxedDropdown<SalesDimension>(
+                  child: BoxedDropdown<String>(
                     value: widget.dimension,
                     width: 236,
-                    items: allowedDimensions.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
+                    items: [
+                      for (final d in allowedDimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+                      // Same "value must match an item" fallback as
+                      // SalesByScreen/PerformanceScreen's own dimension
+                      // switchers — see their doc comments.
+                      if (!allowedDimensions.any((d) => d.dimensionKey == widget.dimension))
+                        DropdownMenuItem(value: widget.dimension, child: Text(dimensionLabel)),
+                    ],
                     onChanged: (d) {
-                      if (d != null && d != widget.dimension) context.go('/budgets/${d.dbValue}');
+                      if (d != null && d != widget.dimension) context.go('/budgets/$d');
                     },
                   ),
                 ),
@@ -397,7 +431,7 @@ class _MonthTable extends ConsumerStatefulWidget {
     required this.clientId,
   });
 
-  final SalesDimension dimension;
+  final String dimension;
   final String entityCode;
   final _BudgetMonthData data;
   final bool canEdit;
@@ -470,7 +504,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     if (parsed == null) return;
     await ref.read(budgetRepositoryProvider).setBudgetValue(
           clientId: clientId,
-          dimension: widget.dimension.dbValue,
+          dimension: widget.dimension,
           entityCode: widget.entityCode,
           fiscalMonth: month,
           budgetValue: parsed,

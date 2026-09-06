@@ -6,6 +6,7 @@ import '../../../core/app_providers.dart';
 import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
 import '../../../core/utils/formatters.dart';
+import '../../../data/models/client_dimension_config.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
@@ -27,7 +28,13 @@ class SalesByScreen extends ConsumerStatefulWidget {
     this.initialMeasure,
   });
 
-  final SalesDimension dimension;
+  /// A plain dimension_key (client_dimensions.dimension_key, schema/038) —
+  /// 2026-09-06 (Step 4), no longer the fixed `SalesDimension` enum, so this
+  /// screen can show a brand-new client's own dim_1..dim_12 dimension, not
+  /// just WCSA's original 6. The display label/entity list for this key are
+  /// resolved against `clientDimensionsProvider` (this client's own
+  /// configured dimensions) — see `_dimensionLabel`/`_load()` below.
+  final String dimension;
 
   /// Set by the Dashboard's pie-chart drill-down (2026-08-26, via
   /// /sales-by/:dimension?highlight=<code>) — pins that entity's row to the
@@ -172,7 +179,14 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
           filters: filters,
         );
 
-    final names = await ref.read(referenceDataRepositoryProvider).namesFor(widget.dimension);
+    // .future, not .valueOrNull — this is inside an async load already, so
+    // it's safe (and correct) to actually wait for this client's dimension
+    // config rather than risk racing it on a cold load (see this class'
+    // own dimension field doc comment).
+    final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(widget.dimension);
+    final names = dimensionConfig == null
+        ? <String, String>{}
+        : await ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig);
 
     final months = rows.map((r) => r.month).toSet().toList()..sort((a, b) => b.compareTo(a));
     final recentMonths = months.take(3).toList();
@@ -348,9 +362,17 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       setState(() => _future = _load());
     });
 
+    // valueOrNull ?? const [] — clientDimensionsProvider's own established
+    // "don't block rendering" convention (global_filter_bar.dart). Falls
+    // back to the raw dimension_key as its own label for the single frame
+    // this can be empty on a cold load, or (in practice never) if this
+    // client has no such dimension configured at all.
+    final dimensionLabel =
+        ref.watch(clientDimensionsProvider).valueOrNull?.forKey(widget.dimension)?.displayLabel ?? widget.dimension;
+
     return AppShell(
-      title: 'Sales by ${widget.dimension.label}',
-      currentRoute: '/sales-by/${widget.dimension.dbValue}',
+      title: 'Sales by $dimensionLabel',
+      currentRoute: '/sales-by/${widget.dimension}',
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -403,7 +425,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
                         ),
                         const SizedBox(height: 12),
                       ],
-                      Expanded(child: _buildTable(context, data)),
+                      Expanded(child: _buildTable(context, data, dimensionLabel)),
                     ],
                   );
                 },
@@ -415,7 +437,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     );
   }
 
-  Widget _buildTable(BuildContext context, _SalesByData data) {
+  Widget _buildTable(BuildContext context, _SalesByData data, String dimensionLabel) {
     // recentMonths is sorted most-recent-first; walked oldest-to-newest here
     // — same direction as the FY columns (FY2025 -> FY2026 -> FY2027, each
     // "vs" comparing back to the column on its left) — so "vs prior month"
@@ -469,7 +491,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       // scrolling down").
       pinnedRowCount: 1,
       columns: [
-        DataColumn(label: Text(widget.dimension.label), onSort: _onSort),
+        DataColumn(label: Text(dimensionLabel), onSort: _onSort),
         // Newest fiscal year first — see _columnPositions' doc comment.
         for (var i = data.fiscalYears.length - 1; i >= 0; i--) ...[
           DataColumn(label: Text('FY${data.fiscalYears[i]}'), numeric: true, onSort: _onSort),
@@ -567,6 +589,10 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   /// memory rather than a paginated page (same as Performance).
   Future<ExportData> _buildExportData() async {
     final data = await _future;
+    // ref.read, not ref.watch — this runs from a button press, outside
+    // build(). Falls back to the raw dimension_key same as `dimensionLabel`
+    // in build() above, for the same reason.
+    final dimensionLabel = ref.read(clientDimensionsProvider).valueOrNull?.forKey(widget.dimension)?.displayLabel ?? widget.dimension;
     final chronological = data.recentMonths.reversed.toList();
     final extractors = _columnValueExtractors(data, chronological);
     final entities = [...data.entityCodes]
@@ -588,7 +614,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     }
 
     final monthFormat = DateFormat('MMM yy');
-    final headers = <String>[widget.dimension.label];
+    final headers = <String>[dimensionLabel];
     // Newest fiscal year first — matches the on-screen table (see
     // _columnPositions' doc comment) so the export lines up with what's
     // displayed.
@@ -647,8 +673,8 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     return ExportData(
       headers: headers,
       rows: rows,
-      fileNameBase: 'sales_by_${widget.dimension.dbValue}',
-      title: 'Sales by ${widget.dimension.label}',
+      fileNameBase: 'sales_by_${widget.dimension}',
+      title: 'Sales by $dimensionLabel',
     );
   }
 
@@ -737,14 +763,22 @@ class _SalesByData {
 /// Small switcher so a user can jump between dimensions without returning to
 /// the drawer — reuses the same /sales-by/:dimension, /budgets/:dimension,
 /// /performance/:dimension route shape the templates already use.
-class _DimensionSwitcher extends StatelessWidget {
+///
+/// 2026-09-06 (Step 4): built from this client's own configured dimension
+/// list (`clientDimensionsProvider`) rather than the fixed `SalesDimension.
+/// values` — a `ConsumerWidget` now, not `StatelessWidget`, so it can watch
+/// that provider itself. For WCSA this renders the exact same 6 items, in
+/// the exact same order (sort_order matches `SalesDimension.values`'
+/// declared order — see schema/038's own seed comment).
+class _DimensionSwitcher extends ConsumerWidget {
   const _DimensionSwitcher({required this.current, required this.routePrefix});
-  final SalesDimension current;
+  final String current;
   final String routePrefix;
 
   @override
-  Widget build(BuildContext context) {
-    return BoxedDropdown<SalesDimension>(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dimensions = ref.watch(clientDimensionsProvider).valueOrNull ?? const <ClientDimensionConfig>[];
+    return BoxedDropdown<String>(
       value: current,
       // 160 — standardized 2026-08-27 to match every other dimension
       // switcher in the app (Performance, Dashboard's breakdown picker):
@@ -752,9 +786,17 @@ class _DimensionSwitcher extends StatelessWidget {
       // boxes across the application... keep them as small as reasonably
       // possible."
       width: 160,
-      items: SalesDimension.values.map((d) => DropdownMenuItem(value: d, child: Text(d.label))).toList(),
+      items: [
+        for (final d in dimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+        // A DropdownButton's `value` must match one of its `items` or
+        // Flutter asserts — this covers the single frame `dimensions` is
+        // still empty on a cold load (clientDimensionsProvider hasn't
+        // resolved yet) and, in practice never, `current` naming a
+        // dimension this client hasn't actually configured.
+        if (!dimensions.any((d) => d.dimensionKey == current)) DropdownMenuItem(value: current, child: Text(current)),
+      ],
       onChanged: (d) {
-        if (d != null && d != current) context.go('$routePrefix/${d.dbValue}');
+        if (d != null && d != current) context.go('$routePrefix/$d');
       },
     );
   }

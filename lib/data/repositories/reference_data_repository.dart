@@ -155,6 +155,49 @@ class ReferenceDataRepository {
     return (rows as List).map<String>((r) => r['entity_code'] as String).toSet();
   }
 
+  /// Picker list for a brand-new 'fact_column'/'customer_attribute'
+  /// dimension — client_dimension_values (schema/038 Section 2), the one
+  /// generic per-client lookup table those dimensions' codes/names live in,
+  /// since (unlike the 6 'existing' dimensions) they have no bespoke
+  /// reference table of their own. WCSA's own dimensions are all 'existing',
+  /// so this table stays empty and unused for WCSA today — see
+  /// `entitiesForConfig`'s own doc comment.
+  Future<List<CodeName>> dimensionValues(String dimensionKey, {String? search}) async {
+    var query = supabase.from('client_dimension_values').select('code, name').eq('dimension_key', dimensionKey);
+    if (search != null && search.isNotEmpty) {
+      query = query.ilike('name', '%$search%');
+    }
+    final rows = await query.order('name');
+    return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'code')).toList();
+  }
+
+  /// `entitiesFor`/`namesFor` generalized to ANY of this client's configured
+  /// dimensions (client_dimensions, schema/038), not just the 6 built into
+  /// `SalesDimension` — 2026-09-06 (multi-tenant dimension model Step 4),
+  /// so Sales By/Performance/Budgets can show a brand-new client's own
+  /// dim_1..dim_12 dimension. Added alongside `entitiesFor`/`namesFor` rather
+  /// than changing either's existing signature, so every other caller of
+  /// those two (searchAllDimensions, GlobalFilterBar's entity-filter picker)
+  /// is completely untouched — this pass only generalizes the three screens
+  /// that asked for it. An 'existing' dimension (still the only kind WCSA
+  /// has) delegates straight through `asSalesDimension` to the original,
+  /// unchanged `entitiesFor`/`namesFor` — so WCSA's own behaviour here is
+  /// byte-for-byte the same code path as before this existed.
+  Future<List<CodeName>> entitiesForConfig(ClientDimensionConfig dimension, {String? search, String? customerAssignedRepCode}) {
+    final existing = dimension.asSalesDimension;
+    if (existing != null) {
+      return entitiesFor(existing, search: search, customerAssignedRepCode: customerAssignedRepCode);
+    }
+    return dimensionValues(dimension.dimensionKey, search: search);
+  }
+
+  Future<Map<String, String>> namesForConfig(ClientDimensionConfig dimension) async {
+    final existing = dimension.asSalesDimension;
+    if (existing != null) return namesFor(existing);
+    final list = await entitiesForConfig(dimension);
+    return {for (final c in list) c.code: c.displayLabel};
+  }
+
   /// This client's configured Sales Analysis dimensions (client_dimensions,
   /// schema/038) — GlobalFilterBar's chips/"Add filter" dropdown source their
   /// dimension list from here now instead of the hardcoded
