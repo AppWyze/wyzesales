@@ -67,4 +67,18 @@ class AuthRepository {
     if (row == null) return null;
     return Profile.fromMap(row);
   }
+
+  /// Persists "Set as default" on the Dashboard's Option A/B layout switch
+  /// (schema/053) — the one column an ordinary login can write on their OWN
+  /// profile row. Deliberately scoped to `.eq('id', userId)` (the caller's
+  /// own id, always) rather than taking it on faith: `profiles`' new
+  /// `profiles_self_update_dashboard_layout` RLS policy already only matches
+  /// `id = auth.uid()` regardless of what this call sends, and a `before
+  /// update` trigger separately rejects the statement outright if anything
+  /// besides `dashboard_layout` differs — this method can't accidentally (or
+  /// maliciously, from a compromised client) touch another user's row or any
+  /// other column even if called incorrectly.
+  Future<void> setDashboardLayout(String userId, String layout) async {
+    await supabase.from('profiles').update({'dashboard_layout': layout}).eq('id', userId);
+  }
 }

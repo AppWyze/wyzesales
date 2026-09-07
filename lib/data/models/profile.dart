@@ -31,6 +31,16 @@ class Profile {
   final bool isActive;
   final bool isPlatformAdmin;
 
+  /// 'A' (the original KPI-tile/pie-chart Dashboard) or 'B' (the classification-
+  /// table layout, schema/053) — 2026-09-08, Craig, looking at Edgetec's old
+  /// standalone report: "I would like to offer the current dashboard as
+  /// option A and this one as option B. The user can pick and set to default
+  /// and then the default displays on log in." Persisted per LOGIN, not per
+  /// client — two users at the same client can each pick their own. Defaults
+  /// to 'A' at the DB column level (schema/053), so every existing login
+  /// keeps seeing exactly what it does today until they explicitly switch.
+  final String dashboardLayout;
+
   const Profile({
     required this.id,
     required this.clientId,
@@ -43,6 +53,7 @@ class Profile {
     this.rlsScopeCode,
     this.isActive = true,
     this.isPlatformAdmin = false,
+    this.dashboardLayout = 'A',
   });
 
   factory Profile.fromMap(Map<String, dynamic> map) {
@@ -58,6 +69,7 @@ class Profile {
       rlsScopeCode: map['rls_scope_code'] as String?,
       isActive: map['is_active'] as bool? ?? true,
       isPlatformAdmin: map['is_platform_admin'] as bool? ?? false,
+      dashboardLayout: map['dashboard_layout'] as String? ?? 'A',
     );
   }
 

@@ -38,6 +38,15 @@ class SessionNotifier extends StateNotifier<AsyncValue<Profile?>> {
 
   final AuthRepository _authRepository;
 
+  /// Public re-entry point for `_refresh()` — 2026-09-08, the Dashboard's
+  /// Option A/B "Set as default" action (schema/053) writes
+  /// `profiles.dashboard_layout` directly via AuthRepository.
+  /// setDashboardLayout, then calls this so `sessionProvider`'s own cached
+  /// Profile (what every other screen reads for the CURRENT default) picks
+  /// up the change immediately, the same way signing in/out already does,
+  /// rather than only taking effect after the next full reload.
+  Future<void> refreshProfile() => _refresh();
+
   Future<void> _refresh() async {
     if (_authRepository.currentSession == null) {
       state = const AsyncValue.data(null);

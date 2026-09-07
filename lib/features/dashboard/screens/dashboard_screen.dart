@@ -22,6 +22,7 @@ import '../../../shared/widgets/simple_pie_chart.dart';
 import '../../../shared/widgets/toggle_stat_card.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
 import '../../../shared/widgets/value_gp_toggle.dart';
+import '../widgets/dashboard_table_view.dart';
 
 /// Every KPI tile in the Dashboard's 6-tile row is held to this exact
 /// height (2026-08-27, Craig: "The tiles all need to be the same size as
@@ -331,6 +332,45 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   // until the very first _loadKpis() call settles.
   bool _initialKpiLoadInFlight = true;
   bool _profileReloadQueued = false;
+
+  /// Option A/B switch (schema/053) — 2026-09-08, Craig: "I would like to
+  /// offer the current dashboard as option A and this one as option B. The
+  /// user can pick and set to default." `null` means "follow whatever
+  /// `profile.dashboardLayout` currently says" (the persisted default);
+  /// non-null means the user has switched layouts JUST for this session
+  /// without (yet) saving it as their default — picking a layout is
+  /// deliberately instant/local (setState only), while "Set as default" is
+  /// the one action that actually writes anywhere. Reset back to null the
+  /// moment "Set as default" succeeds, since the persisted value now matches
+  /// it anyway — see `_setDefaultLayout` below.
+  String? _layoutOverride;
+  bool _savingDefaultLayout = false;
+
+  void _setLayout(String value) => setState(() => _layoutOverride = value);
+
+  Future<void> _setDefaultLayout(String layout, String userId) async {
+    setState(() => _savingDefaultLayout = true);
+    try {
+      await ref.read(authRepositoryProvider).setDashboardLayout(userId, layout);
+      // Picks the new value back up on `sessionProvider` itself so every
+      // OTHER screen that ever reads `profile.dashboardLayout` (and a future
+      // reload/re-login) sees it immediately, not just this screen's own
+      // local override.
+      await ref.read(sessionProvider.notifier).refreshProfile();
+      if (!mounted) return;
+      setState(() {
+        _layoutOverride = null;
+        _savingDefaultLayout = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(layout == 'B' ? 'Table view set as your default.' : 'Standard view set as your default.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _savingDefaultLayout = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save default: $error')));
+    }
+  }
 
   ValueMeasure _measure = ValueMeasure.rValue;
 
@@ -1406,10 +1446,28 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       ytdSlices = _pickSlices(current: ytdCurrent, previous: ytdPrevious, names: dimData.names);
     }
 
+    // Option A/B (schema/053) — see `_layoutOverride`'s own doc comment for
+    // why this reads that first, falling back to the persisted profile
+    // default, rather than watching `profile.dashboardLayout` directly.
+    final profile = ref.watch(sessionProvider).value;
+    final effectiveLayout = _layoutOverride ?? profile?.dashboardLayout ?? 'A';
+
     return AppShell(
       title: 'Dashboard',
       currentRoute: '/',
-      body: RefreshIndicator(
+      body: Column(
+        children: [
+          _DashboardLayoutBar(
+            layout: effectiveLayout,
+            isDefault: effectiveLayout == (profile?.dashboardLayout ?? 'A'),
+            saving: _savingDefaultLayout,
+            onSelect: _setLayout,
+            onSetDefault: profile == null ? null : () => _setDefaultLayout(effectiveLayout, profile.id),
+          ),
+          Expanded(
+            child: effectiveLayout == 'B'
+                ? const DashboardTableView()
+                : RefreshIndicator(
         onRefresh: _refresh,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -1918,6 +1976,61 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             },
           ),
         ),
+      ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Option A/B switch (schema/053) — a small strip above the Dashboard's own
+/// content, always visible regardless of which layout is active, so getting
+/// back to the other one (or saving the current pick as the default) never
+/// requires hunting through Settings. "Set as default" only shows once the
+/// current pick actually differs from the persisted default — nothing to
+/// save if you're already looking at your own default layout.
+class _DashboardLayoutBar extends StatelessWidget {
+  const _DashboardLayoutBar({
+    required this.layout,
+    required this.isDefault,
+    required this.saving,
+    required this.onSelect,
+    required this.onSetDefault,
+  });
+
+  final String layout;
+  final bool isDefault;
+  final bool saving;
+  final ValueChanged<String> onSelect;
+  final VoidCallback? onSetDefault;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08))),
+      ),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'A', label: Text('Standard view')),
+              ButtonSegment(value: 'B', label: Text('Table view')),
+            ],
+            selected: {layout},
+            onSelectionChanged: (selection) => onSelect(selection.first),
+          ),
+          if (!isDefault)
+            saving
+                ? const SizedBox(width: 16, height: 16, child: RepaintBoundary(child: CircularProgressIndicator(strokeWidth: 2)))
+                : TextButton(onPressed: onSetDefault, child: const Text('Set as default')),
+        ],
       ),
     );
   }
