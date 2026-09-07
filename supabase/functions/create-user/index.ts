@@ -94,7 +94,7 @@ Deno.serve(async (req) => {
       )
     }
 
-    const { email, password, name, level, contactNumber, repCode, branchCode } = await req.json()
+    const { email, password, name, level, contactNumber, repCode, branchCode, rlsScopeCode } = await req.json()
     if (!email || !password || !name || !level) {
       return new Response(
         JSON.stringify({ error: 'Missing required fields' }),
@@ -131,6 +131,12 @@ Deno.serve(async (req) => {
         contact_number: contactNumber ?? null,
         rep_code: repCode ?? null,
         branch_code: branchCode ?? null,
+        // 2026-09-07 (multi-tenant dimension model): a RegUser's own scope
+        // value when this client's RLS-scope dimension isn't Branch —
+        // schema/039's profiles.rls_scope_code. Only one of branch_code/
+        // rls_scope_code is ever actually meaningful for a given client; the
+        // app only ever sends the one that applies and leaves the other null.
+        rls_scope_code: rlsScopeCode ?? null,
         is_active: true,
       })
 

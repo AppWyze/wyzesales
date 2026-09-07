@@ -274,6 +274,15 @@ class SettingsRepository {
     String? contactNumber,
     String? repCode,
     String? branchCode,
+    // 2026-09-07 (multi-tenant dimension model, Settings > Users step): a
+    // RegUser's own scope value when this client's RLS-scope dimension
+    // (client_dimensions.is_rls_scope) is something other than Branch — see
+    // Profile.rlsScopeCode's own doc comment. Passed alongside branchCode
+    // rather than replacing it — only one of the two is ever actually
+    // relevant for a given client, decided by _AddUserDialogState/
+    // _EditUserDialogState based on which dimension is flagged is_rls_scope,
+    // and the create-user Edge Function just writes whichever it's given.
+    String? rlsScopeCode,
   }) async {
     try {
       final response = await supabase.functions.invoke('create-user', body: {
@@ -284,6 +293,7 @@ class SettingsRepository {
         'contactNumber': contactNumber,
         'repCode': repCode,
         'branchCode': branchCode,
+        'rlsScopeCode': rlsScopeCode,
       });
       if (response.status != 200) {
         throw EdgeFunctionError((response.data as Map?)?['error'] as String? ?? 'Failed to create user');

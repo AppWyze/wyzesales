@@ -12,6 +12,7 @@ import '../../../core/utils/client_logo.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/image_picker_web.dart';
 import '../../../data/models/client.dart';
+import '../../../data/models/client_dimension_config.dart';
 import '../../../data/models/data_load_run.dart';
 import '../../../data/models/license.dart';
 import '../../../data/models/profile.dart';
@@ -1605,9 +1606,14 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
   // TextEditingControllers, since there's no free-text entry left to
   // control.
   String? _repCode;
-  String? _branchCode;
+  // Was `_branchCode`/`_branches` — generalized 2026-09-07 (multi-tenant
+  // dimension model, Settings > Users step) to whichever dimension THIS
+  // CLIENT actually flags is_rls_scope (client_dimensions, schema/038), not
+  // always Branch. See `_scopeIsBranch`/`_scopeDimension` below.
+  String? _scopeCode;
   List<CodeName> _reps = const [];
-  List<CodeName> _branches = const [];
+  List<CodeName> _scopeValues = const [];
+  ClientDimensionConfig? _scopeDimension;
   UserLevel _level = UserLevel.user;
   bool _isLoading = false;
   String? _error;
@@ -1623,13 +1629,27 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
   // Section 2). Starts empty; `_codeDropdown` shows just "— None —" (or,
   // for a required field, nothing yet) until this resolves, same as
   // `_EditCompanyDialog`'s async-seeded fiscal fields.
+  //
+  // 2026-09-07: the second list is no longer always `branches()` — it's
+  // whichever dimension this client flags is_rls_scope (client_dimensions),
+  // resolved via `entitiesForConfig` the same way GlobalFilterBar's entity
+  // picker already does for a generic dimension. Falls back to `branches()`
+  // when the scope dimension IS 'branch' (WCSA today) or when none is
+  // configured at all — the exact same list/behaviour this dialog always had
+  // before this change, so WCSA sees zero difference.
   Future<void> _loadCodes() async {
     final repo = ref.read(referenceDataRepositoryProvider);
-    final results = await Future.wait([repo.salesReps(), repo.branches()]);
+    final dimensions = await ref.read(clientDimensionsProvider.future);
+    final scopeDimension = _findScopeDimension(dimensions);
+    final results = await Future.wait([
+      repo.salesReps(),
+      scopeDimension == null || scopeDimension.dimensionKey == 'branch' ? repo.branches() : repo.entitiesForConfig(scopeDimension),
+    ]);
     if (!mounted) return;
     setState(() {
       _reps = results[0] as List<CodeName>;
-      _branches = results[1] as List<CodeName>;
+      _scopeValues = results[1] as List<CodeName>;
+      _scopeDimension = scopeDimension;
     });
   }
 
@@ -1643,20 +1663,55 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
 
   // 2026-09-01, Craig: "If a User level is set to User and/or RegUser the
   // Rep code and Branch code fields are not optional but mandatory... Save
-  // cannot happen without this in place." Both fields now drive row-level
-  // security directly (schema/018) — a User/RegUser login with either left
-  // blank would match nothing under the new scoped RLS policies, so this
+  // cannot happen without this in place." Rep code drives row-level security
+  // directly (schema/018) regardless of level — a User/RegUser login with it
+  // left blank would match nothing under the scoped RLS policies, so this
   // isn't just a data-quality nicety, an unset code would silently make
   // every screen look empty for that person.
-  bool get _repBranchRequired => _level == UserLevel.user || _level == UserLevel.reguser;
+  bool get _repRequired => _level == UserLevel.user || _level == UserLevel.reguser;
+
+  // True when this client's RLS-scope dimension is Branch (WCSA today) or
+  // not configured at all — the field then behaves exactly as the old
+  // hardcoded Branch dropdown always did (see `_scopeRequired`/
+  // `_showScopeField` below). False for a generic scope dimension (Area,
+  // Market, ...).
+  bool get _scopeIsBranch => _scopeDimension == null || _scopeDimension!.dimensionKey == 'branch';
+
+  // Branch stays mandatory for BOTH User and RegUser, unchanged from before
+  // this generalization (Craig's decision above named Branch specifically,
+  // predating the multi-tenant dimension model). A GENERIC scope value,
+  // though, is only ever read for a RegUser — profiles.rls_scope_code is
+  // documented as "a RegUser's own scope value" (schema/039); an individual
+  // rep's own visibility never consults it (fn_dimension_value_visible_to_
+  // user reads their actual sales instead, migration 046) — so this field
+  // is neither shown nor required for a plain User once the scope dimension
+  // isn't Branch. Flagging this as a judgment call, not something Craig was
+  // asked directly: correct if a generic scope value should also be
+  // captured for individual reps for other reasons (reporting, say).
+  bool get _scopeRequired => _scopeIsBranch ? _repRequired : _level == UserLevel.reguser;
+
+  bool get _showScopeField => _scopeIsBranch || _level == UserLevel.reguser;
+
+  String get _scopeLabel => _scopeDimension?.displayLabel ?? 'Branch';
+
+  ClientDimensionConfig? _findScopeDimension(List<ClientDimensionConfig> dimensions) {
+    for (final d in dimensions) {
+      if (d.isRlsScope) return d;
+    }
+    return null;
+  }
 
   Future<void> _save() async {
     if (_nameController.text.trim().isEmpty || _emailController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
       setState(() => _error = 'Please fill in all required fields.');
       return;
     }
-    if (_repBranchRequired && (_repCode == null || _branchCode == null)) {
-      setState(() => _error = 'Rep code and Branch code are required for User and RegUser levels.');
+    if (_repRequired && _repCode == null) {
+      setState(() => _error = 'Rep code is required for User and RegUser levels.');
+      return;
+    }
+    if (_showScopeField && _scopeRequired && _scopeCode == null) {
+      setState(() => _error = '$_scopeLabel code is required for this level.');
       return;
     }
     setState(() {
@@ -1670,7 +1725,8 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
             name: _nameController.text.trim(),
             level: _level,
             repCode: _repCode,
-            branchCode: _branchCode,
+            branchCode: _scopeIsBranch ? _scopeCode : null,
+            rlsScopeCode: _scopeIsBranch ? null : _scopeCode,
           );
       // Bare `mounted`, not `context.mounted` — State.context, no shadowing.
       if (mounted) Navigator.of(context).pop(true);
@@ -1718,22 +1774,27 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
                             label: 'Rep code',
                             options: _reps,
                             value: _repCode,
-                            required: _repBranchRequired,
+                            required: _repRequired,
                             isDark: isDark,
                             onChanged: (v) => setState(() => _repCode = v),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _codeDropdown(
-                            label: 'Branch code',
-                            options: _branches,
-                            value: _branchCode,
-                            required: _repBranchRequired,
-                            isDark: isDark,
-                            onChanged: (v) => setState(() => _branchCode = v),
+                        // Hidden entirely for a plain User once the scope
+                        // dimension isn't Branch — see `_showScopeField`'s
+                        // own doc comment for why.
+                        if (_showScopeField) ...[
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _codeDropdown(
+                              label: '$_scopeLabel code',
+                              options: _scopeValues,
+                              value: _scopeCode,
+                              required: _scopeRequired,
+                              isDark: isDark,
+                              onChanged: (v) => setState(() => _scopeCode = v),
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                     if (_error != null) ...[
@@ -1772,8 +1833,10 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
             DropdownMenuItem(value: UserLevel.reguser, child: Text('RegUser')),
             DropdownMenuItem(value: UserLevel.adminuser, child: Text('Admin')),
           ],
-          // setState alone is enough to flip the Rep/Branch code labels'
-          // required asterisk live as Level changes — see _repBranchRequired.
+          // setState alone is enough to flip the Rep/scope code labels'
+          // required asterisk (and, for a generic scope dimension, whether
+          // the scope field shows at all) live as Level changes — see
+          // _repRequired/_showScopeField/_scopeRequired.
           onChanged: (v) => setState(() => _level = v ?? UserLevel.user),
         ),
       ],
@@ -1805,9 +1868,12 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
   // Picked from a dropdown now, not typed — see _AddUserDialogState's own
   // copy of this field/comment.
   String? _repCode;
-  String? _branchCode;
+  // Was `_branchCode`/`_branches` — see _AddUserDialogState's own copy of
+  // this field/comment for the 2026-09-07 generalization.
+  String? _scopeCode;
   List<CodeName> _reps = const [];
-  List<CodeName> _branches = const [];
+  List<CodeName> _scopeValues = const [];
+  ClientDimensionConfig? _scopeDimension;
   late UserLevel _level;
   bool _isLoading = false;
   String? _error;
@@ -1818,7 +1884,12 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
     _nameController = TextEditingController(text: widget.user.name);
     _contactNumberController = TextEditingController(text: widget.user.contactNumber ?? '');
     _repCode = widget.user.repCode;
-    _branchCode = widget.user.branchCode;
+    // Seeded from whichever of branchCode/rlsScopeCode is actually populated
+    // — exactly one of the two ever is for a given client (see Profile.
+    // rlsScopeCode's own doc comment) — `_loadCodes` below then confirms
+    // which one this client's scope dimension actually is and may correct
+    // this once it resolves, same as `_scopeDimension` itself starting null.
+    _scopeCode = widget.user.branchCode ?? widget.user.rlsScopeCode;
     _level = widget.user.level;
     _loadCodes();
   }
@@ -1826,11 +1897,17 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
   // See _AddUserDialogState's own copy of this method/comment.
   Future<void> _loadCodes() async {
     final repo = ref.read(referenceDataRepositoryProvider);
-    final results = await Future.wait([repo.salesReps(), repo.branches()]);
+    final dimensions = await ref.read(clientDimensionsProvider.future);
+    final scopeDimension = _findScopeDimension(dimensions);
+    final results = await Future.wait([
+      repo.salesReps(),
+      scopeDimension == null || scopeDimension.dimensionKey == 'branch' ? repo.branches() : repo.entitiesForConfig(scopeDimension),
+    ]);
     if (!mounted) return;
     setState(() {
       _reps = results[0] as List<CodeName>;
-      _branches = results[1] as List<CodeName>;
+      _scopeValues = results[1] as List<CodeName>;
+      _scopeDimension = scopeDimension;
     });
   }
 
@@ -1841,18 +1918,33 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
     super.dispose();
   }
 
-  // See _AddUserDialogState's own copy of this getter/comment for why
-  // (2026-09-01, Craig — Rep/Branch code now drive row-level security,
-  // schema/018).
-  bool get _repBranchRequired => _level == UserLevel.user || _level == UserLevel.reguser;
+  // See _AddUserDialogState's own copies of these getters/comments for why
+  // (2026-09-01, Craig — Rep code drives row-level security, schema/018;
+  // 2026-09-07 — Branch vs. a generic scope dimension).
+  bool get _repRequired => _level == UserLevel.user || _level == UserLevel.reguser;
+  bool get _scopeIsBranch => _scopeDimension == null || _scopeDimension!.dimensionKey == 'branch';
+  bool get _scopeRequired => _scopeIsBranch ? _repRequired : _level == UserLevel.reguser;
+  bool get _showScopeField => _scopeIsBranch || _level == UserLevel.reguser;
+  String get _scopeLabel => _scopeDimension?.displayLabel ?? 'Branch';
+
+  ClientDimensionConfig? _findScopeDimension(List<ClientDimensionConfig> dimensions) {
+    for (final d in dimensions) {
+      if (d.isRlsScope) return d;
+    }
+    return null;
+  }
 
   Future<void> _save() async {
     if (_nameController.text.trim().isEmpty) {
       setState(() => _error = 'Full name is required.');
       return;
     }
-    if (_repBranchRequired && (_repCode == null || _branchCode == null)) {
-      setState(() => _error = 'Rep code and Branch code are required for User and RegUser levels.');
+    if (_repRequired && _repCode == null) {
+      setState(() => _error = 'Rep code is required for User and RegUser levels.');
+      return;
+    }
+    if (_showScopeField && _scopeRequired && _scopeCode == null) {
+      setState(() => _error = '$_scopeLabel code is required for this level.');
       return;
     }
     setState(() {
@@ -1865,7 +1957,7 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
         'contact_number': _contactNumberController.text.trim().isEmpty ? null : _contactNumberController.text.trim(),
         'level': _level.name,
         'rep_code': _repCode,
-        'branch_code': _branchCode,
+        if (_scopeIsBranch) 'branch_code': _scopeCode else 'rls_scope_code': _scopeCode,
       });
       // Bare `mounted`, not `context.mounted` — State.context, no shadowing.
       if (mounted) Navigator.of(context).pop(true);
@@ -1908,22 +2000,27 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
                             label: 'Rep code',
                             options: _reps,
                             value: _repCode,
-                            required: _repBranchRequired,
+                            required: _repRequired,
                             isDark: isDark,
                             onChanged: (v) => setState(() => _repCode = v),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _codeDropdown(
-                            label: 'Branch code',
-                            options: _branches,
-                            value: _branchCode,
-                            required: _repBranchRequired,
-                            isDark: isDark,
-                            onChanged: (v) => setState(() => _branchCode = v),
+                        // Hidden entirely for a plain User once the scope
+                        // dimension isn't Branch — see `_showScopeField`'s
+                        // own doc comment (_AddUserDialogState) for why.
+                        if (_showScopeField) ...[
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _codeDropdown(
+                              label: '$_scopeLabel code',
+                              options: _scopeValues,
+                              value: _scopeCode,
+                              required: _scopeRequired,
+                              isDark: isDark,
+                              onChanged: (v) => setState(() => _scopeCode = v),
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                     if (_error != null) ...[
@@ -1962,8 +2059,10 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
             DropdownMenuItem(value: UserLevel.reguser, child: Text('RegUser')),
             DropdownMenuItem(value: UserLevel.adminuser, child: Text('Admin')),
           ],
-          // setState alone is enough to flip the Rep/Branch code labels'
-          // required asterisk live as Level changes — see _repBranchRequired.
+          // setState alone is enough to flip the Rep/scope code labels'
+          // required asterisk (and, for a generic scope dimension, whether
+          // the scope field shows at all) live as Level changes — see
+          // _repRequired/_showScopeField/_scopeRequired.
           onChanged: (v) => setState(() => _level = v ?? UserLevel.user),
         ),
       ],
