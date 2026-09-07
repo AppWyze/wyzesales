@@ -155,7 +155,15 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
   /// calendar month, exactly as Craig described.
   int? _effectiveFiscalYear(GlobalFilters filters, int startMonth) {
     if (filters.fiscalYear != null) return filters.fiscalYear;
-    if (filters.fiscalMonth != null) return null;
+    // 2026-09-07: Quarter joins Month here — unlike Performance Analysis
+    // (see that screen's own `_effectiveFiscalYear` doc comment for why it
+    // deliberately does NOT do this for Quarter), this screen has no
+    // per-entity merge step to worry about at all — every row here is a
+    // plain line-level document, and fn_sales_documents_page/_totals happily
+    // return/sum however many fiscal years' worth of rows match, no
+    // collapsing required. So a bare Quarter can safely get the exact same
+    // "applies across every year" treatment as a bare Month.
+    if (filters.fiscalMonth != null || filters.fiscalQuarter != null) return null;
     return fiscalYearFor(DateTime.now(), startMonth: startMonth);
   }
 
@@ -166,6 +174,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
           documentKinds: widget.documentKinds,
           fiscalYear: _effectiveFiscalYear(filters, startMonth),
           fiscalMonth: filters.fiscalMonth,
+          fiscalQuarterMonths: filters.fiscalQuarterMonths,
           categoryCode: filters.forDimension(SalesDimension.category)?.code,
           itemCode: filters.forDimension(SalesDimension.item)?.code,
           repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
@@ -187,6 +196,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
             documentKinds: widget.documentKinds,
             fiscalYear: _effectiveFiscalYear(filters, startMonth),
             fiscalMonth: filters.fiscalMonth,
+            fiscalQuarterMonths: filters.fiscalQuarterMonths,
             categoryCode: filters.forDimension(SalesDimension.category)?.code,
             itemCode: filters.forDimension(SalesDimension.item)?.code,
             repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
@@ -363,6 +373,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
           documentKinds: widget.documentKinds,
           fiscalYear: _effectiveFiscalYear(filters, startMonth),
           fiscalMonth: filters.fiscalMonth,
+          fiscalQuarterMonths: filters.fiscalQuarterMonths,
           categoryCode: filters.forDimension(SalesDimension.category)?.code,
           itemCode: filters.forDimension(SalesDimension.item)?.code,
           repCode: filters.forDimension(SalesDimension.salesPerson)?.code,

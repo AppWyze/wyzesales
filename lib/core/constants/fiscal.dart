@@ -139,6 +139,41 @@ String fiscalMonthLabelFor(DateTime date) => DateFormat('MMM').format(date);
 /// rest of this file works in.
 String fiscalStartMonthName(int startMonth) => DateFormat('MMMM').format(DateTime(2000, startMonth));
 
+/// Fiscal quarter labels, in fiscal order — Q1 is always the client's own
+/// first 3 fiscal months (from `fiscalMonthOrderFor`'s own start-month
+/// rotation), regardless of what calendar quarter that actually falls in.
+/// 2026-09-07, Craig: "We need to talk about Quarter? This needs to be built
+/// in an offered to all clients the same way as Year and Month work" —
+/// confirmed fiscal (not calendar) quarter, matching how Year/Month are
+/// already fiscal-anchored throughout this app.
+const List<String> fiscalQuarterLabels = ['Q1', 'Q2', 'Q3', 'Q4'];
+
+/// Which fiscal quarter (one of `fiscalQuarterLabels`) a calendar date falls
+/// in, for the client's own start month — e.g. startMonth=3, a date in
+/// October -> 'Q3' (Oct is the 8th fiscal month under a Mar start, and
+/// months 7-9 are Q3). Mirrors `fiscalMonthLabelFor` + a lookup into
+/// `fiscalMonthOrderFor`, rather than its own arithmetic, so it can never
+/// disagree with either about which fiscal month a date belongs to.
+String fiscalQuarterFor(DateTime date, {int startMonth = 3}) {
+  final months = fiscalMonthOrderFor(startMonth: startMonth);
+  final index = months.indexOf(fiscalMonthLabelFor(date));
+  return fiscalQuarterLabels[index ~/ 3];
+}
+
+/// The 3 fiscal month labels making up `quarterLabel` ('Q1'..'Q4'), in
+/// fiscal order, for the client's own start month — e.g. startMonth=3, 'Q1'
+/// -> ['Mar','Apr','May']; 'Q3' -> ['Sep','Oct','Nov']. The one place Quarter
+/// is actually turned into concrete fiscal months — everywhere else in the
+/// app (GlobalFilters, the RPC layer) works with either the abstract 'Q1'..
+/// 'Q4' label (for display/storage) or this resolved 3-month list (for
+/// filtering), never a separate quarter concept of its own.
+List<String> fiscalMonthsInQuarter(String quarterLabel, {int startMonth = 3}) {
+  final index = fiscalQuarterLabels.indexOf(quarterLabel);
+  if (index == -1) throw ArgumentError('Unknown fiscal quarter label: $quarterLabel');
+  final months = fiscalMonthOrderFor(startMonth: startMonth);
+  return months.sublist(index * 3, index * 3 + 3);
+}
+
 /// The client's configured trailing fiscal-year window, oldest year first —
 /// e.g. currentFy=2027, historyYears=3 -> [2025, 2026, 2027]. Replaces the
 /// hardcoded `[currentFy - 2, currentFy - 1, currentFy]` literal every

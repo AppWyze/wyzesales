@@ -98,6 +98,12 @@ class _WholeCompanyTarget {
   final num targetMtd;
   final num targetYtd;
 
+  /// 2026-09-07 (Quarter/Dashboard toggle) — same idea as actualYtd/
+  /// targetYtd, scoped to the current fiscal quarter's elapsed months
+  /// instead of the whole fiscal year's.
+  final num actualQtd;
+  final num targetQtd;
+
   /// True when `targetMtd`/`targetYtd` are a derived, proportional estimate
   /// (2+ dimension filters active) rather than a real entered Budgets/
   /// Forecast figure — drives the Dashboard's own footnote, the same
@@ -110,6 +116,8 @@ class _WholeCompanyTarget {
     required this.actualYtd,
     required this.targetMtd,
     required this.targetYtd,
+    required this.actualQtd,
+    required this.targetQtd,
     required this.isEstimated,
   });
 }
@@ -126,6 +134,14 @@ class _KpiData {
   final num profitMtd;
   final num profitYtd;
 
+  /// 2026-09-07 (Quarter/Dashboard toggle) — Sales/GP scoped to the current
+  /// fiscal quarter's elapsed months, same "sum of whatever rows the
+  /// current-fiscal-year query already returned, restricted to the current
+  /// quarter's own months" idea as salesYtd/profitYtd restricted to the
+  /// whole year.
+  final num salesQtd;
+  final num profitQtd;
+
   // Revenue Target Attainment reads these — see _WholeCompanyTarget's doc
   // comment for what scope these actually resolve to (no longer always
   // whole-company, despite the field names), and _fetchWholeCompanyTarget's
@@ -134,6 +150,8 @@ class _KpiData {
   final num companyActualYtd;
   final num companyTargetMtd;
   final num companyTargetYtd;
+  final num companyActualQtd;
+  final num companyTargetQtd;
 
   /// See `_WholeCompanyTarget.isEstimated`'s own doc comment — carried
   /// through to `_KpiData` so the build() method can show the footnote
@@ -171,6 +189,13 @@ class _KpiData {
   final EntitySalesHistory? companySalesHistory;
   final int elapsedMonthsYtd;
 
+  /// QTD equivalent of `elapsedMonthsYtd` — how many fiscal months of the
+  /// CURRENT fiscal quarter have actually elapsed so far (1, 2, or 3).
+  /// Sales Coverage's QTD Gap scales the average by this count, same
+  /// "Multiply average by elapsed months" rule Craig confirmed for YTD,
+  /// just bounded to the quarter instead of the whole year.
+  final int elapsedMonthsQtd;
+
   // Top 5 Customer Concentration.
   final num top5CustomerValueMtd;
   final num totalCustomerValueMtd;
@@ -178,6 +203,9 @@ class _KpiData {
   final num top5CustomerValueYtd;
   final num totalCustomerValueYtd;
   final int top5CustomerCountYtd;
+  final num top5CustomerValueQtd;
+  final num totalCustomerValueQtd;
+  final int top5CustomerCountQtd;
 
   // Rep Target Attainment — whole roster (every rep with a target this
   // period) by default, since budget_figures carries no per-Branch/
@@ -191,6 +219,8 @@ class _KpiData {
   final int repsTotalMtd;
   final int repsAtTargetYtd;
   final int repsTotalYtd;
+  final int repsAtTargetQtd;
+  final int repsTotalQtd;
 
   // Returns / Credit Note Rate — 2026-08-28, Craig: replaces the old
   // "Revenue & Gross Profit" tile ("it is repetitive" — Gross Profit Margin
@@ -203,34 +233,48 @@ class _KpiData {
   final num creditNoteMtd;
   final num grossInvoicedYtd;
   final num creditNoteYtd;
+  final num grossInvoicedQtd;
+  final num creditNoteQtd;
 
   const _KpiData({
     required this.salesMtd,
     required this.salesYtd,
+    required this.salesQtd,
     required this.profitMtd,
     required this.profitYtd,
+    required this.profitQtd,
     required this.companyActualMtd,
     required this.companyActualYtd,
     required this.companyTargetMtd,
     required this.companyTargetYtd,
+    required this.companyActualQtd,
+    required this.companyTargetQtd,
     required this.targetIsEstimated,
     required this.ownSalesHistory,
     required this.companySalesHistory,
     required this.elapsedMonthsYtd,
+    required this.elapsedMonthsQtd,
     required this.top5CustomerValueMtd,
     required this.totalCustomerValueMtd,
     required this.top5CustomerCountMtd,
     required this.top5CustomerValueYtd,
     required this.totalCustomerValueYtd,
     required this.top5CustomerCountYtd,
+    required this.top5CustomerValueQtd,
+    required this.totalCustomerValueQtd,
+    required this.top5CustomerCountQtd,
     required this.repsAtTargetMtd,
     required this.repsTotalMtd,
     required this.repsAtTargetYtd,
     required this.repsTotalYtd,
+    required this.repsAtTargetQtd,
+    required this.repsTotalQtd,
     required this.grossInvoicedMtd,
     required this.creditNoteMtd,
     required this.grossInvoicedYtd,
     required this.creditNoteYtd,
+    required this.grossInvoicedQtd,
+    required this.creditNoteQtd,
   });
 }
 
@@ -289,6 +333,22 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   bool _profileReloadQueued = false;
 
   ValueMeasure _measure = ValueMeasure.rValue;
+
+  /// The KPI row's ONE shared MTD/QTD/YTD toggle (2026-09-07, Craig: "One
+  /// global toggle" — replacing the previous design where each of the 6
+  /// tiles carried its own independent switch, see ToggleStatCard's own doc
+  /// comment). Pure client-side `setState`, never a refetch — `_KpiData`
+  /// already carries all 3 periods' figures for every tile from one load,
+  /// same philosophy the old per-tile toggles always used.
+  ///
+  /// Defaults to MTD, matching 5 of the previous 6 tiles' own default —
+  /// Top 5 Customer Concentration used to default to YTD on its own
+  /// (Craig, 2026-08-27: "Customer Concentration must default to year"),
+  /// which no longer has a way to apply now that there's one shared control
+  /// instead of 6 independent ones. Flagged as a judgment call, not
+  /// something Craig re-confirmed — easy to flip if he'd rather the whole
+  /// row open on YTD instead.
+  StatPeriod _selectedPeriod = StatPeriod.mtd;
   // 2026-09-06: a raw client_dimensions.dimension_key rather than a
   // `SalesDimension` — see this class's own `rankableDimensions`/
   // `dimensionLabel` locals in build() for why. 'customer' is still the
@@ -338,7 +398,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   /// screen's KPIs/pies like every other dimension filter does; "reinsert
   /// this." Reverted the same day. Whatever "drop Customer Filter" actually
   /// referred to, it wasn't this.
-  GlobalFilters _dashboardFilters(GlobalFilters filters) => filters.copyWith(fiscalYear: null, fiscalMonth: null);
+  // 2026-09-07: fiscalQuarter/fiscalQuarterMonths stripped for the same
+  // reason fiscalMonth already is — the KPI row's MTD/QTD/YTD are always
+  // "as of right now" (this month/this quarter/this fiscal year, computed
+  // from today's date), so a global Quarter filter has no well-defined
+  // meaning here either; only the 5 dimension filters pass through.
+  GlobalFilters _dashboardFilters(GlobalFilters filters) =>
+      filters.copyWith(fiscalYear: null, fiscalMonth: null, fiscalQuarter: null, fiscalQuarterMonths: null);
 
   @override
   void initState() {
@@ -457,9 +523,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   /// needs today") — Craig's own screenshot confirmed it IS a real workflow,
   /// so this now delegates to `_fetchEstimatedWholeCompanyTarget`, which
   /// does exactly that reuse.
-  Future<_WholeCompanyTarget> _fetchWholeCompanyTarget(int currentFiscalYear, DateTime monthStart, GlobalFilters filters) async {
+  Future<_WholeCompanyTarget> _fetchWholeCompanyTarget(
+    int currentFiscalYear,
+    DateTime monthStart,
+    GlobalFilters filters, {
+    required Set<String> currentQuarterMonths,
+  }) async {
     if (activeDimensionFilterCount(filters) >= 2) {
-      return _fetchEstimatedWholeCompanyTarget(currentFiscalYear, monthStart, filters);
+      return _fetchEstimatedWholeCompanyTarget(currentFiscalYear, monthStart, filters, currentQuarterMonths: currentQuarterMonths);
     }
     final scope = _effectiveScope(filters);
     final actualFilters = singleActiveDimensionFilter(filters) != null ? filters : null;
@@ -472,12 +543,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final budgetRows = results[1] as List<BudgetFigure>;
     final forecastRows = results[2] as List<SalesForecastFigure>;
 
-    num actualMtd = 0, actualYtd = 0;
+    num actualMtd = 0, actualYtd = 0, actualQtd = 0;
     for (final row in consolidatedRows) {
       actualYtd += row.value;
       if (row.month.year == monthStart.year && row.month.month == monthStart.month) {
         actualMtd += row.value;
       }
+      if (currentQuarterMonths.contains(fiscalMonthLabelFor(row.month))) actualQtd += row.value;
     }
 
     final budgetByMonth = <String, num>{};
@@ -496,8 +568,24 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final elapsedMonthLabels = consolidatedRows.map((r) => fiscalMonthLabelFor(r.month)).toSet();
     final targetMtd = targetByMonth[currentMonthLabel] ?? 0;
     final targetYtd = elapsedMonthLabels.fold<num>(0, (sum, label) => sum + (targetByMonth[label] ?? 0));
+    // QTD target — same "sum the target for whichever months have actually
+    // elapsed" idea as YTD, just restricted to the current quarter's own
+    // months (elapsedMonthLabels is already data-driven-elapsed; intersecting
+    // with currentQuarterMonths naturally gives "elapsed months of THIS
+    // quarter" — 1, 2, or 3 depending how far into it "today" is).
+    final targetQtd = elapsedMonthLabels
+        .where(currentQuarterMonths.contains)
+        .fold<num>(0, (sum, label) => sum + (targetByMonth[label] ?? 0));
 
-    return _WholeCompanyTarget(actualMtd: actualMtd, actualYtd: actualYtd, targetMtd: targetMtd, targetYtd: targetYtd, isEstimated: false);
+    return _WholeCompanyTarget(
+      actualMtd: actualMtd,
+      actualYtd: actualYtd,
+      targetMtd: targetMtd,
+      targetYtd: targetYtd,
+      actualQtd: actualQtd,
+      targetQtd: targetQtd,
+      isEstimated: false,
+    );
   }
 
   /// The 2+-filter branch of `_fetchWholeCompanyTarget` (Decisions doc
@@ -525,8 +613,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Future<_WholeCompanyTarget> _fetchEstimatedWholeCompanyTarget(
     int currentFiscalYear,
     DateTime monthStart,
-    GlobalFilters filters,
-  ) async {
+    GlobalFilters filters, {
+    required Set<String> currentQuarterMonths,
+  }) async {
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final salesRepo = ref.read(salesRepositoryProvider);
     final budgetRepo = ref.read(budgetRepositoryProvider);
@@ -590,11 +679,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // ACTUAL: the full active filter set, restricted back down to the
     // current fiscal year (fullyFilteredRows spans windowYears, one year
     // wider, purely for the trailing-window math below).
-    num actualMtd = 0, actualYtd = 0;
+    num actualMtd = 0, actualYtd = 0, actualQtd = 0;
     for (final row in fullyFilteredRows) {
       if (row.fiscalYear != currentFiscalYear) continue;
       actualYtd += row.value;
       if (row.month.year == monthStart.year && row.month.month == monthStart.month) actualMtd += row.value;
+      if (currentQuarterMonths.contains(fiscalMonthLabelFor(row.month))) actualQtd += row.value;
     }
     final elapsedMonthLabels = fullyFilteredRows
         .where((r) => r.fiscalYear == currentFiscalYear)
@@ -623,8 +713,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     final targetMtd = derivedTargetByMonth[currentMonthLabel] ?? 0;
     final targetYtd = elapsedMonthLabels.fold<num>(0, (sum, label) => sum + (derivedTargetByMonth[label] ?? 0));
+    final targetQtd = elapsedMonthLabels
+        .where(currentQuarterMonths.contains)
+        .fold<num>(0, (sum, label) => sum + (derivedTargetByMonth[label] ?? 0));
 
-    return _WholeCompanyTarget(actualMtd: actualMtd, actualYtd: actualYtd, targetMtd: targetMtd, targetYtd: targetYtd, isEstimated: true);
+    return _WholeCompanyTarget(
+      actualMtd: actualMtd,
+      actualYtd: actualYtd,
+      targetMtd: targetMtd,
+      targetYtd: targetYtd,
+      actualQtd: actualQtd,
+      targetQtd: targetQtd,
+      isEstimated: true,
+    );
   }
 
   Future<_KpiData> _loadKpis() async {
@@ -640,6 +741,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // and ytd_comparative_screen already use for their own YTD sums, reused
     // here for Rep Target Attainment's YTD roster/total.
     final elapsedFiscalMonths = fiscalMonths.sublist(0, currentFiscalMonthIndex + 1).toSet();
+
+    // 2026-09-07 (Quarter/Dashboard toggle) — the CURRENT fiscal quarter's 3
+    // months (always "today's quarter," same "as of right now" convention
+    // MTD/YTD already follow — completely independent of any global Quarter
+    // FILTER, which _dashboardFilters strips for exactly that reason).
+    // `elapsedQuarterMonths` further narrows that to whichever of the 3 have
+    // actually happened so far (1, 2, or 3) — the QTD counterpart of
+    // `elapsedFiscalMonths` above, used wherever a calendar-elapsed (not
+    // just data-present) boundary actually matters, i.e. Rep Target
+    // Attainment and Sales Coverage's period-count scaling.
+    final currentQuarterLabel = fiscalQuarterFor(now, startMonth: startMonth);
+    final currentQuarterMonths = fiscalMonthsInQuarter(currentQuarterLabel, startMonth: startMonth).toSet();
+    final elapsedQuarterMonths = elapsedFiscalMonths.intersection(currentQuarterMonths);
 
     // Whole-company totals for the Sales/GP tiles — pulled from
     // v_consolidated_sales (the same source Sales Analysis' Graph tab
@@ -681,7 +795,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     final results = await Future.wait([
       salesRepo.fetchConsolidatedSales(fiscalYears: [currentFiscalYear], filters: filters),
-      _fetchWholeCompanyTarget(currentFiscalYear, monthStart, filters),
+      _fetchWholeCompanyTarget(currentFiscalYear, monthStart, filters, currentQuarterMonths: currentQuarterMonths),
       salesRepo.fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
       salesRepo.fetchDimensionMonthlySales(
         dimension: SalesDimension.customer.dbValue,
@@ -754,6 +868,32 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       coverageScope.dimension == SalesDimension.company
           ? Future.value(<EntitySalesHistory>[])
           : salesRepo.fetchSalesHistory(dimension: coverageScope.dimension.dbValue, fiscalYears: historyWindow),
+      // 2026-09-07 (Quarter/Dashboard toggle) — Returns/Credit Note Rate's
+      // QTD pair, same shape as the MTD/YTD pairs above (indices 6-9), using
+      // schema/047's new `p_fiscal_quarter_months` RPC parameter instead of
+      // a single `fiscalMonth` — appended at the very end, same reasoning as
+      // the Sales Coverage own-history fetch just above: every existing
+      // `results[N]` index stays unchanged.
+      salesRepo.fetchSalesDocumentsTotals(
+        documentKinds: const ['invoice'],
+        fiscalYear: currentFiscalYear,
+        fiscalQuarterMonths: currentQuarterMonths.toList(),
+        categoryCode: filters.forDimension(SalesDimension.category)?.code,
+        itemCode: filters.forDimension(SalesDimension.item)?.code,
+        repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
+        branchCode: filters.forDimension(SalesDimension.branch)?.code,
+        customerCode: filters.forDimension(SalesDimension.customer)?.code,
+      ),
+      salesRepo.fetchSalesDocumentsTotals(
+        documentKinds: const ['credit_note'],
+        fiscalYear: currentFiscalYear,
+        fiscalQuarterMonths: currentQuarterMonths.toList(),
+        categoryCode: filters.forDimension(SalesDimension.category)?.code,
+        itemCode: filters.forDimension(SalesDimension.item)?.code,
+        repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
+        branchCode: filters.forDimension(SalesDimension.branch)?.code,
+        customerCode: filters.forDimension(SalesDimension.customer)?.code,
+      ),
     ]);
 
     final consolidatedRows = results[0] as List<ConsolidatedSales>;
@@ -791,14 +931,20 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final invoiceTotalsYtd = results[8] as SalesDocumentTotals;
     final creditNoteTotalsYtd = results[9] as SalesDocumentTotals;
     final repForecastRows = results[10] as List<SalesForecastFigure>;
+    final invoiceTotalsQtd = results[12] as SalesDocumentTotals;
+    final creditNoteTotalsQtd = results[13] as SalesDocumentTotals;
 
-    num salesMtd = 0, profitMtd = 0, salesYtd = 0, profitYtd = 0;
+    num salesMtd = 0, profitMtd = 0, salesYtd = 0, profitYtd = 0, salesQtd = 0, profitQtd = 0;
     for (final row in consolidatedRows) {
       salesYtd += row.value;
       profitYtd += row.profit;
       if (row.month.year == monthStart.year && row.month.month == monthStart.month) {
         salesMtd += row.value;
         profitMtd += row.profit;
+      }
+      if (currentQuarterMonths.contains(fiscalMonthLabelFor(row.month))) {
+        salesQtd += row.value;
+        profitQtd += row.profit;
       }
     }
 
@@ -809,6 +955,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // month, same boundary _loadDimension's own MTD pie uses.
     final customerMtdTotals = _sumRows(customerMonthlyRows.where((r) => _sameMonth(r.month, monthStart)));
     final customerYtdTotals = _sumRows(customerMonthlyRows);
+    // QTD — customerMonthlyRows only ever contains rows that have actual
+    // data (fetched for `fiscalYears: [currentFiscalYear]`, so an
+    // unreached future month simply has no rows), same reasoning
+    // salesQtd/profitQtd above rely on — no separate "has this month
+    // elapsed" check needed here the way Rep Target Attainment's target
+    // MAPS need one below (a budget/forecast target CAN exist for a future
+    // month with zero actual data; a sales rollup row cannot).
+    final customerQtdTotals = _sumRows(customerMonthlyRows.where((r) => currentQuarterMonths.contains(fiscalMonthLabelFor(r.month))));
 
     num top5Sum(Map<String, _EntityPeriod> totals) {
       final sorted = totals.values.map((p) => p.value).toList()..sort((a, b) => b.compareTo(a));
@@ -878,6 +1032,25 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       return actualYtdForRep >= targetYtdForRep;
     }).length;
 
+    // QTD — same shape as the YTD block just above, scoped to
+    // `elapsedQuarterMonths` (the current quarter's own elapsed months)
+    // instead of the whole year's.
+    final repsWithQtdTarget = repTargetByMonth.entries
+        .where((e) => e.value.keys.any((month) => elapsedQuarterMonths.contains(month)))
+        .map((e) => e.key)
+        .toSet();
+    final repsAtTargetQtd = repsWithQtdTarget.where((rep) {
+      final targetQtdForRep = repTargetByMonth[rep]!
+          .entries
+          .where((e) => elapsedQuarterMonths.contains(e.key))
+          .fold<num>(0, (sum, e) => sum + e.value);
+      final actualQtdForRep = (repActualByMonth[rep] ?? const {})
+          .entries
+          .where((e) => elapsedQuarterMonths.contains(e.key))
+          .fold<num>(0, (sum, e) => sum + e.value);
+      return actualQtdForRep >= targetQtdForRep;
+    }).length;
+
     // 2026-09-04: narrow Rep Target Attainment down to just the one rep when
     // a Sales Person global filter is active, rather than always the
     // whole-roster count — Craig's report ("still showing Company Wide")
@@ -916,33 +1089,63 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       repsAtTargetYtdFinal = 0;
     }
 
+    final repsTotalQtdFinal = filteredRepCode == null ? repsWithQtdTarget.length : (repsWithQtdTarget.contains(filteredRepCode) ? 1 : 0);
+    int repsAtTargetQtdFinal;
+    if (filteredRepCode == null) {
+      repsAtTargetQtdFinal = repsAtTargetQtd;
+    } else if (repsWithQtdTarget.contains(filteredRepCode)) {
+      final targetQtdForRep = repTargetByMonth[filteredRepCode]!
+          .entries
+          .where((e) => elapsedQuarterMonths.contains(e.key))
+          .fold<num>(0, (sum, e) => sum + e.value);
+      final actualQtdForRep = (repActualByMonth[filteredRepCode] ?? const {})
+          .entries
+          .where((e) => elapsedQuarterMonths.contains(e.key))
+          .fold<num>(0, (sum, e) => sum + e.value);
+      repsAtTargetQtdFinal = actualQtdForRep >= targetQtdForRep ? 1 : 0;
+    } else {
+      repsAtTargetQtdFinal = 0;
+    }
+
     return _KpiData(
       salesMtd: salesMtd,
       salesYtd: salesYtd,
+      salesQtd: salesQtd,
       profitMtd: profitMtd,
       profitYtd: profitYtd,
+      profitQtd: profitQtd,
       companyActualMtd: wholeCompanyTarget.actualMtd,
       companyActualYtd: wholeCompanyTarget.actualYtd,
       companyTargetMtd: wholeCompanyTarget.targetMtd,
       companyTargetYtd: wholeCompanyTarget.targetYtd,
+      companyActualQtd: wholeCompanyTarget.actualQtd,
+      companyTargetQtd: wholeCompanyTarget.targetQtd,
       targetIsEstimated: wholeCompanyTarget.isEstimated,
       ownSalesHistory: ownSalesHistory,
       companySalesHistory: companySalesHistory,
       elapsedMonthsYtd: elapsedFiscalMonths.length,
+      elapsedMonthsQtd: elapsedQuarterMonths.length,
       top5CustomerValueMtd: top5Sum(customerMtdTotals),
       totalCustomerValueMtd: totalSum(customerMtdTotals),
       top5CustomerCountMtd: customerMtdTotals.length < 5 ? customerMtdTotals.length : 5,
       top5CustomerValueYtd: top5Sum(customerYtdTotals),
       totalCustomerValueYtd: totalSum(customerYtdTotals),
       top5CustomerCountYtd: customerYtdTotals.length < 5 ? customerYtdTotals.length : 5,
+      top5CustomerValueQtd: top5Sum(customerQtdTotals),
+      totalCustomerValueQtd: totalSum(customerQtdTotals),
+      top5CustomerCountQtd: customerQtdTotals.length < 5 ? customerQtdTotals.length : 5,
       repsAtTargetMtd: repsAtTargetMtdFinal,
       repsTotalMtd: repsTotalMtdFinal,
       repsAtTargetYtd: repsAtTargetYtdFinal,
       repsTotalYtd: repsTotalYtdFinal,
+      repsAtTargetQtd: repsAtTargetQtdFinal,
+      repsTotalQtd: repsTotalQtdFinal,
       grossInvoicedMtd: invoiceTotalsMtd.value,
       creditNoteMtd: creditNoteTotalsMtd.value.abs(),
       grossInvoicedYtd: invoiceTotalsYtd.value,
       creditNoteYtd: creditNoteTotalsYtd.value.abs(),
+      grossInvoicedQtd: invoiceTotalsQtd.value,
+      creditNoteQtd: creditNoteTotalsQtd.value.abs(),
     );
   }
 
@@ -1010,6 +1213,21 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       _dimensionLoading = true;
     });
     await Future.wait([kpis, _loadDimension()]);
+  }
+
+  /// Picks whichever of `mtd`/`qtd`/`ytd` matches `_selectedPeriod` — the one
+  /// piece of logic every KPI tile's build-time value/color/subtitle
+  /// resolution goes through now that there's a single shared toggle instead
+  /// of each `ToggleStatCard` picking between just 2 periods internally.
+  T _periodValue<T>({required T mtd, required T qtd, required T ytd}) {
+    switch (_selectedPeriod) {
+      case StatPeriod.mtd:
+        return mtd;
+      case StatPeriod.qtd:
+        return qtd;
+      case StatPeriod.ytd:
+        return ytd;
+    }
   }
 
   Map<String, _EntityPeriod> _sumRows(Iterable<DimensionMonthlySales> rows) {
@@ -1198,12 +1416,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               // than avoiding the chart's slight redundancy.
               final revenueAttainmentMtd = ratioPercent(kpis.companyActualMtd, kpis.companyTargetMtd);
               final revenueAttainmentYtd = ratioPercent(kpis.companyActualYtd, kpis.companyTargetYtd);
+              final revenueAttainmentQtd = ratioPercent(kpis.companyActualQtd, kpis.companyTargetQtd);
               Color revenueAttainmentColor(num? percent) =>
                   percent == null ? neutralMuted : (percent >= 100 ? AppColors.positive : AppColors.caution);
 
               // Gross Profit Margin.
               final gpMarginMtd = ratioPercent(kpis.profitMtd, kpis.salesMtd);
               final gpMarginYtd = ratioPercent(kpis.profitYtd, kpis.salesYtd);
+              final gpMarginQtd = ratioPercent(kpis.profitQtd, kpis.salesQtd);
               Color gpMarginColor(num? percent) => percent == null ? neutralMuted : (percent >= 0 ? AppColors.positive : AppColors.negative);
 
               // Sales Coverage (task #93/#103, replaced Quote → Order
@@ -1233,10 +1453,18 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 company: kpis.companySalesHistory,
                 periods: kpis.elapsedMonthsYtd,
               );
+              final coverageQtd = computeCoverage(
+                targetValue: kpis.companyTargetQtd,
+                actualValue: kpis.companyActualQtd,
+                own: kpis.ownSalesHistory,
+                company: kpis.companySalesHistory,
+                periods: kpis.elapsedMonthsQtd,
+              );
               // usedFallback doesn't depend on `periods` (only on how many
-              // active months `own` itself has), so MTD/YTD always agree —
-              // safe to fold into one page-level flag for the caption below.
-              final coverageUsedFallback = coverageMtd.usedFallback || coverageYtd.usedFallback;
+              // active months `own` itself has), so MTD/QTD/YTD always
+              // agree — safe to fold into one page-level flag for the
+              // caption below.
+              final coverageUsedFallback = coverageMtd.usedFallback || coverageQtd.usedFallback || coverageYtd.usedFallback;
 
               String coverageText(CoverageResult coverage) {
                 if (coverage.onTarget) return 'On Target';
@@ -1264,8 +1492,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
               final coverageGapMtd = kpis.companyTargetMtd - kpis.companyActualMtd;
               final coverageGapYtd = kpis.companyTargetYtd - kpis.companyActualYtd;
+              final coverageGapQtd = kpis.companyTargetQtd - kpis.companyActualQtd;
               final coverageMtdText = coverageText(coverageMtd);
               final coverageYtdText = coverageText(coverageYtd);
+              final coverageQtdText = coverageText(coverageQtd);
 
               // Top 5 Customer Concentration — 40% is a starting-point
               // "worth keeping an eye on" threshold, not a hard business
@@ -1273,6 +1503,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               // this is live against real numbers.
               final concentrationMtd = ratioPercent(kpis.top5CustomerValueMtd, kpis.totalCustomerValueMtd);
               final concentrationYtd = ratioPercent(kpis.top5CustomerValueYtd, kpis.totalCustomerValueYtd);
+              final concentrationQtd = ratioPercent(kpis.top5CustomerValueQtd, kpis.totalCustomerValueQtd);
               Color concentrationColor(num? percent) => percent == null ? neutralMuted : (percent >= 40 ? AppColors.caution : onSurface);
 
               Color repAttainmentColor(int atTarget, int total) =>
@@ -1288,11 +1519,33 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               // against real numbers.
               final returnsRateMtd = ratioPercent(kpis.creditNoteMtd, kpis.grossInvoicedMtd);
               final returnsRateYtd = ratioPercent(kpis.creditNoteYtd, kpis.grossInvoicedYtd);
+              final returnsRateQtd = ratioPercent(kpis.creditNoteQtd, kpis.grossInvoicedQtd);
               Color returnsRateColor(num? percent) => percent == null ? neutralMuted : (percent > 3 ? AppColors.caution : AppColors.positive);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // 2026-09-07, Craig: "One global toggle" — ONE shared
+                  // MTD/QTD/YTD control for the whole KPI row, replacing the
+                  // 6 independent per-tile toggles every ToggleStatCard used
+                  // to render on its own (see that widget's own doc comment).
+                  // Right-aligned above the grid, same general placement
+                  // Sales Analysis/Performance's own R Value/Gross Profit
+                  // toggle takes above ITS content.
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: SegmentedButton<StatPeriod>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(value: StatPeriod.mtd, label: Text('MTD')),
+                        ButtonSegment(value: StatPeriod.qtd, label: Text('QTD')),
+                        ButtonSegment(value: StatPeriod.ytd, label: Text('YTD')),
+                      ],
+                      selected: {_selectedPeriod},
+                      onSelectionChanged: (selection) => setState(() => _selectedPeriod = selection.first),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   // 2026-08-28: switched from a `Wrap` of fixed-180px tiles
                   // to a deliberate fixed-column grid (`_KpiTileGrid` below).
                   // The `Wrap` (2026-08-26 onward, see git history/this
@@ -1348,55 +1601,88 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       // tile.
                       ToggleStatCard(
                         label: 'Revenue Target Attainment',
-                        mtdValue: formatPercent(revenueAttainmentMtd),
-                        mtdColor: revenueAttainmentColor(revenueAttainmentMtd),
-                        mtdSubtitle: '${formatRand(kpis.companyActualMtd)} of ${formatRand(kpis.companyTargetMtd)} target (MTD)',
-                        ytdValue: formatPercent(revenueAttainmentYtd),
-                        ytdColor: revenueAttainmentColor(revenueAttainmentYtd),
-                        ytdSubtitle: '${formatRand(kpis.companyActualYtd)} of ${formatRand(kpis.companyTargetYtd)} target (YTD)',
+                        showToggle: false,
+                        mtdValue: _periodValue(
+                          mtd: formatPercent(revenueAttainmentMtd),
+                          qtd: formatPercent(revenueAttainmentQtd),
+                          ytd: formatPercent(revenueAttainmentYtd),
+                        ),
+                        mtdColor: _periodValue(
+                          mtd: revenueAttainmentColor(revenueAttainmentMtd),
+                          qtd: revenueAttainmentColor(revenueAttainmentQtd),
+                          ytd: revenueAttainmentColor(revenueAttainmentYtd),
+                        ),
+                        mtdSubtitle: _periodValue(
+                          mtd: '${formatRand(kpis.companyActualMtd)} of ${formatRand(kpis.companyTargetMtd)} target (MTD)',
+                          qtd: '${formatRand(kpis.companyActualQtd)} of ${formatRand(kpis.companyTargetQtd)} target (QTD)',
+                          ytd: '${formatRand(kpis.companyActualYtd)} of ${formatRand(kpis.companyTargetYtd)} target (YTD)',
+                        ),
                       ),
                       ToggleStatCard(
                         label: 'Gross Profit Margin',
-                        mtdValue: formatPercent(gpMarginMtd),
-                        mtdColor: gpMarginColor(gpMarginMtd),
-                        mtdSubtitle: '${formatRand(kpis.profitMtd)} of ${formatRand(kpis.salesMtd)} sales (MTD)',
-                        ytdValue: formatPercent(gpMarginYtd),
-                        ytdColor: gpMarginColor(gpMarginYtd),
-                        ytdSubtitle: '${formatRand(kpis.profitYtd)} of ${formatRand(kpis.salesYtd)} sales (YTD)',
+                        showToggle: false,
+                        mtdValue: _periodValue(mtd: formatPercent(gpMarginMtd), qtd: formatPercent(gpMarginQtd), ytd: formatPercent(gpMarginYtd)),
+                        mtdColor: _periodValue(mtd: gpMarginColor(gpMarginMtd), qtd: gpMarginColor(gpMarginQtd), ytd: gpMarginColor(gpMarginYtd)),
+                        mtdSubtitle: _periodValue(
+                          mtd: '${formatRand(kpis.profitMtd)} of ${formatRand(kpis.salesMtd)} sales (MTD)',
+                          qtd: '${formatRand(kpis.profitQtd)} of ${formatRand(kpis.salesQtd)} sales (QTD)',
+                          ytd: '${formatRand(kpis.profitYtd)} of ${formatRand(kpis.salesYtd)} sales (YTD)',
+                        ),
                       ),
                       ToggleStatCard(
                         label: 'Sales Coverage',
-                        mtdValue: coverageMtdText,
-                        mtdColor: coverageColor(coverageMtd),
-                        mtdSubtitle: coverageGapMtd <= 0
-                            ? '${formatRand(coverageGapMtd.abs())} above target (MTD)'
-                            : '${formatRand(coverageGapMtd)} gap to target (MTD)',
-                        ytdValue: coverageYtdText,
-                        ytdColor: coverageColor(coverageYtd),
-                        ytdSubtitle: coverageGapYtd <= 0
-                            ? '${formatRand(coverageGapYtd.abs())} above target (YTD)'
-                            : '${formatRand(coverageGapYtd)} gap to target (YTD)',
+                        showToggle: false,
+                        mtdValue: _periodValue(mtd: coverageMtdText, qtd: coverageQtdText, ytd: coverageYtdText),
+                        mtdColor: _periodValue(mtd: coverageColor(coverageMtd), qtd: coverageColor(coverageQtd), ytd: coverageColor(coverageYtd)),
+                        mtdSubtitle: _periodValue(
+                          mtd: coverageGapMtd <= 0
+                              ? '${formatRand(coverageGapMtd.abs())} above target (MTD)'
+                              : '${formatRand(coverageGapMtd)} gap to target (MTD)',
+                          qtd: coverageGapQtd <= 0
+                              ? '${formatRand(coverageGapQtd.abs())} above target (QTD)'
+                              : '${formatRand(coverageGapQtd)} gap to target (QTD)',
+                          ytd: coverageGapYtd <= 0
+                              ? '${formatRand(coverageGapYtd.abs())} above target (YTD)'
+                              : '${formatRand(coverageGapYtd)} gap to target (YTD)',
+                        ),
                       ),
                       ToggleStatCard(
                         label: 'Top 5 Customer Concentration',
-                        // Craig, 2026-08-27: "Customer Concentration must
-                        // default to year."
-                        initialPeriod: StatPeriod.ytd,
-                        mtdValue: formatPercent(concentrationMtd),
-                        mtdColor: concentrationColor(concentrationMtd),
-                        mtdSubtitle: 'of MTD revenue, top ${formatQuantity(kpis.top5CustomerCountMtd)} accounts',
-                        ytdValue: formatPercent(concentrationYtd),
-                        ytdColor: concentrationColor(concentrationYtd),
-                        ytdSubtitle: 'of YTD revenue, top ${formatQuantity(kpis.top5CustomerCountYtd)} accounts',
+                        showToggle: false,
+                        mtdValue: _periodValue(
+                          mtd: formatPercent(concentrationMtd),
+                          qtd: formatPercent(concentrationQtd),
+                          ytd: formatPercent(concentrationYtd),
+                        ),
+                        mtdColor: _periodValue(
+                          mtd: concentrationColor(concentrationMtd),
+                          qtd: concentrationColor(concentrationQtd),
+                          ytd: concentrationColor(concentrationYtd),
+                        ),
+                        mtdSubtitle: _periodValue(
+                          mtd: 'of MTD revenue, top ${formatQuantity(kpis.top5CustomerCountMtd)} accounts',
+                          qtd: 'of QTD revenue, top ${formatQuantity(kpis.top5CustomerCountQtd)} accounts',
+                          ytd: 'of YTD revenue, top ${formatQuantity(kpis.top5CustomerCountYtd)} accounts',
+                        ),
                       ),
                       ToggleStatCard(
                         label: 'Rep Target Attainment',
-                        mtdValue: kpis.repsTotalMtd == 0 ? '—' : '${formatQuantity(kpis.repsAtTargetMtd)} of ${formatQuantity(kpis.repsTotalMtd)}',
-                        mtdColor: repAttainmentColor(kpis.repsAtTargetMtd, kpis.repsTotalMtd),
-                        mtdSubtitle: kpis.repsTotalMtd == 0 ? 'no rep targets set for this month' : 'reps at/above target (MTD)',
-                        ytdValue: kpis.repsTotalYtd == 0 ? '—' : '${formatQuantity(kpis.repsAtTargetYtd)} of ${formatQuantity(kpis.repsTotalYtd)}',
-                        ytdColor: repAttainmentColor(kpis.repsAtTargetYtd, kpis.repsTotalYtd),
-                        ytdSubtitle: kpis.repsTotalYtd == 0 ? 'no rep targets set this year' : 'reps at/above target (YTD)',
+                        showToggle: false,
+                        mtdValue: _periodValue(
+                          mtd: kpis.repsTotalMtd == 0 ? '—' : '${formatQuantity(kpis.repsAtTargetMtd)} of ${formatQuantity(kpis.repsTotalMtd)}',
+                          qtd: kpis.repsTotalQtd == 0 ? '—' : '${formatQuantity(kpis.repsAtTargetQtd)} of ${formatQuantity(kpis.repsTotalQtd)}',
+                          ytd: kpis.repsTotalYtd == 0 ? '—' : '${formatQuantity(kpis.repsAtTargetYtd)} of ${formatQuantity(kpis.repsTotalYtd)}',
+                        ),
+                        mtdColor: _periodValue(
+                          mtd: repAttainmentColor(kpis.repsAtTargetMtd, kpis.repsTotalMtd),
+                          qtd: repAttainmentColor(kpis.repsAtTargetQtd, kpis.repsTotalQtd),
+                          ytd: repAttainmentColor(kpis.repsAtTargetYtd, kpis.repsTotalYtd),
+                        ),
+                        mtdSubtitle: _periodValue(
+                          mtd: kpis.repsTotalMtd == 0 ? 'no rep targets set for this month' : 'reps at/above target (MTD)',
+                          qtd: kpis.repsTotalQtd == 0 ? 'no rep targets set this quarter' : 'reps at/above target (QTD)',
+                          ytd: kpis.repsTotalYtd == 0 ? 'no rep targets set this year' : 'reps at/above target (YTD)',
+                        ),
                       ),
                       // 6. Returns / Credit Note Rate — replaced "Revenue &
                       // Gross Profit" 2026-08-28 (Craig: "remove the
@@ -1414,12 +1700,22 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       // "higher is better" tiles above.
                       ToggleStatCard(
                         label: 'Returns / Credit Note Rate',
-                        mtdValue: formatPercent(returnsRateMtd),
-                        mtdColor: returnsRateColor(returnsRateMtd),
-                        mtdSubtitle: '${formatRand(kpis.creditNoteMtd)} of ${formatRand(kpis.grossInvoicedMtd)} invoiced (MTD)',
-                        ytdValue: formatPercent(returnsRateYtd),
-                        ytdColor: returnsRateColor(returnsRateYtd),
-                        ytdSubtitle: '${formatRand(kpis.creditNoteYtd)} of ${formatRand(kpis.grossInvoicedYtd)} invoiced (YTD)',
+                        showToggle: false,
+                        mtdValue: _periodValue(
+                          mtd: formatPercent(returnsRateMtd),
+                          qtd: formatPercent(returnsRateQtd),
+                          ytd: formatPercent(returnsRateYtd),
+                        ),
+                        mtdColor: _periodValue(
+                          mtd: returnsRateColor(returnsRateMtd),
+                          qtd: returnsRateColor(returnsRateQtd),
+                          ytd: returnsRateColor(returnsRateYtd),
+                        ),
+                        mtdSubtitle: _periodValue(
+                          mtd: '${formatRand(kpis.creditNoteMtd)} of ${formatRand(kpis.grossInvoicedMtd)} invoiced (MTD)',
+                          qtd: '${formatRand(kpis.creditNoteQtd)} of ${formatRand(kpis.grossInvoicedQtd)} invoiced (QTD)',
+                          ytd: '${formatRand(kpis.creditNoteYtd)} of ${formatRand(kpis.grossInvoicedYtd)} invoiced (YTD)',
+                        ),
                       ),
                       // "Last Updated" tile removed 2026-08-26 — that
                       // data-freshness reading now lives in AppShell's top

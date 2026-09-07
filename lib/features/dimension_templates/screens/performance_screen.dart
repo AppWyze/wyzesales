@@ -178,6 +178,22 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   int? _effectiveFiscalYear(GlobalFilters filters) {
     if (filters.fiscalYear != null) return filters.fiscalYear;
     if (filters.fiscalMonth != null) return null;
+    // 2026-09-07: a bare Quarter filter (no Year) deliberately does NOT get
+    // the same "every occurrence across history" treatment a bare Month
+    // does just above — it defaults to the CURRENT fiscal year instead, same
+    // as the fully-unfiltered fallback below. Two reasons: (1) `rawRows`
+    // spanning both several fiscal years AND up to 3 months at once has no
+    // existing merge path — mergeAcrossYears/mergeAcrossMonths (performance_
+    // rollup.dart) each collapse exactly one of those two dimensions of
+    // multiplicity, not both together — and (2) "Q2" reads more naturally as
+    // "this year's Q2" than "every Q2 ever" the way a bare month name reads
+    // as every occurrence of that month. Keeping Quarter year-bound avoids
+    // needing a third, two-dimensional merge function for a case Craig
+    // hasn't specifically asked for; flagged as a scoping call, not
+    // something he's confirmed either way — worth revisiting if a bare,
+    // cross-year Quarter view turns out to matter in practice. (A bare
+    // Quarter and the fully-unfiltered case both fall through to the same
+    // "current fiscal year" default below, for this exact reason.)
     return fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
   }
 
@@ -198,14 +214,32 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   /// (core/utils/performance_rollup.dart) when that happens.
   String? _effectiveFiscalMonth(GlobalFilters filters) {
     if (filters.fiscalMonth != null) return filters.fiscalMonth;
-    if (filters.fiscalYear != null) return null;
+    // 2026-09-07: a Quarter filter takes over "which period" from the
+    // default-to-today's-month fallback, same as Year already does just
+    // below — `_effectiveFiscalQuarterMonths` carries the actual filtering
+    // in that case instead.
+    if (filters.fiscalYear != null || filters.fiscalQuarter != null) return null;
     return _currentFiscalMonthLabel(DateTime.now());
+  }
+
+  /// Quarter's own effective-period resolution, alongside
+  /// `_effectiveFiscalYear`/`_effectiveFiscalMonth` above — GlobalFilters
+  /// already resolved 'Q1'..'Q4' to its 3 concrete fiscal months (see
+  /// `GlobalFilters.fiscalQuarterMonths`'s own doc comment), so this is just
+  /// "pass it through unless Month is explicitly set" (Month, being the more
+  /// specific of the two, wins — though the two are also kept mutually
+  /// exclusive at selection time, see `GlobalFiltersNotifier.setFiscalMonth`,
+  /// so both being set at once shouldn't actually occur).
+  List<String>? _effectiveFiscalQuarterMonths(GlobalFilters filters) {
+    if (filters.fiscalMonth != null) return null;
+    return filters.fiscalQuarterMonths;
   }
 
   Future<_PerformanceData> _load() async {
     final filters = ref.read(globalFiltersProvider);
     final effectiveYear = _effectiveFiscalYear(filters);
     final effectiveMonth = _effectiveFiscalMonth(filters);
+    final effectiveQuarterMonths = _effectiveFiscalQuarterMonths(filters);
     // TEMPORARY — 2026-08-27, diagnosing Craig's "Filters are not working
     // correctly" report (Year/Month applied on Performance itself don't
     // change the table, and clearing doesn't either, even though arriving
@@ -245,6 +279,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             dimension: widget.dimension,
             fiscalYear: effectiveYear,
             fiscalMonth: effectiveMonth,
+            fiscalQuarterMonths: effectiveQuarterMonths,
             filters: filters,
           ),
       dimensionConfig == null

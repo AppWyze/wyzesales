@@ -54,6 +54,11 @@ class GlobalFilterBar extends ConsumerWidget {
         _RemovableChip(label: 'Year: FY${filters.fiscalYear}', onDeleted: () => notifier.setFiscalYear(null)),
       if (filters.fiscalMonth != null)
         _RemovableChip(label: 'Month: ${filters.fiscalMonth}', onDeleted: () => notifier.setFiscalMonth(null)),
+      if (filters.fiscalQuarter != null)
+        _RemovableChip(
+          label: 'Quarter: ${filters.fiscalQuarter}',
+          onDeleted: () => notifier.setFiscalQuarter(null, startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3),
+        ),
       if (filters.document != null)
         _RemovableChip(label: 'Document: ${filters.document}', onDeleted: () => notifier.setDocument(null)),
     ];
@@ -99,6 +104,10 @@ class GlobalFilterBar extends ConsumerWidget {
                 DropdownMenuItem<String?>(value: dimension.dimensionKey, child: Text(dimension.displayLabel)),
               const DropdownMenuItem<String?>(value: '_year', child: Text('Year')),
               const DropdownMenuItem<String?>(value: '_month', child: Text('Month')),
+              // 2026-09-07, Craig: "This needs to be built in an offered to
+              // all clients the same way as Year and Month work" — see
+              // _handleAdd's '_quarter' branch below.
+              const DropdownMenuItem<String?>(value: '_quarter', child: Text('Quarter')),
               // 2026-08-27, Craig: "We need to add Document to the Filters
               // dropdown" — see _pickDocument below.
               const DropdownMenuItem<String?>(value: '_document', child: Text('Document')),
@@ -203,6 +212,16 @@ class GlobalFilterBar extends ConsumerWidget {
         isEnabled: monthsWithData == null ? null : (m) => monthsWithData.contains(m),
       );
       if (month != null) notifier.setFiscalMonth(month);
+      return;
+    }
+    if (key == '_quarter') {
+      // No "no data" greying here (unlike Year/Month above) — availability
+      // is only tracked per fiscal year/calendar month
+      // (fiscalYearDataAvailabilityProvider), not per quarter, and a
+      // 3-month-wide bucket is much less likely to be entirely empty than a
+      // single greyed-out month was in the first place.
+      final quarter = await _pickFromList<String>(context, title: 'Quarter', options: fiscalQuarterLabels);
+      if (quarter != null) notifier.setFiscalQuarter(quarter, startMonth: startMonth);
       return;
     }
     if (key == '_document') {

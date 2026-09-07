@@ -319,7 +319,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         final byMonth = await _fetchTargetByMonth(
           dimension: dimension,
           entityCode: entityCode,
-          fiscalMonthFilter: filters.fiscalMonth,
+          monthsFilter: _activePeriodMonths(filters),
         );
         return (
           bars: [for (final m in _months) byMonth[m]],
@@ -338,7 +338,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       // display-scoped `rows` this screen already fetched for the chart
       // itself. Month-narrowing for the overlay is instead applied once, at
       // the very end, to bars/shares/basisLabels together.
-      final unrestrictedFilters = filters.copyWith(fiscalYear: null, fiscalMonth: null);
+      final unrestrictedFilters = filters.copyWith(fiscalYear: null, fiscalMonth: null, fiscalQuarter: null, fiscalQuarterMonths: null);
       final fullyFilteredSeries = _asSeries(
         await repo.fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: unrestrictedFilters),
       ).toList();
@@ -353,7 +353,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       final companyTargetByMonth = await _fetchTargetByMonth(
         dimension: SalesDimension.company,
         entityCode: 'ALL',
-        fiscalMonthFilter: null,
+        monthsFilter: null,
       );
 
       // One further actual-revenue fetch + one target fetch per ACTIVELY
@@ -375,7 +375,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         final ownTargetByMonth = await _fetchTargetByMonth(
           dimension: dimension,
           entityCode: selection.code,
-          fiscalMonthFilter: null,
+          monthsFilter: null,
         );
         basisCandidates.add((label: '${dimension.label}: ${selection.label}', targetByMonth: ownTargetByMonth, ownSeries: _asSeries(ownRows).toList()));
       }
@@ -415,11 +415,15 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       // Same scoping fetchDimensionPerformance's own p_fiscal_month param
       // gives, and what `_fetchTargetByMonth`'s own tail used to do for
       // this method before its fetches were all switched to
-      // fiscalMonthFilter: null above: with a global Month filter active,
-      // only that one month's bar (and its share/basis) should show.
-      if (filters.fiscalMonth != null) {
+      // monthsFilter: null above: with a global Month OR Quarter filter
+      // active, only that period's own bar(s) (and their share/basis)
+      // should show. `_activePeriodMonths` (2026-09-07) generalizes the old
+      // single-month check to either a 1-month (Month) or 3-month (Quarter)
+      // set.
+      final activePeriodMonths = _activePeriodMonths(filters);
+      if (activePeriodMonths != null) {
         for (var i = 0; i < _months.length; i++) {
-          if (_months[i] != filters.fiscalMonth) {
+          if (!activePeriodMonths.contains(_months[i])) {
             bars[i] = null;
             shares[i] = null;
             basisLabels[i] = null;
@@ -452,10 +456,22 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   /// fetchDimensionPerformance/v_dimension_performance/fn_dimension_
   /// performance_filtered themselves — Performance Analysis still relies on
   /// those exactly as they are.
+  /// The active Month/Quarter global filter, resolved to a set of fiscal
+  /// month labels — a bare Month is a 1-element set, a Quarter is `filters.
+  /// fiscalQuarterMonths` (already resolved to 3 labels — see GlobalFilters'
+  /// own doc comment), neither active is null (no masking). The two are also
+  /// kept mutually exclusive at selection time (GlobalFiltersNotifier), so
+  /// at most one of them is ever actually driving this.
+  Set<String>? _activePeriodMonths(GlobalFilters filters) {
+    if (filters.fiscalMonth != null) return {filters.fiscalMonth!};
+    if (filters.fiscalQuarterMonths != null) return filters.fiscalQuarterMonths!.toSet();
+    return null;
+  }
+
   Future<Map<String, num?>> _fetchTargetByMonth({
     required SalesDimension dimension,
     required String entityCode,
-    String? fiscalMonthFilter,
+    Set<String>? monthsFilter,
   }) async {
     final budgetRepo = ref.read(budgetRepositoryProvider);
     final budgetRows = await budgetRepo.fetchBudget(dimension: dimension.dbValue, entityCode: entityCode);
@@ -465,11 +481,11 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final full = {
       for (final m in _months) m: resolveTarget(budgetValue: budgetByMonth[m], forecastValue: forecastByMonth[m]),
     };
-    if (fiscalMonthFilter == null) return full;
+    if (monthsFilter == null) return full;
     // Same scoping fetchDimensionPerformance's own p_fiscal_month param used
-    // to give: with a global Month filter active, only that one month's bar
-    // should show, not all 12.
-    return {for (final m in _months) m: m == fiscalMonthFilter ? full[m] : null};
+    // to give: with a global Month or Quarter filter active, only that
+    // period's own month(s) should show, not all 12.
+    return {for (final m in _months) m: monthsFilter.contains(m) ? full[m] : null};
   }
 
   /// A short form for the chart's y-axis gridlines — "R 1 234 567" doesn't

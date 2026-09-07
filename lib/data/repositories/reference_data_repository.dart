@@ -144,13 +144,18 @@ class ReferenceDataRepository {
   /// out, but this particular call happened to match everything."
   Future<Set<String>?> filterOptionCodes(SalesDimension dimension, GlobalFilters filters) async {
     final hasOtherEntityFilter = SalesDimension.filterable.any((d) => d != dimension && filters.forDimension(d) != null);
-    if (!hasOtherEntityFilter && filters.fiscalYear == null && filters.fiscalMonth == null) return null;
+    if (!hasOtherEntityFilter && filters.fiscalYear == null && filters.fiscalMonth == null && filters.fiscalQuarter == null) {
+      return null;
+    }
 
     final rows = await supabase.rpc('fn_dimension_filter_options', params: {
       'p_dimension': dimension.dbValue,
       'p_fiscal_year': filters.fiscalYear,
       'p_fiscal_month': filters.fiscalMonth,
       'p_filters': filters.toFilterParams(excludeDimensionKey: dimension.dbValue),
+      // 2026-09-07 (schema/047) — already-resolved months, same as every
+      // other RPC call site's `p_fiscal_quarter_months` line.
+      'p_fiscal_quarter_months': filters.fiscalQuarterMonths,
     });
     return (rows as List).map<String>((r) => r['entity_code'] as String).toSet();
   }

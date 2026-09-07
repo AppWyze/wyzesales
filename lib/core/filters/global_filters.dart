@@ -57,6 +57,37 @@ class GlobalFilters {
   final int? fiscalYear;
   final String? fiscalMonth; // 'Mar'..'Feb'
 
+  /// 2026-09-07 — Quarter, offered everywhere Year/Month already are (Craig:
+  /// "This needs to be built in an offered to all clients the same way as
+  /// Year and Month work"). Always FISCAL quarter, confirmed with Craig —
+  /// 'Q1'..'Q4' from `fiscalQuarterLabels` (fiscal.dart), Q1 being the
+  /// client's own first 3 fiscal months. Kept as a plain field alongside
+  /// fiscalYear/fiscalMonth for the exact same reason those are: not a
+  /// "dimension" in the client_dimensions sense, so never captured by Saved
+  /// Filter Presets (see this class's own doc comment) — `_PresetsDialog`
+  /// only ever loops over `dimensions`, so this is automatically excluded,
+  /// no extra guard needed there.
+  ///
+  /// `fiscalQuarterMonths` is `fiscalQuarter` already resolved to its 3
+  /// concrete fiscal month labels (`fiscalMonthsInQuarter`, fiscal.dart) —
+  /// always set together with `fiscalQuarter` (both null, or both non-null),
+  /// resolved ONCE by `GlobalFiltersNotifier.setFiscalQuarter` (which has
+  /// `ref` and so can read the client's own `fiscal_year_settings.start_
+  /// month`) rather than by every downstream reader. This is what lets the
+  /// repository layer (SalesRepository, ReferenceDataRepository) — which
+  /// has no `ref` and so no way to resolve 'Q1' into months itself — just
+  /// read `filters.fiscalQuarterMonths` directly, the same way it already
+  /// reads `filters.fiscalMonth` directly, without every call site needing
+  /// to separately thread the client's start month through. The trade-off:
+  /// if start_month is edited mid-session with a Quarter filter active, the
+  /// resolved months stay whatever they were at selection time until the
+  /// filter is re-picked — an edge case judged not worth the alternative
+  /// (re-resolving 'Q1' at every one of a dozen-plus call sites instead of
+  /// once here), especially since start_month is effectively a one-time
+  /// setup value in practice, not something edited mid-session.
+  final String? fiscalQuarter;
+  final List<String>? fiscalQuarterMonths;
+
   /// 2026-08-27: promoted from a per-screen local text field on
   /// document_analysis_view.dart to a real global filter — Craig: "We need
   /// to add Document to the Filters dropdown." A raw document number
@@ -72,6 +103,8 @@ class GlobalFilters {
     Map<String, FilterSelection> dimensions = const {},
     this.fiscalYear,
     this.fiscalMonth,
+    this.fiscalQuarter,
+    this.fiscalQuarterMonths,
     this.document,
   }) : _dimensions = dimensions;
 
@@ -133,9 +166,13 @@ class GlobalFilters {
     };
   }
 
-  bool get isEmpty => _dimensions.isEmpty && fiscalYear == null && fiscalMonth == null && document == null;
+  bool get isEmpty =>
+      _dimensions.isEmpty && fiscalYear == null && fiscalMonth == null && fiscalQuarter == null && document == null;
 
-  int get activeCount => _dimensions.length + [fiscalYear, fiscalMonth, document].where((v) => v != null).length;
+  // fiscalQuarterMonths deliberately not counted separately — it's always
+  // set/cleared together with fiscalQuarter (see that field's own doc
+  // comment), so counting both would double-count one active filter as two.
+  int get activeCount => _dimensions.length + [fiscalYear, fiscalMonth, fiscalQuarter, document].where((v) => v != null).length;
 
   /// Returns a copy with `dimensionKey`'s selection replaced (or, when
   /// `selection` is null, cleared) — the one place a dimension selection is
@@ -162,12 +199,17 @@ class GlobalFilters {
     Map<String, FilterSelection>? dimensions,
     Object? fiscalYear = _unset,
     Object? fiscalMonth = _unset,
+    Object? fiscalQuarter = _unset,
+    Object? fiscalQuarterMonths = _unset,
     Object? document = _unset,
   }) {
     return GlobalFilters(
       dimensions: dimensions ?? _dimensions,
       fiscalYear: identical(fiscalYear, _unset) ? this.fiscalYear : fiscalYear as int?,
       fiscalMonth: identical(fiscalMonth, _unset) ? this.fiscalMonth : fiscalMonth as String?,
+      fiscalQuarter: identical(fiscalQuarter, _unset) ? this.fiscalQuarter : fiscalQuarter as String?,
+      fiscalQuarterMonths:
+          identical(fiscalQuarterMonths, _unset) ? this.fiscalQuarterMonths : fiscalQuarterMonths as List<String>?,
       document: identical(document, _unset) ? this.document : document as String?,
     );
   }
@@ -221,7 +263,32 @@ class GlobalFiltersNotifier extends StateNotifier<GlobalFilters> {
 
   void setFiscalYear(int? year) => state = state.copyWith(fiscalYear: year);
 
-  void setFiscalMonth(String? month) => state = state.copyWith(fiscalMonth: month);
+  /// Setting a Month clears any active Quarter (2026-09-07) — Month and
+  /// Quarter are both "which fiscal period" filters at different
+  /// granularities, and letting both sit active at once (e.g. Month=Jun with
+  /// Quarter=Q1, which doesn't even contain June) has no sensible combined
+  /// meaning. Rather than defining a precedence rule for that combination
+  /// throughout the RPC layer, the two are kept mutually exclusive at the
+  /// point of selection instead — picking one always clears the other, so
+  /// only one is ever active at a time, same as GlobalFilterBar's own "Add
+  /// filter" dropdown only ever lets you pick one value per entry anyway.
+  void setFiscalMonth(String? month) => state = state.copyWith(fiscalMonth: month, fiscalQuarter: null, fiscalQuarterMonths: null);
+
+  /// `startMonth` — the client's own `fiscal_year_settings.start_month` —
+  /// is resolved to concrete months exactly ONCE, here, via
+  /// `fiscalMonthsInQuarter` (fiscal.dart) — see `GlobalFilters.
+  /// fiscalQuarterMonths`'s own doc comment for why. Callers pass
+  /// `ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3`, the same
+  /// fallback convention every other startMonth read in the app already
+  /// uses. Clears any active Month — see `setFiscalMonth`'s own doc comment
+  /// for why the two stay mutually exclusive.
+  void setFiscalQuarter(String? quarter, {required int startMonth}) {
+    state = state.copyWith(
+      fiscalQuarter: quarter,
+      fiscalQuarterMonths: quarter == null ? null : fiscalMonthsInQuarter(quarter, startMonth: startMonth),
+      fiscalMonth: null,
+    );
+  }
 
   void setDocument(String? document) => state = state.copyWith(document: document);
 

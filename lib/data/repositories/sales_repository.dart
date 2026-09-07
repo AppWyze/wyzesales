@@ -70,6 +70,7 @@ class SalesRepository {
     required List<String> documentKinds,
     int? fiscalYear,
     String? fiscalMonth,
+    List<String>? fiscalQuarterMonths,
     String? categoryCode,
     String? itemCode,
     String? repCode,
@@ -85,6 +86,7 @@ class SalesRepository {
       documentKinds: documentKinds,
       fiscalYear: fiscalYear,
       fiscalMonth: fiscalMonth,
+      fiscalQuarterMonths: fiscalQuarterMonths,
       categoryCode: categoryCode,
       itemCode: itemCode,
       repCode: repCode,
@@ -114,6 +116,7 @@ class SalesRepository {
     required List<String> documentKinds,
     int? fiscalYear,
     String? fiscalMonth,
+    List<String>? fiscalQuarterMonths,
     String? categoryCode,
     String? itemCode,
     String? repCode,
@@ -125,6 +128,7 @@ class SalesRepository {
       documentKinds: documentKinds,
       fiscalYear: fiscalYear,
       fiscalMonth: fiscalMonth,
+      fiscalQuarterMonths: fiscalQuarterMonths,
       categoryCode: categoryCode,
       itemCode: itemCode,
       repCode: repCode,
@@ -160,6 +164,7 @@ class SalesRepository {
     required List<String> documentKinds,
     int? fiscalYear,
     String? fiscalMonth,
+    List<String>? fiscalQuarterMonths,
     String? categoryCode,
     String? itemCode,
     String? repCode,
@@ -171,6 +176,7 @@ class SalesRepository {
       'p_document_kinds': documentKinds,
       'p_fiscal_year': fiscalYear,
       'p_fiscal_month': fiscalMonth,
+      'p_fiscal_quarter_months': fiscalQuarterMonths,
       'p_category': categoryCode,
       'p_item': itemCode,
       'p_rep': repCode,
@@ -217,6 +223,13 @@ class SalesRepository {
       'p_fiscal_years': fiscalYears,
       'p_fiscal_month': filters!.fiscalMonth,
       'p_filters': filters.toFilterParams(),
+      // 2026-09-07 (schema/047) — Quarter, resolved to concrete fiscal
+      // months once already by GlobalFiltersNotifier.setFiscalQuarter (see
+      // GlobalFilters.fiscalQuarterMonths' own doc comment); this repository
+      // has no `ref`/startMonth of its own to resolve 'Q1' itself, so it
+      // just forwards the already-resolved list, same as it's always just
+      // forwarded the already-resolved `fiscalMonth` string above.
+      'p_fiscal_quarter_months': filters.fiscalQuarterMonths,
     });
     return (rows as List).map<DimensionMonthlySales>((r) => DimensionMonthlySales.fromMap(r as Map<String, dynamic>)).toList();
   }
@@ -241,6 +254,9 @@ class SalesRepository {
       'p_fiscal_years': fiscalYears,
       'p_fiscal_month': filters!.fiscalMonth,
       'p_filters': filters.toFilterParams(),
+      // See fetchDimensionMonthlySales' identical line just above for why
+      // this is the already-resolved list, not a raw 'Q1' label.
+      'p_fiscal_quarter_months': filters.fiscalQuarterMonths,
     });
     return (rows as List).map<ConsolidatedSales>((r) => ConsolidatedSales.fromMap(r as Map<String, dynamic>)).toList();
   }
@@ -261,6 +277,14 @@ class SalesRepository {
     String? entityCode,
     int? fiscalYear,
     String? fiscalMonth,
+    // 2026-09-07 (schema/047) — Quarter, resolved to its 3 fiscal months.
+    // Explicit param, not read off `filters`, same reasoning as `fiscalMonth`
+    // above: Performance screen computes its OWN effective period (merging
+    // across years/months when only one of Year/Month is set — see
+    // performance_screen.dart's `_effectiveFiscalMonth`/`_effectiveFiscalYear`
+    // doc comments) rather than always taking the global filter's raw value,
+    // so this needs to be settable independently of `filters.fiscalQuarterMonths`.
+    List<String>? fiscalQuarterMonths,
     GlobalFilters? filters,
   }) async {
     final hasDimensionFilters = filters != null && filters.hasAnyDimensionSelected;
@@ -270,6 +294,7 @@ class SalesRepository {
       if (entityCode != null) query = query.eq('entity_code', entityCode);
       if (fiscalYear != null) query = query.eq('fiscal_year', fiscalYear);
       if (fiscalMonth != null) query = query.eq('fiscal_month', fiscalMonth);
+      if (fiscalQuarterMonths != null) query = query.inFilter('fiscal_month', fiscalQuarterMonths);
       final rows = await query.order('fiscal_year').order('fiscal_month');
       return rows.map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r)).toList();
     }
@@ -280,6 +305,7 @@ class SalesRepository {
       'p_fiscal_year': fiscalYear,
       'p_fiscal_month': fiscalMonth,
       'p_filters': filters.toFilterParams(),
+      'p_fiscal_quarter_months': fiscalQuarterMonths,
     });
     return (rows as List).map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r as Map<String, dynamic>)).toList();
   }
@@ -305,12 +331,12 @@ class SalesRepository {
 
   /// True when `filters` carries anything a plain single-dimension rollup
   /// view query can't honour on its own — any of the 5 dimension codes, or
-  /// (for the two monthly methods above) the global Month filter, which
-  /// v_dimension_monthly_sales/v_consolidated_sales could technically filter
-  /// by directly, but routing it through the same RPC as the dimension
-  /// filters keeps this to one code path instead of two.
+  /// (for the two monthly methods above) the global Month or Quarter filter,
+  /// which v_dimension_monthly_sales/v_consolidated_sales could technically
+  /// filter by directly, but routing it through the same RPC as the
+  /// dimension filters keeps this to one code path instead of two.
   bool _hasCrossFilters(GlobalFilters? filters) {
     if (filters == null) return false;
-    return filters.hasAnyDimensionSelected || filters.fiscalMonth != null;
+    return filters.hasAnyDimensionSelected || filters.fiscalMonth != null || filters.fiscalQuarter != null;
   }
 }

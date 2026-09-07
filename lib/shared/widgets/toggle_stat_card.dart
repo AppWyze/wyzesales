@@ -1,6 +1,17 @@
 import 'package:flutter/material.dart';
 
-enum StatPeriod { mtd, ytd }
+// 2026-09-07: `qtd` added for the Dashboard's Quarter feature — this widget's
+// OWN internal toggle still only ever renders the mtd/ytd segments below (see
+// `_ToggleStatCardState.build`), since every current call site now drives a
+// single SHARED MTD/QTD/YTD control at the Dashboard level instead of 6
+// independent per-tile toggles (Craig, 2026-09-07: "One global toggle") —
+// every `ToggleStatCard` on the Dashboard passes `showToggle: false` and
+// resolves the right period's value into `mtdValue`/`mtdColor`/`mtdSubtitle`
+// itself (see dashboard_screen.dart's `_periodValue`). `qtd` is added to this
+// shared enum anyway (rather than a separate one) purely so the Dashboard's
+// own external control and this widget can agree on one vocabulary for
+// "which period" — not because this widget's internal toggle needs it.
+enum StatPeriod { mtd, qtd, ytd }
 
 /// A KPI tile that can flip between an MTD and a YTD reading of the same
 /// metric — the Dashboard's second-generation KPI row (2026-08-27, after
