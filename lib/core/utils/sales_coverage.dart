@@ -34,7 +34,14 @@ class EntitySalesHistory {
 
   factory EntitySalesHistory.fromMap(Map<String, dynamic> map) {
     return EntitySalesHistory(
-      entityCode: map['entity_code'] as String,
+      // fn_dimension_sales_history (schema/023) groups v_dimension_monthly_sales
+      // by entity_code, so a client with any null-rep-code fact rows (e.g.
+      // Edgetec's orphaned GL journal lines, schema/024) produces exactly one
+      // row with entity_code = NULL. Same defense-in-depth fallback, same
+      // 'UNASSIGNED' sentinel as DimensionPerformance.fromMap, so this row
+      // still joins correctly against ownHistory in performance_screen.dart
+      // instead of crashing the unsafe cast.
+      entityCode: (map['entity_code'] as String?) ?? 'UNASSIGNED',
       activeMonths: (map['active_months'] as num).toInt(),
       totalValue: map['total_value'] as num? ?? 0,
     );
