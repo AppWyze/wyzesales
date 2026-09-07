@@ -124,8 +124,21 @@ class SettingsRepository {
     return Client.fromMap(row);
   }
 
-  Future<int> getFiscalYearStartMonth() async {
-    final row = await supabase.from('fiscal_year_settings').select('start_month').maybeSingle();
+  // 2026-09-07: was an un-scoped `.maybeSingle()` relying entirely on RLS to
+  // narrow this to one row — worked fine for a regular user (RLS already
+  // limited them to their own client), but schema/048 (Platform Admin's
+  // license-fiscal-year-alignment feature, same day) opened
+  // `fiscal_year_settings_select` up to `is_platform_admin() OR own client`,
+  // so a platform-admin caller now legitimately gets ALL clients' rows back
+  // from RLS — multiple rows into `.maybeSingle()` throws a PostgrestException
+  // instead of returning one. Craig hit this directly browsing Edgetec as the
+  // WyzeSales Support/Admin account: Settings > Company's Fiscal year
+  // starts/Data history window fields came back blank and wouldn't hold a
+  // save. Fixed the same way `clientDimensions()` (ReferenceDataRepository)
+  // already is for the identical schema/038 cross-tenant case: an explicit
+  // `.eq('client_id', clientId)`, not just trusting RLS to do it alone.
+  Future<int> getFiscalYearStartMonth(String clientId) async {
+    final row = await supabase.from('fiscal_year_settings').select('start_month').eq('client_id', clientId).maybeSingle();
     return (row?['start_month'] as int?) ?? 3;
   }
 
@@ -154,8 +167,10 @@ class SettingsRepository {
   /// convention as getFiscalYearStartMonth right above; defaults to 3 for a
   /// client that's never touched this setting, matching that column's own
   /// database default exactly.
-  Future<int> getDataHistoryYears() async {
-    final row = await supabase.from('fiscal_year_settings').select('history_years').maybeSingle();
+  // Same explicit-clientId fix as getFiscalYearStartMonth right above, same
+  // reason (schema/048's platform-admin RLS bypass on this same table).
+  Future<int> getDataHistoryYears(String clientId) async {
+    final row = await supabase.from('fiscal_year_settings').select('history_years').eq('client_id', clientId).maybeSingle();
     return (row?['history_years'] as int?) ?? 3;
   }
 
@@ -186,8 +201,15 @@ class SettingsRepository {
   /// mirrors that column's own database default (schema/034) exactly, same
   /// reasoning as those two methods' own doc comments, and matches Craig's
   /// own starting choice (AskUserQuestion, 2026-09-04: "15% under budget").
-  Future<double> getBudgetVarianceThreshold() async {
-    final row = await supabase.from('alert_settings').select('budget_variance_threshold_pct').maybeSingle();
+  // Same explicit-clientId fix as getFiscalYearStartMonth/getDataHistoryYears
+  // above — alert_settings_select doesn't have a platform-admin RLS bypass
+  // today, so this one wasn't actually broken yet, but it had the exact same
+  // "un-scoped .maybeSingle(), trusting RLS alone" shape, which would break
+  // the same way the moment a future migration ever adds one (as schema/048
+  // just did for fiscal_year_settings) — fixed now rather than left as a
+  // second copy of the same latent bug.
+  Future<double> getBudgetVarianceThreshold(String clientId) async {
+    final row = await supabase.from('alert_settings').select('budget_variance_threshold_pct').eq('client_id', clientId).maybeSingle();
     return (row?['budget_variance_threshold_pct'] as num?)?.toDouble() ?? 15;
   }
 

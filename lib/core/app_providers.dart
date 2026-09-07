@@ -172,9 +172,14 @@ final activeAlertsProvider = FutureProvider<List<ActiveAlert>>((ref) {
 /// (settings_screen.dart) so a changed threshold takes effect app-wide
 /// (i.e. the next time activeAlertsProvider itself is read/invalidated)
 /// immediately rather than only on next reload.
+// 2026-09-07: now reads clientId explicitly off the session and passes it
+// through, same pattern currentClientProvider/clientDimensionsProvider
+// already use — SettingsRepository.getBudgetVarianceThreshold no longer
+// relies on RLS alone to narrow the row (see that method's own doc comment).
 final budgetVarianceThresholdProvider = FutureProvider<double>((ref) {
-  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
-  return ref.watch(settingsRepositoryProvider).getBudgetVarianceThreshold();
+  final clientId = ref.watch(sessionProvider).value?.clientId;
+  if (clientId == null) return Future.value(15);
+  return ref.watch(settingsRepositoryProvider).getBudgetVarianceThreshold(clientId);
 });
 
 /// The signed-in user's client's fiscal year start month
@@ -188,9 +193,17 @@ final budgetVarianceThresholdProvider = FutureProvider<double>((ref) {
 /// `ref.invalidate`d by `_EditCompanyDialog`'s save handler
 /// (settings_screen.dart) so a changed start month takes effect app-wide
 /// immediately, not just on next reload.
+// 2026-09-07: fixed to explicitly pass clientId (see
+// SettingsRepository.getFiscalYearStartMonth's own doc comment) — schema/048
+// added a platform-admin RLS bypass to fiscal_year_settings_select the same
+// day, which broke this provider's old RLS-only narrowing for any
+// platform-admin caller (multiple rows back instead of one). Same
+// currentClientProvider/clientDimensionsProvider pattern as
+// budgetVarianceThresholdProvider right above.
 final fiscalYearStartMonthProvider = FutureProvider<int>((ref) {
-  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
-  return ref.watch(settingsRepositoryProvider).getFiscalYearStartMonth();
+  final clientId = ref.watch(sessionProvider).value?.clientId;
+  if (clientId == null) return Future.value(3);
+  return ref.watch(settingsRepositoryProvider).getFiscalYearStartMonth(clientId);
 });
 
 /// The signed-in user's client's data history window in fiscal years — 3 or
@@ -204,9 +217,13 @@ final fiscalYearStartMonthProvider = FutureProvider<int>((ref) {
 /// `_EditCompanyDialog`'s save handler (settings_screen.dart) alongside
 /// fiscalYearStartMonthProvider, so a changed window takes effect app-wide
 /// immediately.
+// 2026-09-07: same explicit-clientId fix as fiscalYearStartMonthProvider
+// right above, same root cause (schema/048's platform-admin RLS bypass on
+// the same fiscal_year_settings table).
 final fiscalYearHistoryYearsProvider = FutureProvider<int>((ref) {
-  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
-  return ref.watch(settingsRepositoryProvider).getDataHistoryYears();
+  final clientId = ref.watch(sessionProvider).value?.clientId;
+  if (clientId == null) return Future.value(3);
+  return ref.watch(settingsRepositoryProvider).getDataHistoryYears(clientId);
 });
 
 /// Which fiscal years (within the client's own history window) actually have
