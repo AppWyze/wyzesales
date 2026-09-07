@@ -1327,6 +1327,47 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       }
     });
 
+    // Same race, one hop further down the chain — Craig, 2026-09-07 (Edgetec):
+    // "When the Dashboard first loads it loads with nothing. Navigate off and
+    // then on again and some data appears." `_loadKpis()`/`_loadDimension()`
+    // both resolve "today's fiscal month/year" via `ref.read(
+    // fiscalYearStartMonthProvider).valueOrNull ?? 3` — and that provider
+    // (core/app_providers.dart) is itself a SECOND async hop chained off
+    // `sessionProvider`: it reads the just-loaded profile's own clientId,
+    // then makes a further round trip to `fiscal_year_settings` for that
+    // client's real start month. The listener above only catches the FIRST
+    // hop (the profile itself resolving) — this provider can still be
+    // `loading` for a moment after that, so the initial batch can run
+    // against the `?? 3` (March) fallback even once the profile is in.
+    // WCSA's real start month happens to BE 3, so this was invisible on
+    // every WCSA login; Edgetec's is 10 (October, EDGETEC_LOAD_NOTES.md) —
+    // computing "today's fiscal month" under the wrong start month
+    // exact-matches none of Edgetec's real rows, so every fiscal-month-
+    // filtered KPI/pie (Revenue/Rep Target Attainment, GP Margin, Sales
+    // Coverage, Returns Rate, the Customer breakdown's YTD pie — anything
+    // keyed by fiscal_month/fiscal_year) comes back empty on first paint.
+    // The Customer breakdown's MTD pie alone looked right first time purely
+    // by coincidence: it's grouped by calendar month, not the mislabeled
+    // fiscal-month string, so it finds today's real row regardless of which
+    // start-month guess produced it.
+    //
+    // Fixed the same way, reusing the SAME `_profileReloadQueued`/
+    // `_initialKpiLoadInFlight` pair as the listener above rather than a
+    // second flag — both listeners are really "a value this screen's
+    // fiscal-period maths depends on only became available after the
+    // initial batch already started," so whichever of the two settles
+    // last is exactly the one that needs the deferred refresh, and the
+    // existing pair already guarantees at most one extra batch fires
+    // either way.
+    ref.listen<AsyncValue<int>>(fiscalYearStartMonthProvider, (previous, next) {
+      if (previous?.value != null || next.value == null) return;
+      if (_initialKpiLoadInFlight) {
+        _profileReloadQueued = true;
+      } else {
+        _refresh();
+      }
+    });
+
     final dimData = _dimensionData;
 
     // 2026-09-06: the ranking-breakdown widget's own dimension picker,

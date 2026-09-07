@@ -1,0 +1,34 @@
+-- ============================================================================
+-- WyzeSales — GRANT client_dimensions to service_role (compute-forecast)
+-- ============================================================================
+-- Fifty-first migration. Companion to the same-day generalization of
+-- supabase/functions/compute-forecast (Craig: "How do we get the Seasonal
+-- Forecast to calculate and populate?") — that function's hardcoded
+-- ["sales_person", "customer", "item", "category", "branch", "company"]
+-- dimension list is replaced with a per-client read of `client_dimensions`,
+-- the same table every other generalized screen/RPC already reads from
+-- (schema/038/042/050), so Edgetec's real dim_1..dim_5 dimensions get a
+-- forecast computed too, not just the three of its dimensions that happen
+-- to also be on WCSA's fixed six.
+--
+-- compute-forecast runs as `service_role` (schema/032's own header comment:
+-- switched onto getServiceKey()/the "wyzesales_edge" secret key, which does
+-- NOT automatically inherit standing table grants the legacy service_role
+-- key always had) — exactly the same missing-GRANT trap schema/007 and
+-- schema/032 already hit and fixed for the other tables/views this function
+-- touches. `client_dimensions` is a NEW table this function didn't read
+-- before today, so it was never added to schema/032's grant list — this
+-- migration is that same fix, for this one additional table.
+--
+-- Read-only: this function only ever SELECTs dimension_key off
+-- client_dimensions, never writes to it (writing stays Platform-Admin-only,
+-- schema/038's own RLS). Not reproduced against a live service_role-vs-
+-- BYPASSRLS Supabase project the way schema/032's original fix was (this
+-- sandbox has no Deno/Edge Function runtime to run compute-forecast itself
+-- end-to-end) — if this still 42501s on `client_dimensions` after deploying,
+-- the fix is the same one schema/032's own header already describes: read
+-- the exact table/role name out of Postgres's own error hint and GRANT to
+-- that role.
+-- ============================================================================
+
+grant select on client_dimensions to service_role;

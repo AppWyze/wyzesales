@@ -32,7 +32,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getServiceKey } from "../_shared/service_key.ts";
 
-const DIMENSIONS = ["sales_person", "customer", "item", "category", "branch", "company"];
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -216,6 +215,36 @@ Deno.serve(async (_req) => {
 
     const settings: ForecastSettings = settingsRow ?? DEFAULT_SETTINGS;
 
+    // 2026-09-07: was a hardcoded `["sales_person", "customer", "item",
+    // "category", "branch", "company"]` — WCSA's own fixed six, the exact
+    // same "only ever matches WCSA" gap already found and fixed in Sales
+    // By/Performance/Budgets/Sales Analysis/the Dashboard's ranking widget
+    // this same day (client_dimensions, migration 038/042/050). A client
+    // like Edgetec, whose real configured set is sales_person/customer/
+    // company plus dim_1..dim_5 (Group/Market/Revenue Split/Category Type/
+    // Business Unit), would silently never get a forecast computed for any
+    // of its five real generic dimensions — Budgets' budget-or-forecast
+    // fallback (schema/021) for those would stay permanently empty no
+    // matter how many times this function runs, since it only ever wrote
+    // rows for dimension keys on the old fixed list.
+    //
+    // Reading this client's own `client_dimensions` instead (same table
+    // every other generalized screen/RPC already reads from) makes this
+    // exactly zero-behaviour-change for WCSA — its 6 seeded rows
+    // (schema/038 Section 4) are precisely the old hardcoded list, just in
+    // a different order, which doesn't matter for a loop — while Edgetec
+    // (and any future client) now gets a forecast computed for every
+    // dimension it actually has, 'company' included either way.
+    const { data: dimensionRows, error: dimensionsError } = await supabase
+      .from("client_dimensions")
+      .select("dimension_key")
+      .eq("client_id", clientId);
+    if (dimensionsError) {
+      console.error(`[${clientId}] client_dimensions read failed:`, dimensionsError.message);
+      continue;
+    }
+    const dimensions = (dimensionRows ?? []).map((d) => d.dimension_key as string);
+
     const rowsToUpsert: Array<{
       client_id: string;
       dimension: string;
@@ -227,7 +256,7 @@ Deno.serve(async (_req) => {
     }> = [];
     const runTimestamp = new Date().toISOString();
 
-    for (const dimension of DIMENSIONS) {
+    for (const dimension of dimensions) {
       const { data: series, error: seriesError } = await fetchAllInputSeries(supabase, clientId, dimension);
 
       if (seriesError) {
