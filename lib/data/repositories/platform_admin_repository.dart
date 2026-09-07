@@ -121,16 +121,19 @@ class PlatformAdminRepository {
   //
   // client_dimensions/client_dimension_values (schema/038) are read/written
   // for an ARBITRARY selected client here, unlike
-  // ReferenceDataRepository.clientDimensions() (which always reads the
-  // SIGNED-IN user's own client via RLS with no client_id filter needed) —
+  // ReferenceDataRepository.clientDimensions() (which, since the 2026-09-07
+  // fix, resolves and passes the SIGNED-IN user's own `client_id` itself
+  // rather than trusting RLS alone — see that method's own doc comment for
+  // why: schema/038's RLS lets is_platform_admin read across every client,
+  // which is exactly what THIS screen needs but is wrong for that one) —
   // this screen is the one place an is_platform_admin account configures a
-  // client other than their own, so every method below takes an explicit
-  // `clientId`. schema/038's own RLS already lets is_platform_admin read/
-  // write across every client; these queries just need to say which one.
+  // client OTHER than their own, so every method below takes an explicit,
+  // caller-chosen `clientId` instead of a resolved-from-session one.
 
   /// This client's configured dimensions, in filter-bar order — same shape
   /// `ReferenceDataRepository.clientDimensions()` returns for the signed-in
-  /// user's own client, just explicitly scoped to `clientId` instead.
+  /// user's own client, just explicitly scoped to whichever `clientId` this
+  /// screen's own client picker has selected, rather than the caller's own.
   Future<List<ClientDimensionConfig>> fetchClientDimensions(String clientId) async {
     final rows = await supabase.from('client_dimensions').select().eq('client_id', clientId).order('sort_order');
     return rows.map<ClientDimensionConfig>((r) => ClientDimensionConfig.fromMap(r)).toList();

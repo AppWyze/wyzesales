@@ -311,9 +311,29 @@ final currentClientProvider = FutureProvider<Client?>((ref) {
 /// a DIFFERENT CLIENT's user would keep showing the previous client's
 /// dimension rows (the exact gap those two providers' own doc comments
 /// describe, here for `client_id` instead of `user_id`).
+///
+/// BUG FIX, 2026-09-07 (Craig, Edgetec: "Item, Branch, Category do not apply
+/// to Edgetec... I have not added them to the dimension"): this used to call
+/// `clientDimensions()` with no `client_id` argument at all, trusting
+/// schema/038's RLS to scope the read to "the caller's own client" on its
+/// own. That's true for an ordinary user, but the same RLS policy also lets
+/// a platform admin read every client's rows unrestricted (by design, for
+/// the Platform Admin Dimensions tab) — and the account actually used
+/// day-to-day ("WyzeSales Support") IS a platform admin, so this was
+/// silently unioning every client's own dimensions into one list rather than
+/// just the signed-in user's own client's. Now resolves `client_id`
+/// explicitly from `sessionProvider`'s own `Profile` (same source
+/// `currentClientProvider` above already reads its `clientId` from) and
+/// passes it through, so the result is scoped correctly regardless of
+/// platform-admin status. Returns an empty list rather than every client's
+/// rows whenever the session hasn't resolved a profile yet (signed out, or
+/// still loading) — matches this provider's own established "don't block
+/// rendering, show nothing yet" convention every reader of it already
+/// follows (see global_filter_bar.dart's own `valueOrNull ?? const []`).
 final clientDimensionsProvider = FutureProvider<List<ClientDimensionConfig>>((ref) {
-  ref.watch(sessionProvider);
-  return ref.watch(referenceDataRepositoryProvider).clientDimensions();
+  final clientId = ref.watch(sessionProvider).value?.clientId;
+  if (clientId == null) return Future.value(const <ClientDimensionConfig>[]);
+  return ref.watch(referenceDataRepositoryProvider).clientDimensions(clientId);
 });
 
 final fiscalYearDataAvailabilityProvider = FutureProvider<FiscalDataAvailability>((ref) async {

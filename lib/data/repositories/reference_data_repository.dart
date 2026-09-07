@@ -209,9 +209,28 @@ class ReferenceDataRepository {
   /// `SalesDimension.filterable` (2026-09-05, multi-tenant dimension model
   /// Step 2). Ordered by `sort_order` — WCSA's own seed matches
   /// `SalesDimension.filterable`'s previous declared order exactly, so this
-  /// is a zero-behaviour-change swap for WCSA today; RLS (schema/038 Section
-  /// 3) already scopes this to the caller's own `client_id` with no filter
-  /// needed here.
+  /// was meant to be a zero-behaviour-change swap for WCSA.
+  ///
+  /// BUG, caught 2026-09-07 (Craig, Edgetec: "Item, Branch, Category do not
+  /// apply to Edgetec but they are appearing in the filters and I have not
+  /// added them to the dimension"): this originally had NO `client_id`
+  /// filter at all, on the wrong assumption that schema/038's own RLS
+  /// ("client_dimensions_select") already scoped every read to the caller's
+  /// own client. That's only true for an ordinary user — the same policy
+  /// also grants `is_platform_admin()` an unrestricted read across EVERY
+  /// client's rows (deliberately, so the Platform Admin Dimensions tab can
+  /// browse any client — see `PlatformAdminRepository`'s own doc comment on
+  /// that same policy). "WyzeSales Support," the account actually used
+  /// day-to-day, IS a platform admin — so this query was silently returning
+  /// every client's client_dimensions rows unioned together, not just
+  /// Edgetec's, which is exactly why WCSA's own Branch/Item/Category (WCSA
+  /// seeded all six "existing" dimensions directly in migration 038) leaked
+  /// into Edgetec's filter bar despite Edgetec only having Company and Sales
+  /// Person configured. Explicit `client_id` filter, taken from the caller
+  /// (see `clientDimensionsProvider`, which resolves it from the signed-in
+  /// user's own session), now scopes this the same way regardless of
+  /// platform-admin status — matching what the RLS-only version only
+  /// happened to get right for a non-admin account.
   ///
   /// `is_live = true` (schema/043, 2026-09-06): this is the ONE shared read
   /// path every real app screen (GlobalFilterBar, Sales By, Performance,
@@ -222,8 +241,13 @@ class ReferenceDataRepository {
   /// `PlatformAdminRepository.fetchClientDimensions` instead, which
   /// deliberately does NOT filter on `is_live` — an admin managing the
   /// dimension needs to see and toggle drafts, not just live rows.
-  Future<List<ClientDimensionConfig>> clientDimensions() async {
-    final rows = await supabase.from('client_dimensions').select().eq('is_live', true).order('sort_order');
+  Future<List<ClientDimensionConfig>> clientDimensions(String clientId) async {
+    final rows = await supabase
+        .from('client_dimensions')
+        .select()
+        .eq('client_id', clientId)
+        .eq('is_live', true)
+        .order('sort_order');
     return rows.map<ClientDimensionConfig>((r) => ClientDimensionConfig.fromMap(r)).toList();
   }
 
