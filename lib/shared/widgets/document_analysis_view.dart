@@ -5,10 +5,36 @@ import '../../core/app_providers.dart';
 import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/utils/formatters.dart';
+import '../../data/models/client_dimension_config.dart';
 import '../../data/models/sales_document.dart';
 import 'async_section.dart';
 import 'data_export_buttons.dart';
 import 'responsive_data_table.dart';
+
+/// This client's own configured Document Analysis columns (client_dimensions,
+/// schema/038, excluding the 'company' pseudo-dimension — there's no
+/// meaningful per-line "company" column) plus, for whichever of those are a
+/// brand-new dim_N/attr_N dimension (not one of the six 'existing' ones),
+/// the code -> display-name map `ReferenceDataRepository.namesForConfig`
+/// already builds for Sales By/Performance/Budgets. Fetched ONCE per screen
+/// load (2026-09-07, migration 050) — a client's dimension configuration
+/// doesn't change mid-session, so there's no reason to re-fetch it on every
+/// page turn/sort/filter change the way `_pageFuture` itself does.
+class _DimensionSetup {
+  final List<ClientDimensionConfig> dimensions;
+  final Map<String, Map<String, String>> names;
+  const _DimensionSetup({required this.dimensions, required this.names});
+}
+
+/// One page's rows bundled with the (memoized) `_DimensionSetup` that was
+/// current when they were fetched — so `_DocumentTable` always has both
+/// ready together, rather than juggling two separately-resolving futures
+/// that could otherwise settle a frame apart.
+class _PageData {
+  final List<SalesDocument> rows;
+  final _DimensionSetup dimSetup;
+  const _PageData({required this.rows, required this.dimSetup});
+}
 
 /// Shared line-level detail view behind Sales Analysis' Table tab, Quote
 /// Analysis, and Sales Order Analysis — same filter/column layout in the old
@@ -56,8 +82,14 @@ import 'responsive_data_table.dart';
 ///   sorting is a real issue we need to be able to sort on all columns."
 ///   Sorting is now a real server-side ORDER BY inside `fn_sales_documents_page`
 ///   itself (schema/013), not a client-side re-sort of whatever page is in
-///   memory — see `_DocumentTable.sortColumnKeys`' doc comment for why that
+///   memory — see `_sortColumnKeys`' own doc comment for why that
 ///   distinction matters once there's more than one page.
+/// - 2026-09-07 (migration 050): the column set itself — Sales Person/
+///   Branch/Category/Item/Customer — stops being a fixed 5 and instead
+///   reads THIS CLIENT's own configured dimensions (client_dimensions), so
+///   a client like Edgetec sees its own Group/Market/Revenue Split/Category
+///   Type/Business Unit columns instead of WCSA's. See `_DimensionSetup`'s
+///   own doc comment.
 class DocumentAnalysisView extends ConsumerStatefulWidget {
   const DocumentAnalysisView({
     super.key,
@@ -101,15 +133,42 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
   static const _pageSize = 100;
 
   int _page = 0;
-  late Future<List<SalesDocument>> _pageFuture;
+  late Future<_PageData> _pageFuture;
 
-  // Index into `_DocumentTable.sortColumnKeys`, plus direction — default
+  // Fetched ONCE (see `_DimensionSetup`'s own doc comment) and reused by
+  // every `_loadPage()` call thereafter — `Future` caches its result, so
+  // awaiting this same instance repeatedly replays the cached value rather
+  // than re-querying `client_dimensions`/`client_dimension_values`.
+  late Future<_DimensionSetup> _dimSetupFuture;
+
+  // Index into `_sortColumnKeys(dimensions)`, plus direction — default
   // matches this table's original pre-sort order (newest first) and
   // `fn_sales_documents_page`'s own default parameters (schema/013:
   // `p_sort_column default 'doc_date', p_sort_ascending default false`), so
   // the very first load needs no special-casing against the RPC's defaults.
+  // 2026-09-07 (migration 050): still index 2 regardless of how many
+  // dimension columns this client has configured — Doc/Type/Date always
+  // come first, the dynamic dimension columns only ever come after.
   int _sortColumnIndex = 2;
   bool _sortAscending = false;
+
+  /// Index-aligned with `_DocumentTable`'s dynamic column list: Doc/Type/
+  /// Date, then one entry per configured dimension (in `dimensions`' own
+  /// order), then Qty/Revenue/GP/GP%. Each dimension's own `dimensionKey`
+  /// ('sales_person', 'branch', ..., 'dim_1', ...) IS the exact
+  /// `p_sort_column` string `fn_sales_documents_page`'s CASE (migration 050)
+  /// accepts for that dimension — no separate mapping table needed, unlike
+  /// the old fixed 12-column `sortColumnKeys` this replaces.
+  List<String> _sortColumnKeys(List<ClientDimensionConfig> dimensions) => [
+        'document',
+        'document_kind',
+        'doc_date',
+        for (final d in dimensions) d.dimensionKey,
+        'quantity',
+        'value',
+        'profit',
+        'profit_percent',
+      ];
 
   // Totals are tracked separately from `_pageFuture` (not bundled into one
   // combined future) on purpose: turning a page should only re-fetch that
@@ -125,12 +184,32 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
   @override
   void initState() {
     super.initState();
+    _dimSetupFuture = _loadDimensionSetup();
     _pageFuture = _loadPage();
     _totalsLoading = true;
     _loadTotals();
     // Not gated on `showExportButtons` — a caller only bothers passing this
     // when it's false, so this is a no-op for Quote/Sales Order Analysis.
     widget.onExportReady?.call(_buildExportData);
+  }
+
+  /// This client's own configured Document Analysis columns, plus a
+  /// code -> name map for whichever of them are a generic dim_N/attr_N
+  /// dimension — see `_DimensionSetup`'s own doc comment. The five
+  /// 'existing' dimensions need no separate name lookup here: their display
+  /// name already rides along on each `SalesDocument` row itself
+  /// (resolvedRepName, customerName, ...), exactly as it always has.
+  Future<_DimensionSetup> _loadDimensionSetup() async {
+    final all = await ref.read(clientDimensionsProvider.future);
+    final dimensions = all.where((d) => d.dimensionKey != 'company').toList()
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    final repo = ref.read(referenceDataRepositoryProvider);
+    final generic = dimensions.where((d) => d.resolutionKind != 'existing').toList();
+    final nameLists = await Future.wait(generic.map((d) => repo.namesForConfig(d)));
+    return _DimensionSetup(
+      dimensions: dimensions,
+      names: {for (var i = 0; i < generic.length; i++) generic[i].dimensionKey: nameLists[i]},
+    );
   }
 
   /// 2026-09-01, Craig: "if I filter on August then it must filter on and
@@ -167,25 +246,26 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     return fiscalYearFor(DateTime.now(), startMonth: startMonth);
   }
 
-  Future<List<SalesDocument>> _loadPage() {
+  Future<_PageData> _loadPage() async {
+    // Memoized (see `_dimSetupFuture`'s own doc comment) — awaiting it again
+    // on every page turn/sort/filter change replays the cached result rather
+    // than re-querying client_dimensions/client_dimension_values.
+    final dimSetup = await _dimSetupFuture;
     final filters = ref.read(globalFiltersProvider);
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
-    return ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
+    final rows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
           fiscalYear: _effectiveFiscalYear(filters, startMonth),
           fiscalMonth: filters.fiscalMonth,
           fiscalQuarterMonths: filters.fiscalQuarterMonths,
-          categoryCode: filters.forDimension(SalesDimension.category)?.code,
-          itemCode: filters.forDimension(SalesDimension.item)?.code,
-          repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
-          branchCode: filters.forDimension(SalesDimension.branch)?.code,
-          customerCode: filters.forDimension(SalesDimension.customer)?.code,
+          filters: filters.toFilterParams(),
           document: filters.document,
-          sortColumn: _DocumentTable.sortColumnKeys[_sortColumnIndex],
+          sortColumn: _sortColumnKeys(dimSetup.dimensions)[_sortColumnIndex],
           sortAscending: _sortAscending,
           page: _page,
           pageSize: _pageSize,
         );
+    return _PageData(rows: rows, dimSetup: dimSetup);
   }
 
   Future<void> _loadTotals() async {
@@ -197,11 +277,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
             fiscalYear: _effectiveFiscalYear(filters, startMonth),
             fiscalMonth: filters.fiscalMonth,
             fiscalQuarterMonths: filters.fiscalQuarterMonths,
-            categoryCode: filters.forDimension(SalesDimension.category)?.code,
-            itemCode: filters.forDimension(SalesDimension.item)?.code,
-            repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
-            branchCode: filters.forDimension(SalesDimension.branch)?.code,
-            customerCode: filters.forDimension(SalesDimension.customer)?.code,
+            filters: filters.toFilterParams(),
             document: filters.document,
           );
       if (!mounted) return;
@@ -286,15 +362,17 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
             const SizedBox(height: 16),
           ],
           Expanded(
-            child: AsyncSection<List<SalesDocument>>(
+            child: AsyncSection<_PageData>(
               future: _pageFuture,
-              isEmpty: (rows) => rows.isEmpty && _page == 0,
-              builder: (context, rows) => Column(
+              isEmpty: (data) => data.rows.isEmpty && _page == 0,
+              builder: (context, data) => Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: _DocumentTable(
-                      rows: rows,
+                      rows: data.rows,
+                      dimensions: data.dimSetup.dimensions,
+                      namesByDimension: data.dimSetup.names,
                       totals: _totals,
                       totalsLoading: _totalsLoading,
                       totalsError: _totalsError,
@@ -307,11 +385,11 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
                   _PaginationBar(
                     page: _page,
                     pageSize: _pageSize,
-                    rowsOnPage: rows.length,
+                    rowsOnPage: data.rows.length,
                     totalCount: _totals?.count,
                     onFirst: _page > 0 ? () => _goToPage(0) : null,
                     onPrevious: _page > 0 ? () => _goToPage(_page - 1) : null,
-                    onNext: _canGoNext(rows.length) ? () => _goToPage(_page + 1) : null,
+                    onNext: _canGoNext(data.rows.length) ? () => _goToPage(_page + 1) : null,
                     onLast: _lastPage() != null && _page != _lastPage() ? () => _goToPage(_lastPage()!) : null,
                   ),
                 ],
@@ -367,6 +445,8 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
         'narrow your filters to under ${formatQuantity(_maxExportRows)} rows first',
       );
     }
+    // Memoized — see `_dimSetupFuture`'s own doc comment.
+    final dimSetup = await _dimSetupFuture;
     final filters = ref.read(globalFiltersProvider);
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final allRows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
@@ -374,26 +454,24 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
           fiscalYear: _effectiveFiscalYear(filters, startMonth),
           fiscalMonth: filters.fiscalMonth,
           fiscalQuarterMonths: filters.fiscalQuarterMonths,
-          categoryCode: filters.forDimension(SalesDimension.category)?.code,
-          itemCode: filters.forDimension(SalesDimension.item)?.code,
-          repCode: filters.forDimension(SalesDimension.salesPerson)?.code,
-          branchCode: filters.forDimension(SalesDimension.branch)?.code,
-          customerCode: filters.forDimension(SalesDimension.customer)?.code,
+          filters: filters.toFilterParams(),
           document: filters.document,
-          sortColumn: _DocumentTable.sortColumnKeys[_sortColumnIndex],
+          sortColumn: _sortColumnKeys(dimSetup.dimensions)[_sortColumnIndex],
           sortAscending: _sortAscending,
           page: 0,
           pageSize: totalCount == 0 ? _pageSize : totalCount,
         );
     final dateFormat = DateFormat('yyyy-MM-dd');
-    const headers = [
-      'Doc', 'Type', 'Date', 'Sales Person', 'Branch', 'Category', 'Item', 'Customer', 'Qty', 'Revenue', 'GP', 'GP%',
-    ];
+    final dimensions = dimSetup.dimensions;
+    final headers = ['Doc', 'Type', 'Date', for (final d in dimensions) d.displayLabel, 'Qty', 'Revenue', 'GP', 'GP%'];
     final totals = _totals;
     final rows = <List<String>>[
       if (totals != null)
         [
-          'Total', '', '', '', '', '', '', '',
+          'Total',
+          '',
+          '',
+          for (final _ in dimensions) '',
           formatQuantity(totals.quantity),
           formatRand(totals.value, precise: true),
           formatRand(totals.profit, precise: true),
@@ -404,11 +482,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
           doc.document,
           doc.documentKind,
           dateFormat.format(doc.docDate),
-          doc.resolvedRepName ?? doc.resolvedRepCode ?? '—',
-          doc.branchDisplayCode ?? doc.branchCode ?? '—',
-          doc.categoryName ?? doc.departmentCode ?? '—',
-          doc.itemName ?? doc.itemCode,
-          doc.customerName ?? doc.accountCode,
+          for (final d in dimensions) doc.displayFor(d, dimSetup.names[d.dimensionKey] ?? const {}),
           formatQuantity(doc.quantity),
           formatRand(doc.value, precise: true),
           formatRand(doc.profit, precise: true),
@@ -519,6 +593,8 @@ class _PaginationBar extends StatelessWidget {
 class _DocumentTable extends StatelessWidget {
   const _DocumentTable({
     required this.rows,
+    required this.dimensions,
+    required this.namesByDimension,
     required this.totals,
     required this.totalsLoading,
     required this.totalsError,
@@ -528,33 +604,28 @@ class _DocumentTable extends StatelessWidget {
   });
 
   final List<SalesDocument> rows;
+
+  /// This client's own configured Document Analysis columns — see
+  /// `_DimensionSetup`'s own doc comment (document_analysis_view.dart).
+  /// 2026-09-07 (migration 050): replaces the fixed Sales Person/Branch/
+  /// Category/Item/Customer column set, which only ever matched WCSA — a
+  /// client like Edgetec, with a different configured dimension set
+  /// (Sales Person/Customer/Group/Market/Revenue Split/Category Type/
+  /// Business Unit), now sees ITS OWN columns here instead.
+  final List<ClientDimensionConfig> dimensions;
+
+  /// dimension_key -> {code -> display name}, for whichever of `dimensions`
+  /// is a generic dim_N/attr_N dimension (empty/absent for one of the five
+  /// 'existing' dimensions — their display name already rides along on each
+  /// row itself, see `SalesDocument.displayFor`).
+  final Map<String, Map<String, String>> namesByDimension;
+
   final SalesDocumentTotals? totals;
   final bool totalsLoading;
   final String? totalsError;
   final int sortColumnIndex;
   final bool sortAscending;
   final void Function(int columnIndex, bool ascending) onSort;
-
-  /// Index-aligned with the 12 `DataColumn`s in `build()` below, and with
-  /// schema/013's `fn_sales_documents_page` CASE/WHEN list — a column here
-  /// that isn't also one of schema/013's hardcoded cases would silently fall
-  /// through to that function's `else 'v.doc_date'` default instead of
-  /// erroring, so any future column added to this table needs a matching
-  /// entry added to both places, in the same order.
-  static const sortColumnKeys = [
-    'document',
-    'document_kind',
-    'doc_date',
-    'sales_person',
-    'branch',
-    'category',
-    'item',
-    'customer',
-    'quantity',
-    'value',
-    'profit',
-    'profit_percent',
-  ];
 
   /// Pinned as the FIRST row now, not the last — 2026-08-27, Craig: "Does it
   /// make sense to have the Totals as the first line in a view?" Sourced
@@ -564,16 +635,22 @@ class _DocumentTable extends StatelessWidget {
   /// sum would be actively misleading once there's more than one page. GP%
   /// is recomputed from the totalled Revenue/GP, not averaged from each
   /// row's own GP%, same as every other totals row in the app.
+  ///
+  /// 2026-09-07 (migration 050): the fixed 7 leading blank cells (Type/Date/
+  /// Sales Person/Branch/Category/Item/Customer) become `2 + dimensions.
+  /// length` — Doc/Type/Date, then one blank per THIS CLIENT's own
+  /// configured dimension column, whatever that count happens to be.
   DataRow _totalsRow(BuildContext context) {
     const style = TextStyle(fontWeight: FontWeight.bold);
     final current = totals;
+    final leadingBlanks = 2 + dimensions.length;
     if (current == null) {
       final label = totalsError != null ? 'Total (unavailable)' : (totalsLoading ? 'Total (loading…)' : 'Total');
       return DataRow(
         color: WidgetStatePropertyAll(Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.04)),
         cells: [
           DataCell(Text(label, style: style)),
-          for (var i = 0; i < 11; i++) const DataCell(Text('')),
+          for (var i = 0; i < leadingBlanks + 4; i++) const DataCell(Text('')),
         ],
       );
     }
@@ -581,14 +658,8 @@ class _DocumentTable extends StatelessWidget {
     return DataRow(
       color: WidgetStatePropertyAll(Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.04)),
       cells: [
-        const DataCell(Text('Total', style: style)),
-        const DataCell(Text('')),
-        const DataCell(Text('')),
-        const DataCell(Text('')),
-        const DataCell(Text('')),
-        const DataCell(Text('')),
-        const DataCell(Text('')),
-        const DataCell(Text('')),
+        DataCell(Text('Total', style: style)),
+        for (var i = 0; i < leadingBlanks; i++) const DataCell(Text('')),
         DataCell(Text(formatQuantity(current.quantity), style: style)),
         DataCell(Text(formatRand(current.value, precise: true), style: style)),
         DataCell(Text(formatRand(current.profit, precise: true), style: style.copyWith(color: gpColor))),
@@ -612,11 +683,7 @@ class _DocumentTable extends StatelessWidget {
         DataColumn(label: const Text('Doc'), onSort: onSort),
         DataColumn(label: const Text('Type'), onSort: onSort),
         DataColumn(label: const Text('Date'), onSort: onSort),
-        DataColumn(label: const Text('Sales Person'), onSort: onSort),
-        DataColumn(label: const Text('Branch'), onSort: onSort),
-        DataColumn(label: const Text('Category'), onSort: onSort),
-        DataColumn(label: const Text('Item'), onSort: onSort),
-        DataColumn(label: const Text('Customer'), onSort: onSort),
+        for (final d in dimensions) DataColumn(label: Text(d.displayLabel), onSort: onSort),
         DataColumn(label: const Text('Qty'), numeric: true, onSort: onSort),
         DataColumn(label: const Text('Revenue'), numeric: true, onSort: onSort),
         DataColumn(label: const Text('GP'), numeric: true, onSort: onSort),
@@ -630,11 +697,7 @@ class _DocumentTable extends StatelessWidget {
             DataCell(Text(doc.document)),
             DataCell(Text(doc.documentKind)),
             DataCell(Text(dateFormat.format(doc.docDate))),
-            DataCell(Text(doc.resolvedRepName ?? doc.resolvedRepCode ?? '—')),
-            DataCell(Text(doc.branchDisplayCode ?? doc.branchCode ?? '—')),
-            DataCell(Text(doc.categoryName ?? doc.departmentCode ?? '—')),
-            DataCell(Text(doc.itemName ?? doc.itemCode)),
-            DataCell(Text(doc.customerName ?? doc.accountCode)),
+            for (final d in dimensions) DataCell(Text(doc.displayFor(d, namesByDimension[d.dimensionKey] ?? const {}))),
             DataCell(Text(formatQuantity(doc.quantity))),
             DataCell(Text(formatRand(doc.value, precise: true))),
             DataCell(Text(formatRand(doc.profit, precise: true), style: TextStyle(color: gpColor))),

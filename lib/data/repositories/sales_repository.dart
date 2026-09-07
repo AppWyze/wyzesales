@@ -71,11 +71,7 @@ class SalesRepository {
     int? fiscalYear,
     String? fiscalMonth,
     List<String>? fiscalQuarterMonths,
-    String? categoryCode,
-    String? itemCode,
-    String? repCode,
-    String? branchCode,
-    String? customerCode,
+    Map<String, String> filters = const {},
     String? document,
     String sortColumn = 'doc_date',
     bool sortAscending = false,
@@ -87,11 +83,7 @@ class SalesRepository {
       fiscalYear: fiscalYear,
       fiscalMonth: fiscalMonth,
       fiscalQuarterMonths: fiscalQuarterMonths,
-      categoryCode: categoryCode,
-      itemCode: itemCode,
-      repCode: repCode,
-      branchCode: branchCode,
-      customerCode: customerCode,
+      filters: filters,
       document: document,
     )..addAll({
         'p_sort_column': sortColumn,
@@ -117,11 +109,7 @@ class SalesRepository {
     int? fiscalYear,
     String? fiscalMonth,
     List<String>? fiscalQuarterMonths,
-    String? categoryCode,
-    String? itemCode,
-    String? repCode,
-    String? branchCode,
-    String? customerCode,
+    Map<String, String> filters = const {},
     String? document,
   }) async {
     final params = _salesDocumentsFilterParams(
@@ -129,11 +117,7 @@ class SalesRepository {
       fiscalYear: fiscalYear,
       fiscalMonth: fiscalMonth,
       fiscalQuarterMonths: fiscalQuarterMonths,
-      categoryCode: categoryCode,
-      itemCode: itemCode,
-      repCode: repCode,
-      branchCode: branchCode,
-      customerCode: customerCode,
+      filters: filters,
       document: document,
     );
     final rows = await supabase.rpc('fn_sales_documents_totals', params: params);
@@ -150,26 +134,33 @@ class SalesRepository {
   /// necessary for anything this cleanup needed.
 
   /// Shared param map for both `fn_sales_documents_page` and
-  /// `fn_sales_documents_totals` (schema/012) — the two functions take
-  /// identical filter parameters (page adds only p_limit/p_offset on top),
-  /// so this is the one place that maps GlobalFilters' field names to their
-  /// `p_*` RPC parameter names. `fiscalMonth` is passed through as-is now
-  /// (matched via schema/002's `fiscal_month_label(doc_date)` inside the SQL
-  /// function itself) rather than converted to a calendar doc_date range in
-  /// Dart the way the old plain-view query needed to — that conversion
-  /// existed only because v_sales_documents has no fiscal_month column of
-  /// its own; the new SQL functions can call the same helper function
-  /// v_sales_cube_monthly (schema/011) already uses for exactly this.
+  /// `fn_sales_documents_totals` (schema/012, generalized by migration 050)
+  /// — the two functions take identical filter parameters (page adds only
+  /// p_limit/p_offset/p_sort_* on top), so this is the one place that maps
+  /// GlobalFilters' field names to their `p_*` RPC parameter names.
+  /// `fiscalMonth` is passed through as-is now (matched via schema/002's
+  /// `fiscal_month_label(doc_date)` inside the SQL function itself) rather
+  /// than converted to a calendar doc_date range in Dart the way the old
+  /// plain-view query needed to — that conversion existed only because
+  /// v_sales_documents has no fiscal_month column of its own; the new SQL
+  /// functions can call the same helper function v_sales_cube_monthly
+  /// (schema/011) already uses for exactly this.
+  ///
+  /// 2026-09-07 (migration 050): the five named p_category/p_item/p_rep/
+  /// p_branch/p_customer parameters collapsed into one `filters` map, keyed
+  /// by dimension_key — the exact same shape GlobalFilters.toFilterParams()
+  /// already produces for every other generalized RPC (fn_dimension_
+  /// monthly_sales_filtered etc., migration 042/047), so callers just pass
+  /// `filters.toFilterParams()` straight through instead of pulling five
+  /// individual dimensions out by hand. This is what lets Document Analysis
+  /// (Sales/Quote/Sales Order Analysis) filter by ANY of a client's own
+  /// configured dimensions, not just WCSA's fixed five.
   Map<String, dynamic> _salesDocumentsFilterParams({
     required List<String> documentKinds,
     int? fiscalYear,
     String? fiscalMonth,
     List<String>? fiscalQuarterMonths,
-    String? categoryCode,
-    String? itemCode,
-    String? repCode,
-    String? branchCode,
-    String? customerCode,
+    Map<String, String> filters = const {},
     String? document,
   }) {
     return {
@@ -177,11 +168,7 @@ class SalesRepository {
       'p_fiscal_year': fiscalYear,
       'p_fiscal_month': fiscalMonth,
       'p_fiscal_quarter_months': fiscalQuarterMonths,
-      'p_category': categoryCode,
-      'p_item': itemCode,
-      'p_rep': repCode,
-      'p_branch': branchCode,
-      'p_customer': customerCode,
+      'p_filters': filters,
       'p_document': (document == null || document.isEmpty) ? null : document,
     };
   }
