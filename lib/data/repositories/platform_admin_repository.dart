@@ -79,6 +79,24 @@ class PlatformAdminRepository {
     return Client.fromMap(row);
   }
 
+  /// This client's own configured fiscal year start month
+  /// (fiscal_year_settings.start_month, Settings > Company on THAT client's
+  /// side) — 2026-09-07, Craig: "align a client's license with their fiscal
+  /// year." Needs schema/048's `is_platform_admin()` addition to
+  /// `fiscal_year_settings_select`: before that migration this table's RLS
+  /// only ever allowed "your own client's row" (no admin bypass, unlike
+  /// `client_dimensions_select`), so a platform admin reading an ARBITRARY
+  /// other client's row here — exactly what this method does — got nothing
+  /// back at all. `.maybeSingle()`, not `.single()` — a client that's never
+  /// touched Settings > Company's "Fiscal year starts" field has no row here
+  /// yet at all (see `SettingsRepository.getFiscalYearStartMonth`'s own doc
+  /// comment); `?? 3` matches that same March default every other
+  /// unconfigured-client read in this app falls back to.
+  Future<int> fetchFiscalYearStartMonth(String clientId) async {
+    final row = await supabase.from('fiscal_year_settings').select('start_month').eq('client_id', clientId).maybeSingle();
+    return (row?['start_month'] as int?) ?? 3;
+  }
+
   /// Creates a new client + license + first adminuser + support login via
   /// the create-client Edge Function (needs the Admin API to create two
   /// Auth logins — can't be done from the client directly, see that

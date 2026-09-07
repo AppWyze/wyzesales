@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/app_providers.dart';
+import '../../../core/constants/fiscal.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/client_dimension_config.dart';
@@ -686,10 +687,22 @@ class _LicensesTab extends ConsumerStatefulWidget {
 class _LicensesTabState extends ConsumerState<_LicensesTab> {
   late Future<List<Map<String, dynamic>>> _future;
 
+  // 2026-09-07, Craig: "These two screens need a horizontal scroll bar" —
+  // see _DimensionsTabState's own `_tableScrollController` doc comment for
+  // why an explicit controller (not a bare SingleChildScrollView) is what's
+  // needed here.
+  final _tableScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _tableScrollController.dispose();
+    super.dispose();
   }
 
   void _reload() {
@@ -717,43 +730,52 @@ class _LicensesTabState extends ConsumerState<_LicensesTab> {
               return Center(child: Text('Error: ${snapshot.error}'));
             }
             final clients = snapshot.data ?? const [];
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: 660,
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: isDark ? AppColors.navyMid : const Color(0xFFF8FAFC),
-                        border: Border(
-                          bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000)),
+            // Scrollbar(thumbVisibility: true), not a bare
+            // SingleChildScrollView — see `_tableScrollController`'s own doc
+            // comment.
+            return Scrollbar(
+              controller: _tableScrollController,
+              thumbVisibility: true,
+              trackVisibility: true,
+              child: SingleChildScrollView(
+                controller: _tableScrollController,
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: 660,
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isDark ? AppColors.navyMid : const Color(0xFFF8FAFC),
+                          border: Border(
+                            bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000)),
+                          ),
+                        ),
+                        child: const Row(
+                          children: [
+                            Expanded(child: _HeaderCell('Client')),
+                            SizedBox(width: 70, child: _HeaderCell('Users')),
+                            SizedBox(width: 80, child: _HeaderCell('Discount')),
+                            SizedBox(width: 110, child: _HeaderCell('Annual price')),
+                            SizedBox(width: 100, child: _HeaderCell('Expiry')),
+                            SizedBox(width: 90, child: _HeaderCell('Status')),
+                            SizedBox(width: 40, child: _HeaderCell('')),
+                          ],
                         ),
                       ),
-                      child: const Row(
-                        children: [
-                          Expanded(child: _HeaderCell('Client')),
-                          SizedBox(width: 70, child: _HeaderCell('Users')),
-                          SizedBox(width: 80, child: _HeaderCell('Discount')),
-                          SizedBox(width: 110, child: _HeaderCell('Annual price')),
-                          SizedBox(width: 100, child: _HeaderCell('Expiry')),
-                          SizedBox(width: 90, child: _HeaderCell('Status')),
-                          SizedBox(width: 40, child: _HeaderCell('')),
-                        ],
-                      ),
-                    ),
-                    for (final c in clients)
-                      if ((c['license'] as List?)?.firstOrNull != null)
-                        _LicenseRow(
-                          clientName: c['name'] as String? ?? '',
-                          license: (c['license'] as List).first as Map<String, dynamic>,
-                          isDark: isDark,
-                          onSaved: () {
-                            if (mounted) setState(_reload);
-                          },
-                        ),
-                  ],
+                      for (final c in clients)
+                        if ((c['license'] as List?)?.firstOrNull != null)
+                          _LicenseRow(
+                            clientName: c['name'] as String? ?? '',
+                            license: (c['license'] as List).first as Map<String, dynamic>,
+                            isDark: isDark,
+                            onSaved: () {
+                              if (mounted) setState(_reload);
+                            },
+                          ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -825,10 +847,16 @@ class _LicenseRow extends StatelessWidget {
     return TextStyle(fontSize: 11, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary);
   }
 
-  String _formatDate(DateTime date) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${date.day} ${months[date.month - 1]} ${date.year}';
-  }
+  String _formatDate(DateTime date) => _formatLicenseDate(date);
+}
+
+/// Promoted out of `_LicenseRow` (2026-09-07) so `_EditLicenseDialog`'s own
+/// "License period" display — added for Craig's "align a client's license
+/// with their fiscal year" request — can use the exact same date formatting
+/// this table already shows, rather than a second, possibly-drifting copy.
+String _formatLicenseDate(DateTime date) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${date.day} ${months[date.month - 1]} ${date.year}';
 }
 
 class _EditLicenseDialog extends ConsumerStatefulWidget {
@@ -849,12 +877,57 @@ class _EditLicenseDialogState extends ConsumerState<_EditLicenseDialog> {
   bool _saving = false;
   String? _error;
 
+  // "Align to fiscal year" (2026-09-07, Craig: "align a client's license
+  // with their fiscal year. License starts on the 1st day of their fiscal
+  // year and expires on the last day of their fiscal year") — this dialog
+  // never showed or edited start_date/end_date before today; both existed
+  // only as `create-client`'s own "today -> today + 1 year" default, which
+  // is what put WCSA/Edgetec's real expiry dates at arbitrary points in the
+  // calendar (25 Aug / 2 Sep) instead of their fiscal year boundary. Kept as
+  // plain fields the admin can only move via the button below — no raw date
+  // picker, since a license period isn't meant to be an arbitrary range,
+  // only ever "aligned to this client's current fiscal year" or left as
+  // whatever it already was.
+  late DateTime _startDate;
+  late DateTime _endDate;
+
+  /// This license's client's own fiscal_year_settings.start_month — null
+  /// while still loading (see `_loadFiscalStartMonth`). Needed because this
+  /// screen manages an ARBITRARY other client, not the signed-in platform
+  /// admin's own — schema/048 is what makes this fetch return anything at
+  /// all instead of an RLS-blocked empty row (see
+  /// `PlatformAdminRepository.fetchFiscalYearStartMonth`'s own doc comment).
+  int? _fiscalStartMonth;
+
   @override
   void initState() {
     super.initState();
     _maxUsersController = TextEditingController(text: '${widget.license['max_users']}');
     _discountController = TextEditingController(text: '${widget.license['discount_percent'] ?? 0}');
     _status = widget.license['status'] as String? ?? 'active';
+    _startDate = DateTime.parse(widget.license['start_date'] as String);
+    _endDate = DateTime.parse(widget.license['end_date'] as String);
+    _loadFiscalStartMonth();
+  }
+
+  Future<void> _loadFiscalStartMonth() async {
+    final clientId = widget.license['client_id'] as String?;
+    if (clientId == null) return;
+    final startMonth = await ref.read(platformAdminRepositoryProvider).fetchFiscalYearStartMonth(clientId);
+    if (mounted) setState(() => _fiscalStartMonth = startMonth);
+  }
+
+  /// Moves `_startDate`/`_endDate` to the first and last day of the fiscal
+  /// year `DateTime.now()` currently falls in, for this license's client's
+  /// own start month — does NOT save by itself; the admin still has to hit
+  /// Save, same as every other field in this dialog.
+  void _alignToFiscalYear() {
+    final startMonth = _fiscalStartMonth ?? 3;
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
+    setState(() {
+      _startDate = fiscalYearStart(currentFy, startMonth: startMonth);
+      _endDate = fiscalYearEnd(currentFy, startMonth: startMonth);
+    });
   }
 
   @override
@@ -863,6 +936,9 @@ class _EditLicenseDialogState extends ConsumerState<_EditLicenseDialog> {
     _discountController.dispose();
     super.dispose();
   }
+
+  String _isoDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _save() async {
     setState(() {
@@ -876,6 +952,8 @@ class _EditLicenseDialogState extends ConsumerState<_EditLicenseDialog> {
         'max_users': maxUsers,
         'discount_percent': discountPercent,
         'status': _status,
+        'start_date': _isoDate(_startDate),
+        'end_date': _isoDate(_endDate),
       };
       // Recalculate annual_price on every save (Craig, 2026-08-28: "Licenses:
       // Annual price needs to be recalculated on SAVE") — this dialog never
@@ -939,6 +1017,8 @@ class _EditLicenseDialogState extends ConsumerState<_EditLicenseDialog> {
                       ],
                     ),
                     const SizedBox(height: 10),
+                    _licensePeriodSection(isDark),
+                    const SizedBox(height: 10),
                     _statusDropdown(isDark),
                     if (_error != null) ...[
                       const SizedBox(height: 12),
@@ -985,6 +1065,44 @@ class _EditLicenseDialogState extends ConsumerState<_EditLicenseDialog> {
             DropdownMenuItem(value: 'suspended', child: Text('Suspended')),
           ],
           onChanged: (v) => setState(() => _status = v ?? 'active'),
+        ),
+      ],
+    );
+  }
+
+  /// Shows the license's current start/end date and the "Align to fiscal
+  /// year" trigger (see `_alignToFiscalYear` above) — read-only text plus a
+  /// button, not a date picker, since this dialog never lets the admin type
+  /// an arbitrary date, only snap to this client's actual fiscal year.
+  Widget _licensePeriodSection(bool isDark) {
+    final labelStyle = TextStyle(
+      fontSize: 11,
+      color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+    );
+    final valueStyle = TextStyle(fontSize: 13, color: isDark ? AppColors.darkText : AppColors.lightText);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('License period', style: labelStyle),
+        const SizedBox(height: 4),
+        Text('${_formatLicenseDate(_startDate)} – ${_formatLicenseDate(_endDate)}', style: valueStyle),
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _fiscalStartMonth == null ? null : _alignToFiscalYear,
+            icon: const Icon(Icons.event_repeat, size: 16),
+            label: Text(
+              _fiscalStartMonth == null
+                  ? 'Loading fiscal year…'
+                  : 'Align to fiscal year (starts ${fiscalStartMonthName(_fiscalStartMonth!)})',
+            ),
+            style: TextButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: const Size(0, 28),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
         ),
       ],
     );
@@ -1317,6 +1435,19 @@ class _DimensionsTabState extends ConsumerState<_DimensionsTab> {
   String? _selectedClientId;
   Future<List<ClientDimensionConfig>>? _dimensionsFuture;
 
+  // 2026-09-07, Craig: "These two screens need a horizontal scroll bar" —
+  // the Dimensions table (this tab) is a fixed 1070px row wrapped in a
+  // horizontal SingleChildScrollView with no controller of its own, so it
+  // fell back to Scrollbar's default PrimaryScrollController behavior,
+  // which doesn't reliably attach to a horizontal scroll view nested inside
+  // this tab's own vertical SingleChildScrollView — the content was
+  // scrollable in principle (drag-to-scroll still worked) but nothing on
+  // screen told a user that, so anything past the visible width just
+  // looked cut off. An explicit controller, shared between the Scrollbar
+  // and the SingleChildScrollView it wraps, is what makes the thumb
+  // actually track that specific scroll view.
+  final _tableScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -1325,6 +1456,12 @@ class _DimensionsTabState extends ConsumerState<_DimensionsTab> {
     // list already wired up in this repository, and platform admins are few
     // enough visits that a second, leaner query isn't worth adding.
     _clientsFuture = ref.read(platformAdminRepositoryProvider).fetchClientsWithLicense();
+  }
+
+  @override
+  void dispose() {
+    _tableScrollController.dispose();
+    super.dispose();
   }
 
   void _selectClient(String id) {
@@ -1452,38 +1589,50 @@ class _DimensionsTabState extends ConsumerState<_DimensionsTab> {
             child: Center(child: Text('No dimensions configured for this client yet.')),
           );
         }
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: 1070,
-            child: Column(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isDark ? AppColors.navyMid : const Color(0xFFF8FAFC),
-                    border: Border(bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000))),
+        // Scrollbar(thumbVisibility: true), not a bare SingleChildScrollView
+        // — see `_tableScrollController`'s own doc comment. `trackVisibility:
+        // true` too, so the scroll track itself (not just the thumb) is a
+        // visible affordance that there's more to the right, matching what
+        // Craig actually asked for ("need a horizontal scroll bar") rather
+        // than a thumb that only shows once already scrolling.
+        return Scrollbar(
+          controller: _tableScrollController,
+          thumbVisibility: true,
+          trackVisibility: true,
+          child: SingleChildScrollView(
+            controller: _tableScrollController,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: 1070,
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isDark ? AppColors.navyMid : const Color(0xFFF8FAFC),
+                      border: Border(bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000))),
+                    ),
+                    child: const Row(
+                      children: [
+                        SizedBox(width: 50, child: _HeaderCell('Order')),
+                        Expanded(child: _HeaderCell('Dimension')),
+                        SizedBox(width: 140, child: _HeaderCell('Kind')),
+                        SizedBox(width: 260, child: _HeaderCell('Flags')),
+                        SizedBox(width: 170, child: _HeaderCell('Status')),
+                        SizedBox(width: 130, child: _HeaderCell('')),
+                      ],
+                    ),
                   ),
-                  child: const Row(
-                    children: [
-                      SizedBox(width: 50, child: _HeaderCell('Order')),
-                      Expanded(child: _HeaderCell('Dimension')),
-                      SizedBox(width: 140, child: _HeaderCell('Kind')),
-                      SizedBox(width: 260, child: _HeaderCell('Flags')),
-                      SizedBox(width: 170, child: _HeaderCell('Status')),
-                      SizedBox(width: 130, child: _HeaderCell('')),
-                    ],
-                  ),
-                ),
-                for (final d in dimensions)
-                  _DimensionRow(
-                    dimension: d,
-                    otherDimensions: dimensions.where((o) => o.dimensionKey != d.dimensionKey).toList(),
-                    clientId: _selectedClientId!,
-                    isDark: isDark,
-                    onChanged: _reloadDimensions,
-                  ),
-              ],
+                  for (final d in dimensions)
+                    _DimensionRow(
+                      dimension: d,
+                      otherDimensions: dimensions.where((o) => o.dimensionKey != d.dimensionKey).toList(),
+                      clientId: _selectedClientId!,
+                      isDark: isDark,
+                      onChanged: _reloadDimensions,
+                    ),
+                ],
+              ),
             ),
           ),
         );

@@ -35,6 +35,46 @@ function slugifyCode(code: string): string {
   return slug || 'client'
 }
 
+// Fiscal-year-aligned license period (2026-09-07, Craig: "align a client's
+// license with their fiscal year. License starts on the 1st day of their
+// fiscal year and expires on the last day of their fiscal year") — a brand
+// new client has no fiscal_year_settings row yet at creation time (that's
+// only ever written from Settings > Company, after the client already
+// exists), so this always uses FISCAL_START_MONTH = 3 (March), the same
+// fallback `SettingsRepository.getFiscalYearStartMonth()` and
+// `PlatformAdminRepository.fetchFiscalYearStartMonth()` both use client-side
+// for a client that's never touched that setting. If the client's admin
+// later sets a different fiscal year start month, the existing license
+// period is NOT retroactively moved — same as any other existing license —
+// but Platform Admin > Licenses > Edit now has an "Align to fiscal year"
+// button (lib/features/admin/screens/platform_admin_screen.dart,
+// `_EditLicenseDialogState._alignToFiscalYear`) that can fix it using the
+// client's actual setting.
+//
+// Deliberately reimplemented here rather than shared with
+// lib/core/constants/fiscal.dart — this is a separate Deno runtime with no
+// access to the Flutter package's Dart source. Kept in exact lockstep with
+// that file's `fiscalYearFor`/`fiscalYearStart`/`fiscalYearEnd` (including
+// the same January-start special case, irrelevant at FISCAL_START_MONTH = 3
+// but kept for parity/future-proofing) — verify by hand against that file if
+// either ever changes.
+const FISCAL_START_MONTH = 3 // March, matches the app-wide fallback
+
+function fiscalYearFor(date: Date, startMonth: number): number {
+  if (startMonth === 1) return date.getUTCFullYear()
+  return date.getUTCMonth() + 1 >= startMonth ? date.getUTCFullYear() + 1 : date.getUTCFullYear()
+}
+
+function fiscalYearStartDate(fiscalYear: number, startMonth: number): Date {
+  const calendarYear = startMonth === 1 ? fiscalYear : fiscalYear - 1
+  return new Date(Date.UTC(calendarYear, startMonth - 1, 1))
+}
+
+function fiscalYearEndDate(fiscalYear: number, startMonth: number): Date {
+  const nextStart = fiscalYearStartDate(fiscalYear + 1, startMonth)
+  return new Date(nextStart.getTime() - 24 * 60 * 60 * 1000)
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -106,8 +146,9 @@ Deno.serve(async (req) => {
     const additionalUsers = Math.max(0, seats - plan.base_users)
     const discount = discountPercent ?? 0
     const monthlyTotal = (plan.base_price + additionalUsers * plan.price_per_additional_user) * (1 - discount / 100)
-    const startDate = new Date().toISOString().substring(0, 10)
-    const endDate = new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().substring(0, 10)
+    const currentFiscalYear = fiscalYearFor(new Date(), FISCAL_START_MONTH)
+    const startDate = fiscalYearStartDate(currentFiscalYear, FISCAL_START_MONTH).toISOString().substring(0, 10)
+    const endDate = fiscalYearEndDate(currentFiscalYear, FISCAL_START_MONTH).toISOString().substring(0, 10)
 
     const { error: licenseError } = await supabase
       .from('license')

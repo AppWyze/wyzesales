@@ -174,6 +174,36 @@ List<String> fiscalMonthsInQuarter(String quarterLabel, {int startMonth = 3}) {
   return months.sublist(index * 3, index * 3 + 3);
 }
 
+/// The calendar date the fiscal year labelled `fiscalYear` STARTS on, for a
+/// client whose fiscal year begins in calendar month `startMonth` — e.g.
+/// startMonth=3, fiscalYear=2026 -> 2025-03-01 (FY2026 runs Mar 2025 -> Feb
+/// 2026 under a March start, matching `fiscalYearFor`'s own labelling);
+/// startMonth=1, fiscalYear=2026 -> 2026-01-01 (a Jan-start fiscal year is
+/// just the calendar year — the same startMonth==1 special case
+/// `fiscalYearFor` already carries, kept consistent with it here rather than
+/// reusing `calendarMonthStartFor`, which was never updated for that
+/// 2026-09-02 fix and still gets Jan-start one calendar year off — see that
+/// function's own history in `fiscalYearFor`'s doc comment. Harmless there
+/// today (no client has ever configured startMonth=1), but not something
+/// worth inheriting into new code).
+///
+/// 2026-09-07, Craig: "align a client's license with their fiscal year.
+/// License starts on the 1st day of their fiscal year and expires on the
+/// last day of their fiscal year" — added for Platform Admin's Licenses tab
+/// ("Align to fiscal year" on `_EditLicenseDialog`) and the create-client
+/// Edge Function's own mirrored TypeScript version.
+DateTime fiscalYearStart(int fiscalYear, {int startMonth = 3}) {
+  final calendarYear = startMonth == 1 ? fiscalYear : fiscalYear - 1;
+  return DateTime(calendarYear, startMonth, 1);
+}
+
+/// The last calendar date fiscal year `fiscalYear` covers — one day before
+/// the NEXT fiscal year starts (`fiscalYearStart` above). e.g. startMonth=3,
+/// fiscalYear=2026 -> 2026-02-28 (or -29 in a leap year).
+DateTime fiscalYearEnd(int fiscalYear, {int startMonth = 3}) {
+  return fiscalYearStart(fiscalYear + 1, startMonth: startMonth).subtract(const Duration(days: 1));
+}
+
 /// The client's configured trailing fiscal-year window, oldest year first —
 /// e.g. currentFy=2027, historyYears=3 -> [2025, 2026, 2027]. Replaces the
 /// hardcoded `[currentFy - 2, currentFy - 1, currentFy]` literal every
