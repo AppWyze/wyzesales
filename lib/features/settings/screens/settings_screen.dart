@@ -1317,6 +1317,149 @@ class _UserRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final nameEmail = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Flexible(
+              child: Text(
+                user.name,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: isDark ? AppColors.darkText : AppColors.lightText,
+                ),
+              ),
+            ),
+            if (user.isPlatformAdmin) ...[
+              const SizedBox(width: 8),
+              const _Badge(label: 'Support', color: AppColors.accentPurple),
+            ],
+            if (!user.isActive) ...[
+              const SizedBox(width: 8),
+              _Badge(label: 'Inactive', color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+            ],
+          ],
+        ),
+        Text(
+          user.email,
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+          style: TextStyle(
+            fontSize: 11,
+            color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+          ),
+        ),
+      ],
+    );
+
+    final statusIndicator = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _levelBadge(user.level),
+        const SizedBox(width: 10),
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            color: user.isActive ? AppColors.positive : AppColors.lightTextSecondary,
+            shape: BoxShape.circle,
+          ),
+        ),
+      ],
+    );
+
+    final actionButtons = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Edit is available on every row, including a platform-admin/
+        // "Support" account — matching SeaWyze, whose own _EditUserDialog
+        // isn't row-gated at all (Craig, 2026-08-28, chose this over
+        // leaving Edit hidden here too, once told SeaWyze only excludes
+        // Delete for a support row, not Edit). Pause/resume and Delete
+        // stay gated below: a support login needs to keep working, so
+        // deactivating or removing it isn't offered from this screen.
+        Tooltip(
+          message: 'Edit ${user.name}',
+          child: _outlineBtn(
+            Icons.edit_outlined,
+            '',
+            isDark,
+            () async {
+              await showDialog<bool>(context: context, builder: (_) => _EditUserDialog(user: user, isDark: isDark));
+              onChanged();
+            },
+          ),
+        ),
+        if (!user.isPlatformAdmin) ...[
+          // "Send password reset" — 2026-08-31, the other half of the gap
+          // flagged alongside the export buttons: "admin can't reset a
+          // user's password either." Deliberately just re-sends the same
+          // self-service reset email a user's own "Forgot password?" link
+          // would (AuthRepository.sendPasswordResetEmail's own doc comment
+          // explains why this doesn't set a password directly) — an admin
+          // saves a user the trouble of finding that link themselves, but
+          // never gets to see or choose their password. Hidden for a
+          // platform-admin/Support row for the same reason pause/resume
+          // and Delete already are: that login isn't this client's to
+          // manage.
+          const SizedBox(width: 6),
+          Tooltip(
+            message: 'Send password reset email',
+            child: _outlineBtn(Icons.lock_reset, '', isDark, () => _sendPasswordReset(context, ref)),
+          ),
+          const SizedBox(width: 6),
+          Tooltip(
+            message: user.isActive ? 'Deactivate ${user.name}' : 'Reactivate ${user.name}',
+            child: _outlineBtn(
+              user.isActive ? Icons.pause_circle_outline : Icons.play_circle_outline,
+              '',
+              isDark,
+              () async {
+                final repo = ref.read(settingsRepositoryProvider);
+                if (user.isActive) {
+                  await repo.deactivateUser(user.id);
+                } else {
+                  await repo.reactivateUser(user.id);
+                }
+                onChanged();
+              },
+            ),
+          ),
+          if (!isMe) ...[
+            const SizedBox(width: 6),
+            // Same accessibility fix as the two buttons above (Decisions
+            // doc Section 86) — a bare GestureDetector, unreachable by
+            // keyboard; Material+InkWell plus a Tooltip (doubling as this
+            // icon-only button's screen-reader label) fixes it.
+            Tooltip(
+              message: 'Delete ${user.name}',
+              child: Material(
+                color: AppColors.negative.withValues(alpha: 0.08),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  side: BorderSide(color: AppColors.negative.withValues(alpha: 0.2)),
+                ),
+                child: InkWell(
+                  onTap: () => _confirmDelete(context, ref),
+                  borderRadius: BorderRadius.circular(6),
+                  child: const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: Icon(Icons.delete_outline, size: 14, color: AppColors.negative),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
@@ -1324,143 +1467,56 @@ class _UserRow extends ConsumerWidget {
           bottom: BorderSide(color: isDark ? const Color(0x0AFFFFFF) : const Color(0x0A000000)),
         ),
       ),
-      child: Row(
-        children: [
-          _avatar(_initialsFor(user.name), user.level, isDark),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
+      // LayoutBuilder, not a bare Row — 2026-09-07 (Craig: "optimised for
+      // Mobile, Tablet and Desktop"): worked through the actual paddings on
+      // this row (20 SingleChildScrollView + 16 card + 16 here, per side),
+      // the avatar/level-badge/status-dot/up-to-4-icon-buttons in the old
+      // single Row already totaled roughly 250px on their own — on a
+      // 360-400px phone that left almost nothing for the Expanded name/
+      // email column, crushing it to a sliver of illegible text and, on
+      // some devices/text-scale settings, tripping a real RenderFlex
+      // overflow that clipped the trailing action buttons (Edit/Reset
+      // password/Pause/Delete) off the edge of the card entirely — exactly
+      // the "functions cut off" symptom Craig described. Below the
+      // breakpoint, name/email get the full row to themselves and the
+      // level/status/action-button groups move to their own row
+      // underneath in a Wrap, so they reflow instead of overflowing even
+      // if it's ever tight there too.
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 460) {
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    Flexible(
-                      child: Text(
-                        user.name,
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: isDark ? AppColors.darkText : AppColors.lightText,
-                        ),
-                      ),
-                    ),
-                    if (user.isPlatformAdmin) ...[
-                      const SizedBox(width: 8),
-                      const _Badge(label: 'Support', color: AppColors.accentPurple),
-                    ],
-                    if (!user.isActive) ...[
-                      const SizedBox(width: 8),
-                      _Badge(label: 'Inactive', color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
-                    ],
+                    _avatar(_initialsFor(user.name), user.level, isDark),
+                    const SizedBox(width: 12),
+                    Expanded(child: nameEmail),
                   ],
                 ),
-                Text(
-                  user.email,
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                  ),
+                const SizedBox(height: 8),
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [statusIndicator, actionButtons],
                 ),
               ],
-            ),
-          ),
-          _levelBadge(user.level),
-          const SizedBox(width: 10),
-          Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(
-              color: user.isActive ? AppColors.positive : AppColors.lightTextSecondary,
-              shape: BoxShape.circle,
-            ),
-          ),
-          // Edit is available on every row, including a platform-admin/
-          // "Support" account — matching SeaWyze, whose own _EditUserDialog
-          // isn't row-gated at all (Craig, 2026-08-28, chose this over
-          // leaving Edit hidden here too, once told SeaWyze only excludes
-          // Delete for a support row, not Edit). Pause/resume and Delete
-          // stay gated below: a support login needs to keep working, so
-          // deactivating or removing it isn't offered from this screen.
-          const SizedBox(width: 10),
-          Tooltip(
-            message: 'Edit ${user.name}',
-            child: _outlineBtn(
-              Icons.edit_outlined,
-              '',
-              isDark,
-              () async {
-                await showDialog<bool>(context: context, builder: (_) => _EditUserDialog(user: user, isDark: isDark));
-                onChanged();
-              },
-            ),
-          ),
-          if (!user.isPlatformAdmin) ...[
-            // "Send password reset" — 2026-08-31, the other half of the gap
-            // flagged alongside the export buttons: "admin can't reset a
-            // user's password either." Deliberately just re-sends the same
-            // self-service reset email a user's own "Forgot password?" link
-            // would (AuthRepository.sendPasswordResetEmail's own doc comment
-            // explains why this doesn't set a password directly) — an admin
-            // saves a user the trouble of finding that link themselves, but
-            // never gets to see or choose their password. Hidden for a
-            // platform-admin/Support row for the same reason pause/resume
-            // and Delete already are: that login isn't this client's to
-            // manage.
-            const SizedBox(width: 6),
-            Tooltip(
-              message: 'Send password reset email',
-              child: _outlineBtn(Icons.lock_reset, '', isDark, () => _sendPasswordReset(context, ref)),
-            ),
-            const SizedBox(width: 6),
-            Tooltip(
-              message: user.isActive ? 'Deactivate ${user.name}' : 'Reactivate ${user.name}',
-              child: _outlineBtn(
-                user.isActive ? Icons.pause_circle_outline : Icons.play_circle_outline,
-                '',
-                isDark,
-                () async {
-                  final repo = ref.read(settingsRepositoryProvider);
-                  if (user.isActive) {
-                    await repo.deactivateUser(user.id);
-                  } else {
-                    await repo.reactivateUser(user.id);
-                  }
-                  onChanged();
-                },
-              ),
-            ),
-            if (!isMe) ...[
-              const SizedBox(width: 6),
-              // Same accessibility fix as the two buttons above (Decisions
-              // doc Section 86) — a bare GestureDetector, unreachable by
-              // keyboard; Material+InkWell plus a Tooltip (doubling as this
-              // icon-only button's screen-reader label) fixes it.
-              Tooltip(
-                message: 'Delete ${user.name}',
-                child: Material(
-                  color: AppColors.negative.withValues(alpha: 0.08),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    side: BorderSide(color: AppColors.negative.withValues(alpha: 0.2)),
-                  ),
-                  child: InkWell(
-                    onTap: () => _confirmDelete(context, ref),
-                    borderRadius: BorderRadius.circular(6),
-                    child: const SizedBox(
-                      width: 28,
-                      height: 28,
-                      child: Icon(Icons.delete_outline, size: 14, color: AppColors.negative),
-                    ),
-                  ),
-                ),
-              ),
+            );
+          }
+          return Row(
+            children: [
+              _avatar(_initialsFor(user.name), user.level, isDark),
+              const SizedBox(width: 12),
+              Expanded(child: nameEmail),
+              statusIndicator,
+              const SizedBox(width: 10),
+              actionButtons,
             ],
-          ],
-        ],
+          );
+        },
       ),
     );
   }

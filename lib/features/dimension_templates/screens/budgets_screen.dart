@@ -334,93 +334,141 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
       );
     }
 
-    return AppShell(
-      title: 'Budgets — $dimensionLabel',
-      currentRoute: '/budgets/${widget.dimension}',
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 260,
+    // Entity picker (dimension dropdown + list) and the selected entity's
+    // month table, factored out of the Row/Column choice below — 2026-09-07
+    // (Craig: "optimised for Mobile, Tablet and Desktop"). Neither widget
+    // changed; only how they're arranged did (see the LayoutBuilder below).
+    final picker = Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: BoxedDropdown<String>(
+            value: widget.dimension,
+            width: 236,
+            items: [
+              for (final d in allowedDimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+              // Same "value must match an item" fallback as
+              // SalesByScreen/PerformanceScreen's own dimension
+              // switchers — see their doc comments.
+              if (!allowedDimensions.any((d) => d.dimensionKey == widget.dimension))
+                DropdownMenuItem(value: widget.dimension, child: Text(dimensionLabel)),
+            ],
+            onChanged: (d) {
+              if (d != null && d != widget.dimension) context.go('/budgets/$d');
+            },
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: AsyncSection<_BudgetEntityData>(
+            future: _entitiesFuture,
+            isEmpty: (d) => d.entities.isEmpty,
+            builder: (context, data) => ListView.builder(
+              itemCount: data.entities.length,
+              itemBuilder: (context, index) {
+                final entity = data.entities[index];
+                return ListTile(
+                  title: Text(entity.displayLabel, overflow: TextOverflow.ellipsis),
+                  selected: entity.code == _selectedEntityCode,
+                  onTap: () => _selectEntity(entity),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+    final detail = _selectedEntityCode == null
+        ? const Center(child: Text('Select an entity from the list.'))
+        : Padding(
+            padding: const EdgeInsets.all(16),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: BoxedDropdown<String>(
-                    value: widget.dimension,
-                    width: 236,
-                    items: [
-                      for (final d in allowedDimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
-                      // Same "value must match an item" fallback as
-                      // SalesByScreen/PerformanceScreen's own dimension
-                      // switchers — see their doc comments.
-                      if (!allowedDimensions.any((d) => d.dimensionKey == widget.dimension))
-                        DropdownMenuItem(value: widget.dimension, child: Text(dimensionLabel)),
-                    ],
-                    onChanged: (d) {
-                      if (d != null && d != widget.dimension) context.go('/budgets/$d');
-                    },
-                  ),
-                ),
-                const Divider(height: 1),
+                Text(_selectedEntityName ?? _selectedEntityCode!, style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 12),
                 Expanded(
-                  child: AsyncSection<_BudgetEntityData>(
-                    future: _entitiesFuture,
-                    isEmpty: (d) => d.entities.isEmpty,
-                    builder: (context, data) => ListView.builder(
-                      itemCount: data.entities.length,
-                      itemBuilder: (context, index) {
-                        final entity = data.entities[index];
-                        return ListTile(
-                          title: Text(entity.displayLabel, overflow: TextOverflow.ellipsis),
-                          selected: entity.code == _selectedEntityCode,
-                          onTap: () => _selectEntity(entity),
-                        );
-                      },
+                  child: AsyncSection<_BudgetMonthData>(
+                    future: _monthDataFuture!,
+                    builder: (context, data) => _MonthTable(
+                      dimension: widget.dimension,
+                      entityCode: _selectedEntityCode!,
+                      data: data,
+                      // Section 70: the screen no longer denies
+                      // access outright, so this now genuinely
+                      // varies — adminuser gets the editable
+                      // TextField cells and Save button,
+                      // User/RegUser get _MonthTable's existing
+                      // read-only Text rendering.
+                      canEdit: canEditBudgets,
+                      clientId: profile?.clientId,
                     ),
                   ),
                 ),
               ],
             ),
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: _selectedEntityCode == null
-                ? const Center(child: Text('Select an entity from the list.'))
-                : Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_selectedEntityName ?? _selectedEntityCode!, style: Theme.of(context).textTheme.titleLarge),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          child: AsyncSection<_BudgetMonthData>(
-                            future: _monthDataFuture!,
-                            builder: (context, data) => _MonthTable(
-                              dimension: widget.dimension,
-                              entityCode: _selectedEntityCode!,
-                              data: data,
-                              // Section 70: the screen no longer denies
-                              // access outright, so this now genuinely
-                              // varies — adminuser gets the editable
-                              // TextField cells and Save button,
-                              // User/RegUser get _MonthTable's existing
-                              // read-only Text rendering.
-                              canEdit: canEditBudgets,
-                              clientId: profile?.clientId,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-          ),
-        ],
+          );
+
+    return AppShell(
+      title: 'Budgets — $dimensionLabel',
+      currentRoute: '/budgets/${widget.dimension}',
+      // 2026-09-07 (Craig: "optimised for Mobile, Tablet and Desktop"): this
+      // screen used to always be a side-by-side Row with a fixed 260px
+      // entity-picker column, regardless of window width. AppShell's own
+      // nav sidebar collapses into a drawer below 900px, but that only ever
+      // covered AppShell's chrome — this screen was re-introducing its own
+      // second fixed-260px column on top of whatever width AppShell handed
+      // its body, which on a ~360-400px phone left the actual budget table
+      // (the editable Sales Budget field, Seasonal Forecast, Confidence,
+      // and the Save button) squeezed into roughly 90-140px, well before
+      // ResponsiveDataTable's own horizontal-scroll fallback ever got a
+      // chance to help. Below `_stackBreakpoint`, the picker and the month
+      // table now stack instead of sitting side by side — same "same
+      // components, different structure" approach AppShell's own
+      // sidebar-to-drawer collapse already takes, just scoped to this
+      // screen's own layout instead of the app-wide nav.
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < _stackBreakpoint) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // A fixed height, not Expanded — the entity list needs to
+                // stay reachable (scrollable in its own right) without
+                // eating all the vertical space the month table below it
+                // also needs; 260 mirrors the column's old fixed WIDTH so
+                // the entity list gets a comparable amount of room either
+                // way.
+                SizedBox(height: 260, child: picker),
+                const Divider(height: 1),
+                Expanded(child: detail),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: 260, child: picker),
+              const VerticalDivider(width: 1),
+              Expanded(child: detail),
+            ],
+          );
+        },
       ),
     );
   }
 }
+
+/// Below this width, BudgetsScreen stacks its entity picker above the month
+/// table instead of placing them side by side — see the LayoutBuilder's own
+/// doc comment above. Narrower than AppShell's 900px `_sidebarBreakpoint`
+/// on purpose: by the time AppShell's nav sidebar is already gone (below
+/// 900), this screen's own 260px picker column plus the month table (which
+/// itself needs real width before ResponsiveDataTable's horizontal scroll
+/// becomes the primary way to read it, rather than the only way) can still
+/// comfortably share a tablet-width screen; it's specifically the narrower
+/// phone range this addresses.
+const double _stackBreakpoint = 700;
 
 class _MonthTable extends ConsumerStatefulWidget {
   const _MonthTable({

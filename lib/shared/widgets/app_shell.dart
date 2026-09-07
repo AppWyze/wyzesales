@@ -134,7 +134,24 @@ class _TopBar extends ConsumerWidget {
             _TopBarIconChip(icon: Icons.menu, tooltip: 'Menu', color: chipColor, onPressed: () => Scaffold.of(context).openDrawer()),
             const SizedBox(width: 8),
           ],
-          Text(title, style: textTheme.headlineSmall, overflow: TextOverflow.ellipsis),
+          // ConstrainedBox, not a bare Text — 2026-09-07 (Craig: "optimised
+          // for Mobile, Tablet and Desktop"): a direct, non-flexible Row
+          // child never actually gets a bounded width to ellipsize against
+          // (its own `overflow: ellipsis` was silently doing nothing), so on
+          // a narrow phone a real screen title ("Sales Analysis", "YTD
+          // Comparative") could overflow the Row outright once the menu
+          // chip/bell/theme-toggle's own fixed width is accounted for.
+          // Capped to 40% of the full screen width (not a Flexible sharing
+          // flex with the Expanded search field below — two equal-flex
+          // siblings would each get HALF the leftover space regardless of
+          // whether the title needs it, permanently starving the search
+          // field even when the title is short) so the title always has a
+          // hard, deterministic ceiling and the Expanded search field gets
+          // everything else.
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.4),
+            child: Text(title, style: textTheme.headlineSmall, overflow: TextOverflow.ellipsis),
+          ),
           const SizedBox(width: 16),
           // Expanded, not the title above — SeaWyze's own top bar gives the
           // search field the stretchy slot (title + date/actions/toggle
@@ -453,6 +470,15 @@ class _AlertsDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Clamped to the actual screen width, not a bare 400 — 2026-09-07
+    // (Craig: "optimised for Mobile, Tablet and Desktop"): anchoring
+    // top-right to the bell keeps the RIGHT edge on screen, but a fixed
+    // 400px dropdown still pushes its LEFT edge to `screenWidth - 400`,
+    // which is negative on any phone under ~400px wide — the alert text on
+    // the left side of every row was rendering off the edge of the
+    // viewport. 32 covers the bell's own small margin from the true screen
+    // edge on both sides.
+    final width = (MediaQuery.of(context).size.width - 32).clamp(240.0, 400.0);
     return Stack(
       children: [
         Positioned.fill(
@@ -476,7 +502,7 @@ class _AlertsDropdown extends StatelessWidget {
               elevation: 8,
               borderRadius: BorderRadius.circular(8),
               child: Container(
-                width: 400,
+                width: width,
                 constraints: const BoxConstraints(maxHeight: 420),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),

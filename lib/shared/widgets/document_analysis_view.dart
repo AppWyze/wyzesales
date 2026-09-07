@@ -471,7 +471,18 @@ class _PaginationBar extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(rangeLabel, style: Theme.of(context).textTheme.bodyMedium),
+        // Expanded, not a bare Text — 2026-09-07 (Craig: "optimised for
+        // Mobile, Tablet and Desktop"): with a 5+ digit totalCount (common
+        // once a client has real transaction history), "Showing X–Y of Z"
+        // plus the 4 page-jump IconButtons next to it (added specifically
+        // per Craig's own "first page/last page" request) could together
+        // exceed a phone's available width — the label had no way to give
+        // up space, so it was the buttons on the right that got pushed off
+        // and clipped. Now the label shrinks first and the button group
+        // (which needs to stay fully tappable) keeps its full size.
+        Expanded(
+          child: Text(rangeLabel, style: Theme.of(context).textTheme.bodyMedium, overflow: TextOverflow.ellipsis),
+        ),
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [

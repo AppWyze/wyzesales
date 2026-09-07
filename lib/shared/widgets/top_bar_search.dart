@@ -87,6 +87,11 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _layerLink = LayerLink();
+  // Attached to the search field itself so `_availableDropdownWidth` can
+  // find out where the field actually sits on screen (see that method's own
+  // doc comment) — 2026-09-07, Craig: "optimised for Mobile, Tablet and
+  // Desktop".
+  final _fieldKey = GlobalKey();
   OverlayEntry? _overlayEntry;
   Timer? _debounce;
   List<_TopBarResult> _results = [];
@@ -166,6 +171,32 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
     _updateOverlay();
   }
 
+  /// How wide the results dropdown can actually be without running off the
+  /// right edge of the screen — 2026-09-07, Craig: "optimised for Mobile,
+  /// Tablet and Desktop". The dropdown anchors its LEFT edge to this search
+  /// field's own left edge (`CompositedTransformFollower`'s default
+  /// top-left/top-left anchoring, unchanged), and on a wide desktop window
+  /// that field sits far enough from the right edge that a flat 420px
+  /// dropdown always fit — but on a phone (or a title-heavy narrow window)
+  /// the field can start most of the way across the screen, so a flat 420
+  /// pushed the dropdown's right edge past the viewport with no way back.
+  /// `localToGlobal` (a standard, safe Flutter API — nothing like the
+  /// OverflowBox/clipped-duplicate tricks that crashed ResponsiveDataTable's
+  /// own earlier attempts, see that file's doc comment) reads the field's
+  /// actual on-screen position at the moment the dropdown opens, so this
+  /// works regardless of how much space the title/menu chip/nav sidebar
+  /// happen to be taking on any given screen — no hardcoded assumption about
+  /// where the field sits. Null only if the field hasn't been laid out yet
+  /// (shouldn't happen — this is only called while focused, i.e. already
+  /// visible), in which case the dropdown falls back to its own 420 default.
+  double? _availableDropdownWidth() {
+    final box = _fieldKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    final fieldLeft = box.localToGlobal(Offset.zero).dx;
+    final screenWidth = MediaQuery.of(context).size.width;
+    return screenWidth - fieldLeft - 16;
+  }
+
   void _updateOverlay() {
     _removeOverlay();
     if (!_focusNode.hasFocus || _controller.text.trim().isEmpty) return;
@@ -174,6 +205,7 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
         layerLink: _layerLink,
         loading: _loading,
         results: _results,
+        maxWidth: _availableDropdownWidth(),
         onSelect: _selectResult,
         onDismiss: () => _focusNode.unfocus(),
       ),
@@ -218,6 +250,7 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
     return CompositedTransformTarget(
       link: _layerLink,
       child: SizedBox(
+        key: _fieldKey,
         height: 36,
         child: TextField(
           controller: _controller,
@@ -252,6 +285,7 @@ class _SearchResultsDropdown extends StatelessWidget {
     required this.layerLink,
     required this.loading,
     required this.results,
+    this.maxWidth,
     required this.onSelect,
     required this.onDismiss,
   });
@@ -259,6 +293,12 @@ class _SearchResultsDropdown extends StatelessWidget {
   final LayerLink layerLink;
   final bool loading;
   final List<_TopBarResult> results;
+
+  /// From `_availableDropdownWidth()` — how much room is actually between
+  /// the search field's left edge and the right edge of the screen. Null
+  /// falls back to the plain 420 default (see that method's own doc
+  /// comment).
+  final double? maxWidth;
   final ValueChanged<_TopBarResult> onSelect;
   final VoidCallback onDismiss;
 
@@ -285,7 +325,7 @@ class _SearchResultsDropdown extends StatelessWidget {
               elevation: 8,
               borderRadius: BorderRadius.circular(8),
               child: Container(
-                width: 420,
+                width: (maxWidth ?? 420.0).clamp(200.0, 420.0),
                 constraints: const BoxConstraints(maxHeight: 340),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),

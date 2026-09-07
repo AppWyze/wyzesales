@@ -485,35 +485,53 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // 2026-08-27: Year/Month dropdowns dropped — Craig:
-                // "Performance: drop Year, Month." Only the dimension
-                // switcher stays inline (it navigates between
-                // /performance/:dimension routes, which isn't something
-                // GlobalFilterBar's "Add filter" could do); setting Year or
-                // Month now happens through GlobalFilterBar like every other
-                // filter.
-                //
-                // 2026-09-06 (Step 4): built from this client's own
-                // configured dimension list rather than the fixed
-                // `SalesDimension.values` — see SalesByScreen's own
-                // _DimensionSwitcher doc comment for the identical reasoning.
-                BoxedDropdown<String>(
-                  value: widget.dimension,
-                  width: 160,
-                  items: [
-                    for (final d in dimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
-                    if (!dimensions.any((d) => d.dimensionKey == widget.dimension))
-                      DropdownMenuItem(value: widget.dimension, child: Text(widget.dimension)),
-                  ],
-                  onChanged: (d) {
-                    if (d != null && d != widget.dimension) context.go('/performance/$d');
-                  },
-                ),
-                DataExportButtons(onExport: _buildExportData),
-              ],
+            // Wrap, not a bare Row — 2026-09-07 (Craig: "optimised for
+            // Mobile, Tablet and Desktop"): Sales By/Sales Analysis/YTD
+            // Comparative's own near-identical headers were already patched
+            // to this same Wrap-in-SizedBox(width: double.infinity) pattern
+            // (see SalesByScreen's own header, same comment) after this
+            // exact Row shape was found to overflow sideways on a narrow
+            // window instead of dropping the export controls to a new line
+            // — Performance Analysis' header never got the same fix.
+            // SizedBox(width: double.infinity) forces the Wrap to the full
+            // row width so spaceBetween has room to push the export group to
+            // the right edge; a bare Wrap would otherwise shrink-wrap to
+            // just its two children and sit left-aligned.
+            SizedBox(
+              width: double.infinity,
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 16,
+                runSpacing: 12,
+                children: [
+                  // 2026-08-27: Year/Month dropdowns dropped — Craig:
+                  // "Performance: drop Year, Month." Only the dimension
+                  // switcher stays inline (it navigates between
+                  // /performance/:dimension routes, which isn't something
+                  // GlobalFilterBar's "Add filter" could do); setting Year or
+                  // Month now happens through GlobalFilterBar like every other
+                  // filter.
+                  //
+                  // 2026-09-06 (Step 4): built from this client's own
+                  // configured dimension list rather than the fixed
+                  // `SalesDimension.values` — see SalesByScreen's own
+                  // _DimensionSwitcher doc comment for the identical reasoning.
+                  BoxedDropdown<String>(
+                    value: widget.dimension,
+                    width: 160,
+                    items: [
+                      for (final d in dimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+                      if (!dimensions.any((d) => d.dimensionKey == widget.dimension))
+                        DropdownMenuItem(value: widget.dimension, child: Text(widget.dimension)),
+                    ],
+                    onChanged: (d) {
+                      if (d != null && d != widget.dimension) context.go('/performance/$d');
+                    },
+                  ),
+                  DataExportButtons(onExport: _buildExportData),
+                ],
+              ),
             ),
             const SizedBox(height: 16),
             Expanded(

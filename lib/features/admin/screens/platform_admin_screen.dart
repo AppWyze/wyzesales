@@ -1392,10 +1392,21 @@ class _DimensionsTabState extends ConsumerState<_DimensionsTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  // Wrap, not a bare Row — 2026-09-07 (Craig: "optimised for
+                  // Mobile, Tablet and Desktop"): the label plus a fixed
+                  // 220px dropdown had no reflow fallback, unlike every
+                  // table on this same tab. It wasn't a confirmed break at
+                  // the stated 360-400px phone range, just the one Row here
+                  // with no defensive margin — Wrap drops the dropdown to
+                  // its own line instead of squeezing or overflowing if a
+                  // narrower device, a longer client name, or a larger
+                  // system text scale ever eats into that margin.
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 10,
+                    runSpacing: 8,
                     children: [
                       _fieldLabel('Client', isDark),
-                      const SizedBox(width: 10),
                       BoxedDropdown<String>(
                         value: _selectedClientId ?? '',
                         width: 220,

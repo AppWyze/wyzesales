@@ -8,6 +8,7 @@ import '../../core/theme/app_theme.dart';
 import '../../data/models/client_dimension_config.dart';
 import '../../data/models/filter_preset.dart';
 import '../../data/models/reference_data.dart';
+import '../utils/responsive.dart';
 import 'boxed_dropdown.dart';
 import 'entity_search_field.dart';
 
@@ -355,10 +356,16 @@ class _DocumentSearchDialogState extends ConsumerState<_DocumentSearchDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      // 2026-09-07 (Craig: "optimised for Mobile, Tablet and Desktop") —
+      // same fixed-size-with-no-viewport-awareness fix as
+      // entity_search_field.dart's _EntitySearchDialog; see that file's own
+      // doc comment for why these helpers (responsive.dart) are the right
+      // ones to reach for here.
+      insetPadding: dialogInsetPadding,
       title: const Text('Filter by Document'),
       content: SizedBox(
-        width: 360,
-        height: 360,
+        width: dialogMaxWidth(context, 360),
+        height: dialogMaxHeight(context, 360),
         child: Column(
           children: [
             TextField(
@@ -508,9 +515,12 @@ class _PresetsDialogState extends ConsumerState<_PresetsDialog> {
   Widget build(BuildContext context) {
     final presetsAsync = ref.watch(filterPresetsProvider);
     return AlertDialog(
+      // 2026-09-07 (Craig: "optimised for Mobile, Tablet and Desktop") —
+      // same fix as _DocumentSearchDialog just above.
+      insetPadding: dialogInsetPadding,
       title: const Text('Saved filter presets'),
       content: SizedBox(
-        width: 360,
+        width: dialogMaxWidth(context, 360),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

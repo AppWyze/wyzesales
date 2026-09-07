@@ -36,3 +36,25 @@ double dialogMaxHeight(BuildContext context, double preferred) {
 
 /// Reduced Dialog insetPadding for mobile — pair with [dialogMaxHeight].
 const dialogInsetPadding = EdgeInsets.symmetric(horizontal: 16, vertical: 16);
+
+/// Same idea as [dialogMaxHeight], for width — 2026-09-07 (Craig: "check the
+/// entire application... optimised for Mobile, Tablet and Desktop browser").
+/// A handful of dialogs across the app (the "Add filter" entity picker, the
+/// Document/Presets filter dialogs) hardcode a `SizedBox(width: 360)`-style
+/// preferred width tuned for desktop, the same failure mode
+/// [dialogMaxHeight]'s own doc comment describes for height: on a ~360-400px
+/// phone, `AlertDialog`'s default `insetPadding` (40 horizontal) plus this
+/// app's own [dialogInsetPadding] (16 horizontal, once a dialog opts into
+/// it) already eats into the available width before the dialog's own
+/// content even gets a say, so a hardcoded 360px preferred width can exceed
+/// what's actually on screen and clip or force horizontal overflow.
+///
+/// Use as: `width: dialogMaxWidth(context, 360)` on the dialog's outer
+/// `SizedBox`/`ConstrainedBox`, paired with `insetPadding: dialogInsetPadding`
+/// on the same `Dialog`/`AlertDialog` so the margin this function reserves
+/// actually matches what's applied — same pairing rule as
+/// [dialogMaxHeight]/[dialogInsetPadding] above.
+double dialogMaxWidth(BuildContext context, double preferred) {
+  final available = MediaQuery.of(context).size.width - dialogInsetPadding.horizontal - 24;
+  return available.clamp(240, preferred);
+}

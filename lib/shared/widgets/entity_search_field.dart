@@ -5,6 +5,7 @@ import '../../core/app_providers.dart';
 import '../../core/filters/global_filters.dart';
 import '../../data/models/client_dimension_config.dart';
 import '../../data/models/reference_data.dart';
+import '../utils/responsive.dart';
 
 /// Real, server-backed search dialog for picking one Category/Item/Sales
 /// Person/Branch/Customer — Craig, 2026-08-26: "Elastic search on filters."
@@ -150,10 +151,21 @@ class _EntitySearchDialogState extends ConsumerState<_EntitySearchDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      // 2026-09-07 (Craig: "optimised for Mobile, Tablet and Desktop") — this
+      // dialog is opened by every "Add filter" entity pick in GlobalFilterBar
+      // (one of the most-used dialogs in the app), and its content used to be
+      // a flat SizedBox(width: 360, height: 420) with no awareness of the
+      // viewport at all. `dialogInsetPadding`/`dialogMaxWidth`/
+      // `dialogMaxHeight` (responsive.dart) are the same helpers
+      // platform_admin_screen.dart's and settings_screen.dart's own dialogs
+      // already use for exactly this — clamping to what's actually on
+      // screen, accounting for the keyboard when it's open, rather than
+      // assuming a desktop-sized viewport.
+      insetPadding: dialogInsetPadding,
       title: Text(widget.title),
       content: SizedBox(
-        width: 360,
-        height: 420,
+        width: dialogMaxWidth(context, 360),
+        height: dialogMaxHeight(context, 420),
         child: Column(
           children: [
             TextField(
