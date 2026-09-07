@@ -162,6 +162,45 @@ List<DimensionPerformance> mergeAcrossYears(List<DimensionPerformance> rawRows, 
 /// scoring the RESULT — see `computeCoverage`'s `periods` parameter and
 /// `performance_screen.dart`'s own `_load()` for how many months a Year
 /// filter's Gap is measured against).
+/// Collapses a bare Quarter filter's (3 fiscal months, no Year pinned) rows
+/// into one row per entity. Craig, 2026-09-07, testing Quarter for the first
+/// time: "This needs to work the same way as Month. If no year is selected
+/// then it must sum all of the filtered quarters" — Performance's own
+/// `_effectiveFiscalYear` had originally defaulted a bare Quarter to the
+/// current fiscal year specifically because this merge didn't exist yet (see
+/// that method's git history): a bare Quarter's raw rows vary across BOTH
+/// dimensions `mergeAcrossYears`/`mergeAcrossMonths` above each only collapse
+/// ONE of — several fiscal years (like a bare Month) AND up to 3 fiscal
+/// months within the quarter (like a Year-only filter) — at once.
+///
+/// Rather than new formula math, this composes the two functions above:
+/// group the raw rows by fiscal month first (Sep/Oct/Nov, say), run EACH
+/// month's own multi-year rows through `mergeAcrossYears` — which is exactly
+/// what already correctly resolves that month's one-target-repeated-per-year
+/// trap (see that function's own doc comment, Bug #1/#2) — producing at most
+/// one row per entity PER MONTH in the quarter, each already carrying the
+/// correct "past years' actuals + this year's one target" figure for that
+/// specific month. `mergeAcrossMonths` then sums those (already-deduplicated)
+/// per-month rows per entity into the final single row, the same "different
+/// months carry different, already-correct targets, just add them up" logic
+/// it already applies for a Year-only filter.
+///
+/// Composing rather than summing everything in one pass avoids reproducing
+/// `mergeAcrossYears`'s Bug #1/#2 one level up: naively summing a target that
+/// repeats identically across several years' rows for the SAME month, before
+/// also summing across the quarter's 3 different months, would triple-count
+/// (or worse) whichever months happen to repeat across several years.
+List<DimensionPerformance> mergeAcrossQuarterMonths(List<DimensionPerformance> rawRows, int currentFy) {
+  final byMonth = <String, List<DimensionPerformance>>{};
+  for (final row in rawRows) {
+    byMonth.putIfAbsent(row.fiscalMonth, () => []).add(row);
+  }
+  final perMonthMerged = <DimensionPerformance>[
+    for (final monthRows in byMonth.values) ...mergeAcrossYears(monthRows, currentFy),
+  ];
+  return mergeAcrossMonths(perMonthMerged);
+}
+
 List<DimensionPerformance> mergeAcrossMonths(List<DimensionPerformance> rawRows) {
   final byEntity = <String, List<DimensionPerformance>>{};
   for (final row in rawRows) {

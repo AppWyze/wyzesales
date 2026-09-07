@@ -325,4 +325,120 @@ void main() {
       expect(byCode['R02']!.contributionPercent, closeTo(60000 / 180000 * 100, 0.0001));
     });
   });
+
+  group('mergeAcrossQuarterMonths — bare Quarter (no Year) fix (2026-09-07)', () {
+    // Craig, testing Quarter for the first time: "This needs to work the
+    // same way as Month. If no year is selected then it must sum all of the
+    // filtered quarters." Raw rows here vary across BOTH fiscal year (like
+    // mergeAcrossYears) AND fiscal month within the quarter (like
+    // mergeAcrossMonths) at once — this function composes the two rather
+    // than reimplementing their target math, so these tests focus on proving
+    // the composition is correct, not re-testing either function's own
+    // formula (already covered by the two groups above).
+    test('regression guard: a month that repeats across several years must NOT have its '
+        'target summed once per year before being added to the quarter\'s other months — '
+        'that would inflate the target the same way mergeAcrossYears\' Bug #1/#2 did, one '
+        'level up', () {
+      final rows = [
+        // Sep repeats across 3 fiscal years — same 12000 target joined onto
+        // each row (budget_figures has no fiscal_year column, schema/001).
+        _row(entityCode: 'R01', fiscalYear: 2025, fiscalMonth: 'Sep', actualValue: 10000, targetValue: 12000),
+        _row(entityCode: 'R01', fiscalYear: 2026, fiscalMonth: 'Sep', actualValue: 11000, targetValue: 12000),
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Sep', actualValue: 9000, targetValue: 12000),
+        // Oct only has 2025/2026 data so far (2027's Oct hasn't happened/
+        // loaded yet) — its own, distinct 6000 target repeats across those 2.
+        _row(entityCode: 'R01', fiscalYear: 2025, fiscalMonth: 'Oct', actualValue: 5000, targetValue: 6000),
+        _row(entityCode: 'R01', fiscalYear: 2026, fiscalMonth: 'Oct', actualValue: 7000, targetValue: 6000),
+      ];
+
+      final merged = mergeAcrossQuarterMonths(rows, 2027);
+
+      expect(merged, hasLength(1));
+      final r = merged.single;
+      expect(r.actualValue, 42000, reason: 'plain sum across every merged year AND month: 10k+11k+9k+5k+7k');
+      // Correct: per month, past-actual + this year's one target (mergeAcrossYears'
+      // own agreed design), THEN sum across the quarter's distinct months —
+      // Sep: (10000+11000) + 12000 = 33000. Oct: (5000+7000) + 6000 = 18000.
+      // Quarter target = 33000 + 18000 = 51000.
+      const wrongFlatSum = 12000 * 3 + 6000 * 2; // = 48000 — what a single flat
+      // mergeAcrossMonths pass over all 5 raw rows (no per-month year-merge
+      // first) would produce instead, by summing each row's repeated target
+      // once per row rather than once per month.
+      expect(r.targetValue, isNot(wrongFlatSum));
+      expect(r.targetValue, 51000);
+      expect(r.targetPercent, closeTo(42000 / 51000 * 100, 0.0001));
+    });
+
+    test('a month with only one contributing year, alongside a month with several, merges correctly '
+        '(entities don\'t need the same number of rows per month)', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2027, fiscalMonth: 'Sep', actualValue: 9000, targetValue: 12000),
+        _row(entityCode: 'R01', fiscalYear: 2025, fiscalMonth: 'Oct', actualValue: 5000, targetValue: 6000),
+        _row(entityCode: 'R01', fiscalYear: 2026, fiscalMonth: 'Oct', actualValue: 7000, targetValue: 6000),
+      ];
+
+      final merged = mergeAcrossQuarterMonths(rows, 2027);
+
+      expect(merged.single.actualValue, 21000);
+      // Sep: only 2027 (the current FY) contributed -> pastActual=0, target = 0 + 12000 = 12000.
+      // Oct: (5000+7000) + 6000 = 18000. Quarter target = 12000 + 18000 = 30000.
+      expect(merged.single.targetValue, 30000);
+    });
+
+    test('a quarter month with no rows at all simply doesn\'t contribute — a 2-month quarter '
+        'reduces to exactly mergeAcrossYears\' own output for the one month that DID have data', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2025, fiscalMonth: 'Sep', actualValue: 10000, targetValue: 12000),
+        _row(entityCode: 'R01', fiscalYear: 2026, fiscalMonth: 'Sep', actualValue: 11000, targetValue: 12000),
+      ];
+
+      final merged = mergeAcrossQuarterMonths(rows, 2027);
+      final expected = mergeAcrossYears(rows, 2027);
+
+      expect(merged.single.actualValue, expected.single.actualValue);
+      expect(merged.single.targetValue, expected.single.targetValue);
+    });
+
+    test('multiple entities merge independently across both years and months', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2025, fiscalMonth: 'Sep', actualValue: 10000),
+        _row(entityCode: 'R01', fiscalYear: 2026, fiscalMonth: 'Oct', actualValue: 20000),
+        _row(entityCode: 'R02', fiscalYear: 2025, fiscalMonth: 'Sep', actualValue: 1000),
+        _row(entityCode: 'R02', fiscalYear: 2026, fiscalMonth: 'Oct', actualValue: 2000),
+      ];
+
+      final merged = mergeAcrossQuarterMonths(rows, 2027);
+      final byCode = {for (final r in merged) r.entityCode: r};
+
+      expect(merged, hasLength(2));
+      expect(byCode['R01']!.actualValue, 30000);
+      expect(byCode['R02']!.actualValue, 3000);
+    });
+
+    test('gpPercent is recomputed from the final SUMMED Rand figures across every merged '
+        'year and month, not averaged at any intermediate step', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2025, fiscalMonth: 'Sep', actualValue: 100000, actualProfit: 40000), // 40%
+        _row(entityCode: 'R01', fiscalYear: 2026, fiscalMonth: 'Oct', actualValue: 50000, actualProfit: 5000), // 10%
+      ];
+
+      final merged = mergeAcrossQuarterMonths(rows, 2027);
+
+      final expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not a naive 25% average
+      expect(merged.single.gpPercent, closeTo(expectedGpPercent, 0.0001));
+    });
+
+    test('no target on file for any contributing row -> merged targetValue and targetPercent '
+        'are both null, never a crash', () {
+      final rows = [
+        _row(entityCode: 'R01', fiscalYear: 2025, fiscalMonth: 'Sep', actualValue: 10000),
+        _row(entityCode: 'R01', fiscalYear: 2026, fiscalMonth: 'Oct', actualValue: 20000),
+      ];
+
+      final merged = mergeAcrossQuarterMonths(rows, 2027);
+
+      expect(merged.single.targetValue, isNull);
+      expect(merged.single.targetPercent, isNull);
+    });
+  });
 }
