@@ -203,6 +203,7 @@ Deno.serve(async (_req) => {
   }
 
   const rowsWrittenByClient: Record<string, number> = {};
+  const errorsByClient: Record<string, string> = {};
 
   for (const client of clients ?? []) {
     const clientId = client.id as string;
@@ -294,6 +295,22 @@ Deno.serve(async (_req) => {
       }
     }
 
+    // 2026-09-07: found live against Edgetec — this upsert is one single
+    // multi-row INSERT for the client's entire batch (every dimension's rows
+    // together), which Postgres commits or rejects as a whole. A single row
+    // with a NULL entity_code (schema/052's now-fixed root cause: v_sales_
+    // documents/v_dimension_monthly_sales letting an unattributed line
+    // produce a NULL group, in violation of sales_forecast.entity_code's
+    // NOT NULL constraint) silently failed the ENTIRE batch — every
+    // dimension for that client, not just the one with the bad row — while
+    // `rowsWrittenByClient[clientId]` was set to the COMPUTED length
+    // regardless of whether the upsert actually landed. The caller (Craig,
+    // via curl) saw `{"ok":true,"rowsWritten":{"...":3084}}` and reasonably
+    // read that as "3084 rows were written," when in fact sales_forecast had
+    // zero rows for that client. Now: only report a count once the upsert
+    // has actually succeeded; a failure is surfaced in `errors` instead, and
+    // still lets every OTHER client's loop iteration continue rather than
+    // aborting the whole run.
     if (rowsToUpsert.length > 0) {
       const { error: upsertError } = await supabase
         .from("sales_forecast")
@@ -301,13 +318,17 @@ Deno.serve(async (_req) => {
 
       if (upsertError) {
         console.error(`[${clientId}] sales_forecast upsert failed:`, upsertError.message);
+        errorsByClient[clientId] = upsertError.message;
+        continue;
       }
     }
 
     rowsWrittenByClient[clientId] = rowsToUpsert.length;
   }
 
-  return new Response(JSON.stringify({ ok: true, rowsWritten: rowsWrittenByClient }), {
+  const ok = Object.keys(errorsByClient).length === 0;
+  return new Response(JSON.stringify({ ok, rowsWritten: rowsWrittenByClient, errors: errorsByClient }), {
+    status: ok ? 200 : 207,
     headers: { "Content-Type": "application/json" },
   });
 });
