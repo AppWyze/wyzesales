@@ -424,7 +424,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       }
     } else if (isQuarterGrain) {
       coveragePeriods = filters.fiscalQuarter == currentQuarterLabel
-          ? effectiveQuarterMonths!.indexOf(currentMonthLabel) + 1
+          ? effectiveQuarterMonths.indexOf(currentMonthLabel) + 1
           : 3;
     }
 
