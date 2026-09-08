@@ -1983,19 +1983,31 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   else if (dimData == null)
                     const Padding(padding: EdgeInsets.all(32), child: Center(child: RepaintBoundary(child: CircularProgressIndicator())))
                   else
-                    // Single pie now (see the switch above) — sized to a
-                    // fixed box rather than stretched full-width the way the
-                    // old 2-up GridView cell was, since a lone pie stretched
-                    // across a wide desktop window reads as oversized/oddly
-                    // proportioned. `_PieCard` renders an `Expanded` inside a
-                    // `Column` internally (for its chart), so it still needs
-                    // a bounded height from here regardless of layout.
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: SizedBox(
-                        width: 480,
-                        height: 300,
-                        child: _PieCard(
+                    // 2026-09-08 ("Use the screen space" round 2, Craig —
+                    // this card was still fixed to a 480px box, left-
+                    // aligned, on a screen that had room for much more):
+                    // stretched to the full available width instead, same
+                    // `SizedBox(width: double.infinity)` fix already used
+                    // for the Wrap immediately above and for
+                    // ResponsiveDataTable elsewhere (see that file's own
+                    // doc comment) — safe here for the identical reason:
+                    // this sits in the same bounded-width vertical Column
+                    // as everything else on this screen, never inside an
+                    // unbounded-width ancestor. Height stays fixed at 300 —
+                    // `_PieCard` renders an `Expanded` inside a `Column`
+                    // internally (for its chart), so it still needs a
+                    // bounded height regardless of width. The donut itself
+                    // (`SimplePieChart`'s `_PieChartPainter`) is capped to
+                    // `min(width, height)` and stays visually the same
+                    // size either way — the extra width goes to the legend
+                    // column beside it, which is what actually benefits
+                    // (several client entity names were truncating at the
+                    // old 480px card width, e.g. "OLD MUTUAL FINANCE
+                    // (PTY)…").
+                    SizedBox(
+                      width: double.infinity,
+                      height: 300,
+                      child: _PieCard(
                           title: '$dimensionLabel — ${_selectedPeriod.name.toUpperCase()}',
                           totalLabel: _selectedPeriod.name.toUpperCase(),
                           slices: periodSlices,
@@ -2012,7 +2024,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           onSliceTap: (slice) => _drillDown(slice, period: _selectedPeriod == StatPeriod.mtd ? 'mtd' : 'ytd'),
                         ),
                       ),
-                    ),
                 ],
               );
             },

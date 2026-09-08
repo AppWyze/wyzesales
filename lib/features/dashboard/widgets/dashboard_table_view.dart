@@ -98,23 +98,34 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
                 // will hopefully work in Desktop view and maybe Tablet. When
                 // it becomes too narrow then revert to a single table."
                 //
-                // Originally set to 1050 (estimated from ResponsiveDataTable's
-                // per-column width floor), but Craig's own screenshot showed
-                // the nav sidebar still expanded — meaning his content width
-                // was already above AppShell's `_sidebarBreakpoint` (900) —
-                // while the panels were still stacking to 1 column, so 1050
-                // was simply too conservative for his real screen. Lowered to
-                // match `_sidebarBreakpoint` exactly: "sidebar still expanded"
-                // and "two panels visible" are the same visual regime — a
-                // screen wide enough to keep the full nav open is wide enough
-                // to show two panels side by side. Any resulting squeeze on a
-                // narrower two-column layout is already handled by
-                // `ResponsiveDataTable`'s own horizontal-scroll fallback
-                // (`isHorizontalScrollBarVisible: true` + its `minWidth`), so
-                // this doesn't need a more conservative number of its own.
+                // Two prior attempts at a `constraints.maxWidth` threshold
+                // both missed: first 1050 (estimated from ResponsiveDataTable's
+                // per-column width floor, too conservative), then 900 to
+                // match AppShell's own `_sidebarBreakpoint` — but that
+                // second attempt compared the wrong width. `constraints.
+                // maxWidth` here is this widget's own CONTENT area, already
+                // net of AppShell's 260px-wide sidebar (app_shell.dart:
+                // `if (isWide) SizedBox(width: 260, child: sidebar)`) —
+                // `_sidebarBreakpoint` itself is checked against the FULL
+                // WINDOW width (`MediaQuery...size.width`), a different
+                // number. Comparing content width to 900 actually required
+                // a ~1160px WINDOW (900 + 260 sidebar) — wider than even
+                // the original, too-conservative 1050 attempt, which is
+                // exactly why Craig's sidebar-still-expanded screenshot
+                // still showed 1 column after that "fix".
+                //
+                // Fixed properly this time: read the window width directly
+                // (same source AppShell's own `_sidebarBreakpoint` reads)
+                // and compare THAT to the sidebar's own threshold — "two
+                // panels whenever the sidebar itself is showing" is
+                // literally the equivalence Craig described, so there's no
+                // more guessing at a second, independent content-width
+                // number that has to happen to line up with it.
+                // `constraints.maxWidth` (the actual net content width) is
+                // still what sizes each panel below — only the yes/no
+                // decision now comes from the window width.
                 const spacing = 16.0;
-                const twoColumnBreakpoint = 900.0;
-                final columns = constraints.maxWidth >= twoColumnBreakpoint ? 2 : 1;
+                final columns = MediaQuery.of(context).size.width >= 900 ? 2 : 1;
                 final panelWidth = columns == 2 ? (constraints.maxWidth - spacing) / 2 : constraints.maxWidth;
                 return SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
