@@ -346,16 +346,61 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   String? _layoutOverride;
   bool _savingDefaultLayout = false;
 
+  /// True only for the duration of `_setDefaultLayout`'s own
+  /// `refreshProfile()` call below — 2026-09-08, Craig: switching to
+  /// Standard view and clicking "Set as default" blanked the KPI tiles to
+  /// placeholder zeros/dashes, while the pie chart kept showing genuinely
+  /// stale (but real) numbers; navigating away and back fixed it ("Table
+  /// View and set it to default it works no problem but... Standard View
+  /// and set it to Default it refreshes like the screenshot").
+  ///
+  /// Root cause: `SessionNotifier._refresh()` (core/app_providers.dart)
+  /// always bounces `sessionProvider` through a bare `AsyncValue.loading()`
+  /// with no previous value attached — even on a deliberate
+  /// `refreshProfile()` call like this one, not just a real sign-in. Both
+  /// `ref.listen` guards further down in `build()` were written ONLY to
+  /// catch "the profile resolves for the very first time at app boot" (see
+  /// their own doc comments), by checking `previous?.value != null`
+  /// (nothing before) `&&` `next.value != null` (something now) — but that
+  /// same shape is exactly what a `loading()` (no previous) -> `data(...)`
+  /// transition looks like too, so both guards fired an unwanted, fully
+  /// fresh `_refresh()` mid-session. That refresh's new `_loadKpis()`/
+  /// `_loadDimension()` calls then raced `fiscalYearStartMonthProvider`
+  /// (also rebuilt off the same `sessionProvider` change, per
+  /// core/app_providers.dart's `ref.watch(sessionProvider)` convention)
+  /// back down to its `?? 3` fallback before Edgetec's real start month
+  /// (10) had a chance to re-resolve — the exact same wrong-start-month
+  /// bug already documented on the second listener below, just reached
+  /// from a different trigger, which is why every fiscal-month-keyed tile
+  /// zeroed out instead of just staying stale.
+  ///
+  /// Saving the layout preference has nothing to do with the KPI figures
+  /// or breakdown data at all (only `profile.dashboardLayout` changes), so
+  /// the correct fix is for this call's own `refreshProfile()` to simply
+  /// not count as a reason to refresh either, rather than trying to make
+  /// the refresh land faster/more correctly. This flag marks that window;
+  /// both listeners below check it first and skip entirely while it's
+  /// true. Safe to gate the WHOLE window on a plain flag rather than
+  /// something more elaborate — Riverpod notifies `ref.listen` callbacks
+  /// synchronously (this method isn't called during a build), so a
+  /// listener tied to a `state =` assignment inside the awaited
+  /// `refreshProfile()` call always runs before that `await` returns here,
+  /// i.e. strictly before the `finally` below clears the flag.
+  bool _settingDefaultLayout = false;
+
   void _setLayout(String value) => setState(() => _layoutOverride = value);
 
   Future<void> _setDefaultLayout(String layout, String userId) async {
     setState(() => _savingDefaultLayout = true);
+    _settingDefaultLayout = true;
     try {
       await ref.read(authRepositoryProvider).setDashboardLayout(userId, layout);
       // Picks the new value back up on `sessionProvider` itself so every
       // OTHER screen that ever reads `profile.dashboardLayout` (and a future
       // reload/re-login) sees it immediately, not just this screen's own
-      // local override.
+      // local override. See `_settingDefaultLayout`'s own doc comment for
+      // why this deliberately does NOT also refresh this screen's KPI/pie
+      // data — nothing about it depends on `dashboard_layout`.
       await ref.read(sessionProvider.notifier).refreshProfile();
       if (!mounted) return;
       setState(() {
@@ -369,6 +414,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       if (!mounted) return;
       setState(() => _savingDefaultLayout = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save default: $error')));
+    } finally {
+      _settingDefaultLayout = false;
     }
   }
 
@@ -1359,6 +1406,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // run once the initial load actually settles (see initState's
     // `whenComplete`), keeps at most one full batch in flight at a time.
     ref.listen<AsyncValue<Profile?>>(sessionProvider, (previous, next) {
+      // See `_settingDefaultLayout`'s own doc comment — a profile reload
+      // triggered by saving the dashboard layout preference isn't a real
+      // sign-in and has no reason to refresh this screen's data.
+      if (_settingDefaultLayout) return;
       if (previous?.value != null || next.value == null) return;
       if (_initialKpiLoadInFlight) {
         _profileReloadQueued = true;
@@ -1400,6 +1451,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // existing pair already guarantees at most one extra batch fires
     // either way.
     ref.listen<AsyncValue<int>>(fiscalYearStartMonthProvider, (previous, next) {
+      // See `_settingDefaultLayout`'s own doc comment — this provider
+      // rebuilds off the same `sessionProvider` change a layout-preference
+      // save triggers, so it needs the identical guard.
+      if (_settingDefaultLayout) return;
       if (previous?.value != null || next.value == null) return;
       if (_initialKpiLoadInFlight) {
         _profileReloadQueued = true;
