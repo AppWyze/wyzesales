@@ -7,6 +7,7 @@ import '../../../core/utils/formatters.dart';
 import '../../../data/models/client_dimension_config.dart';
 import '../../../data/models/dimension_monthly_sales.dart';
 import '../../../shared/widgets/async_section.dart';
+import '../../../shared/widgets/responsive_data_table.dart';
 
 /// Option B of the Dashboard's layout switch (schema/053, Profile.
 /// dashboardLayout) — Craig, 2026-09-08, looking at Edgetec's old standalone
@@ -93,12 +94,25 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
           builder: (context, panels) {
             return LayoutBuilder(
               builder: (context, constraints) {
-                // Same 2-column/1-column breakpoint dashboard_screen.dart's
-                // own KPI tile grid and rankings section already use
-                // (_kpiGridBreakpoint) — one width decision for the app to
-                // reason about, not a fourth bespoke one for this screen.
+                // 2026-09-08, Craig: "two tables next to each other... this
+                // will hopefully work in Desktop view and maybe Tablet. When
+                // it becomes too narrow then revert to a single table."
+                // Deliberately a HIGHER threshold than dashboard_screen.dart's
+                // own `_kpiGridBreakpoint` (900) — that one decides between 2
+                // and 3 KPI tiles, which stay legible much narrower than a
+                // full 4-column, sortable financial table does. Estimated
+                // from `ResponsiveDataTable`'s own per-column width floor
+                // (`_estimatedColumnWidth`): a name column plus 3 numeric
+                // columns lands around ~550px before that table starts
+                // needing its own horizontal scroll, so two side by side plus
+                // the gap between them need on the order of ~1100px — a
+                // typical laptop/desktop width, and a landscape tablet if it
+                // has one. Below that, each panel gets the full width to
+                // itself instead of squeezing two half-width tables into
+                // their own horizontal scrollbars.
                 const spacing = 16.0;
-                final columns = constraints.maxWidth >= 900 ? 2 : 1;
+                const twoColumnBreakpoint = 1050.0;
+                final columns = constraints.maxWidth >= twoColumnBreakpoint ? 2 : 1;
                 final panelWidth = columns == 2 ? (constraints.maxWidth - spacing) / 2 : constraints.maxWidth;
                 return SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
@@ -160,96 +174,187 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
   }
 }
 
-class _DimensionPanel extends StatelessWidget {
+/// One entity's row, resolved once per panel build so both the sort
+/// comparator and the rendered cells agree on the exact same numbers —
+/// `_gp` deliberately left nullable (mirrors `ratioPercent`'s own null-on-
+/// zero-denominator convention, formatters.dart) so a zero-Value row sorts
+/// predictably (treated as 0 below) rather than throwing on a null compare.
+class _EntityRow {
+  const _EntityRow({required this.code, required this.label, required this.value, required this.profit, required this.gp});
+  final String code;
+  final String label;
+  final num value;
+  final num profit;
+  final double? gp;
+}
+
+/// A real, sortable [ResponsiveDataTable] per dimension — 2026-09-08, Craig:
+/// "it doesn't look pretty... only show the first 5 rows with totals on the
+/// top row and the ability to sort each column asc or desc." Switched from
+/// this file's original hand-rolled `Row`s to the same shared table widget
+/// every other screen's rollup uses (Sales By, Performance, Document
+/// Analysis) — same bold pinned-Totals-row-at-the-top convention
+/// (`ResponsiveDataTable`'s own doc comment: "Totals to the top," app-wide
+/// except Budgets), same `DataColumn(onSort: ...)` per-column sort.
+///
+/// The Totals row is always computed from EVERY entity, never just the
+/// visible 5 — it's the true dimension total regardless of how the table
+/// happens to be sorted/truncated. The 5 entity rows shown are the first 5
+/// of whatever the CURRENT sort produces: sort by R Value descending (the
+/// default) to see the top 5 by revenue, ascending for the bottom 5, or sort
+/// by name/Profit/%GP instead — one consistent "sort, then take 5" rule
+/// rather than a separate fixed "top 5" behind the scenes.
+class _DimensionPanel extends StatefulWidget {
   const _DimensionPanel({required this.panel});
   final _PanelData panel;
 
   @override
+  State<_DimensionPanel> createState() => _DimensionPanelState();
+}
+
+class _DimensionPanelState extends State<_DimensionPanel> {
+  // Column 1 (R Value), descending — same default SalesByScreen's own table
+  // opens on (_SalesByScreenState._sortColumnIndex/_sortAscending's own doc
+  // comment) for exactly the same reason: the current FY/R Value column is
+  // the one figure most worth seeing highest-first by default.
+  int _sortColumnIndex = 1;
+  bool _sortAscending = false;
+
+  static const _visibleRowCount = 5;
+
+  void _onSort(int columnIndex, bool ascending) {
+    setState(() {
+      _sortColumnIndex = columnIndex;
+      _sortAscending = ascending;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final entries = panel.rows.entries.toList()..sort((a, b) => b.value.value.compareTo(a.value.value));
+    final panel = widget.panel;
+    final allRows = [
+      for (final entry in panel.rows.entries)
+        _EntityRow(
+          code: entry.key,
+          label: panel.names[entry.key] ?? entry.key,
+          value: entry.value.value,
+          profit: entry.value.profit,
+          gp: ratioPercent(entry.value.profit, entry.value.value),
+        ),
+    ];
+
     num totalValue = 0;
     num totalProfit = 0;
-    for (final entry in entries) {
-      totalValue += entry.value.value;
-      totalProfit += entry.value.profit;
+    for (final row in allRows) {
+      totalValue += row.value;
+      totalProfit += row.profit;
     }
+    final totalGp = ratioPercent(totalProfit, totalValue);
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('${panel.dimension.displayLabel}:', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            if (entries.isEmpty)
+    allRows.sort((a, b) {
+      int cmp;
+      switch (_sortColumnIndex) {
+        case 0:
+          cmp = a.label.compareTo(b.label);
+          break;
+        case 2:
+          cmp = a.profit.compareTo(b.profit);
+          break;
+        case 3:
+          cmp = (a.gp ?? 0).compareTo(b.gp ?? 0);
+          break;
+        case 1:
+        default:
+          cmp = a.value.compareTo(b.value);
+      }
+      return _sortAscending ? cmp : -cmp;
+    });
+    final visibleRows = allRows.take(_visibleRowCount).toList();
+
+    const totalStyle = TextStyle(fontWeight: FontWeight.bold);
+
+    // No outer Card here — `ResponsiveDataTable` below already renders
+    // itself as one (rounded corners, elevation); wrapping it in a SECOND
+    // Card just for this panel's label would draw a card inside a card,
+    // exactly the kind of visual clutter Craig flagged ("doesn't look
+    // pretty"). A plain label above the table, same as every other screen's
+    // page title sits above ITS table, keeps one clean frame per panel.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(panel.dimension.displayLabel, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (allRows.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 child: Text('No data for the current filters.', style: Theme.of(context).textTheme.bodySmall),
               )
             else ...[
-              const _PanelHeaderRow(),
-              const Divider(height: 1),
-              for (final entry in entries)
-                _PanelRow(label: panel.names[entry.key] ?? entry.key, value: entry.value.value, profit: entry.value.profit),
-              const Divider(height: 1),
-              _PanelRow(label: 'Total', value: totalValue, profit: totalProfit, bold: true),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PanelHeaderRow extends StatelessWidget {
-  const _PanelHeaderRow();
-
-  @override
-  Widget build(BuildContext context) {
-    final style = Theme.of(context).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Expanded(flex: 3, child: Text('', style: style)),
-          Expanded(flex: 2, child: Text('R Value', style: style, textAlign: TextAlign.right)),
-          Expanded(flex: 2, child: Text('R Profit', style: style, textAlign: TextAlign.right)),
-          Expanded(flex: 1, child: Text('% GP', style: style, textAlign: TextAlign.right)),
+              // `DataTable2` (behind `ResponsiveDataTable`) manages its own
+              // internal vertical scroll region, which needs a BOUNDED
+              // height to lay out against — every other screen that uses
+              // `ResponsiveDataTable` gets that for free from an ancestor
+              // `Expanded` inside a full-height `Column` (see
+              // SalesByScreen.build()'s own `Expanded(child: _buildTable(...))`).
+              // This panel instead sits inside a `Wrap` (so two can sit side
+              // by side), which hands its children unconstrained height —
+              // so a fixed height is worked out explicitly here instead, from
+              // the actual row count about to be rendered (header + the
+              // pinned Total row + up to 5 entity rows), rather than left
+              // to an ancestor that was never going to bound it.
+              SizedBox(
+                height: 56 + (1 + visibleRows.length) * 52,
+                child: ResponsiveDataTable(
+                  sortColumnIndex: _sortColumnIndex,
+                  sortAscending: _sortAscending,
+                  // Totals is always rows[0] — see this class's own doc
+                  // comment for why it's pinned regardless of the active sort.
+                  pinnedRowCount: 1,
+                  columns: [
+                    DataColumn(label: Text(panel.dimension.displayLabel), onSort: _onSort),
+                    DataColumn(label: const Text('R Value'), numeric: true, onSort: _onSort),
+                    DataColumn(label: const Text('R Profit'), numeric: true, onSort: _onSort),
+                    DataColumn(label: const Text('% GP'), numeric: true, onSort: _onSort),
+                  ],
+                  rows: [
+                    DataRow(
+                      color: WidgetStatePropertyAll(Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.04)),
+                      cells: [
+                        const DataCell(Text('Total', style: totalStyle)),
+                        DataCell(Text(formatRand(totalValue, precise: true), style: totalStyle)),
+                        DataCell(Text(formatRand(totalProfit, precise: true), style: totalStyle)),
+                        // ratioPercent already returns null (-> '—' via
+                        // formatPercent) on a zero-Value denominator — not
+                        // the "inf.00" Edgetec's old report showed for its
+                        // zero-Value/nonzero-Profit "OTHER" Market row.
+                        // That's a bug in the legacy report worth fixing on
+                        // the way through, not a behaviour to faithfully
+                        // reproduce, same "fixed, not preserved" call made
+                        // for every other ported quirk this project.
+                        DataCell(Text(formatPercent(totalGp), style: totalStyle)),
+                      ],
+                    ),
+                    for (final row in visibleRows)
+                      DataRow(cells: [
+                        DataCell(Text(row.label, overflow: TextOverflow.ellipsis)),
+                        DataCell(Text(formatRand(row.value, precise: true))),
+                        DataCell(Text(formatRand(row.profit, precise: true))),
+                        DataCell(Text(formatPercent(row.gp))),
+                      ]),
+                  ],
+                ),
+              ),
+              if (allRows.length > _visibleRowCount)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'Showing $_visibleRowCount of ${allRows.length} — sort a column to change which ones.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
         ],
-      ),
-    );
-  }
-}
-
-class _PanelRow extends StatelessWidget {
-  const _PanelRow({required this.label, required this.value, required this.profit, this.bold = false});
-
-  final String label;
-  final num value;
-  final num profit;
-  final bool bold;
-
-  @override
-  Widget build(BuildContext context) {
-    final style = TextStyle(fontWeight: bold ? FontWeight.w700 : FontWeight.w400, fontSize: 13);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Expanded(flex: 3, child: Text(label, style: style, overflow: TextOverflow.ellipsis)),
-          Expanded(flex: 2, child: Text(formatRand(value, precise: true), style: style, textAlign: TextAlign.right)),
-          Expanded(flex: 2, child: Text(formatRand(profit, precise: true), style: style, textAlign: TextAlign.right)),
-          // ratioPercent already returns null (-> '—') on a zero-value
-          // denominator (formatters.dart) — deliberately NOT the "inf.00"
-          // Edgetec's old report showed for a zero-Value/nonzero-Profit row
-          // (the "OTHER" Market row in Craig's screenshot): that's a bug in
-          // the legacy report worth fixing on the way through, not a
-          // behaviour to faithfully reproduce, same "fixed, not preserved"
-          // call made for every other ported quirk this project.
-          Expanded(flex: 1, child: Text(formatPercent(ratioPercent(profit, value)), style: style, textAlign: TextAlign.right)),
-        ],
-      ),
+      ],
     );
   }
 }
