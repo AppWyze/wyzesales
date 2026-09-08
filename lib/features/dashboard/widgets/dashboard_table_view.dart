@@ -97,21 +97,23 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
                 // 2026-09-08, Craig: "two tables next to each other... this
                 // will hopefully work in Desktop view and maybe Tablet. When
                 // it becomes too narrow then revert to a single table."
-                // Deliberately a HIGHER threshold than dashboard_screen.dart's
-                // own `_kpiGridBreakpoint` (900) — that one decides between 2
-                // and 3 KPI tiles, which stay legible much narrower than a
-                // full 4-column, sortable financial table does. Estimated
-                // from `ResponsiveDataTable`'s own per-column width floor
-                // (`_estimatedColumnWidth`): a name column plus 3 numeric
-                // columns lands around ~550px before that table starts
-                // needing its own horizontal scroll, so two side by side plus
-                // the gap between them need on the order of ~1100px — a
-                // typical laptop/desktop width, and a landscape tablet if it
-                // has one. Below that, each panel gets the full width to
-                // itself instead of squeezing two half-width tables into
-                // their own horizontal scrollbars.
+                //
+                // Originally set to 1050 (estimated from ResponsiveDataTable's
+                // per-column width floor), but Craig's own screenshot showed
+                // the nav sidebar still expanded — meaning his content width
+                // was already above AppShell's `_sidebarBreakpoint` (900) —
+                // while the panels were still stacking to 1 column, so 1050
+                // was simply too conservative for his real screen. Lowered to
+                // match `_sidebarBreakpoint` exactly: "sidebar still expanded"
+                // and "two panels visible" are the same visual regime — a
+                // screen wide enough to keep the full nav open is wide enough
+                // to show two panels side by side. Any resulting squeeze on a
+                // narrower two-column layout is already handled by
+                // `ResponsiveDataTable`'s own horizontal-scroll fallback
+                // (`isHorizontalScrollBarVisible: true` + its `minWidth`), so
+                // this doesn't need a more conservative number of its own.
                 const spacing = 16.0;
-                const twoColumnBreakpoint = 1050.0;
+                const twoColumnBreakpoint = 900.0;
                 final columns = constraints.maxWidth >= twoColumnBreakpoint ? 2 : 1;
                 final panelWidth = columns == 2 ? (constraints.maxWidth - spacing) / 2 : constraints.maxWidth;
                 return SingleChildScrollView(

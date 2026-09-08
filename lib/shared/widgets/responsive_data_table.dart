@@ -153,31 +153,55 @@ class ResponsiveDataTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: DataTable2(
-        columns: columns,
-        rows: rows,
-        sortColumnIndex: sortColumnIndex,
-        sortAscending: sortAscending,
-        minWidth: _minWidth,
-        fixedTopRows: stickyHeader ? 1 + pinnedRowCount : 0,
-        isVerticalScrollBarVisible: scrollsVertically,
-        isHorizontalScrollBarVisible: true,
-        // 2026-09-08 (row-click cross-filter, Craig): lets a `DataRow` be
-        // made tappable — anywhere in the row, not just one cell — purely
-        // by giving it an `onSelectChanged` callback, with no checkbox
-        // column ever appearing. This is stock `DataRow`/`DataTable`
-        // behavior (`data_table_2` deliberately keeps it unchanged — see
-        // this file's own class doc comment on "What changed for call
-        // sites"): a row's `onSelectChanged` only fires from a checkbox tap
-        // when `showCheckboxColumn` is true; with it false, tapping any
-        // cell in a row that HAS an `onSelectChanged` fires it directly. A
-        // row built with no `onSelectChanged` at all (the Totals row on
-        // every screen that has one) stays inert either way, so this is
-        // safe to turn on globally rather than needing a per-table opt-in.
-        showCheckboxColumn: false,
+    // 2026-09-08 ("Use the screen space", Craig): without this SizedBox, the
+    // Card below shrink-wraps to its own natural width — DataTable2's
+    // `minWidth` (the sum of `_estimatedColumnWidth` across columns, see
+    // above) — instead of stretching to fill whatever width its parent
+    // actually offers. Every screen that uses this widget places it inside
+    // a vertical Column (several with the default
+    // `crossAxisAlignment.start`, which sizes children to their own width
+    // rather than stretching them) or a vertically-scrolling
+    // SingleChildScrollView, so a table with few/narrow columns on a wide
+    // screen was leaving visible blank space to its right — exactly what
+    // Craig's Sales by Customer and Dashboard screenshots showed. Wrapping
+    // in `SizedBox(width: double.infinity)` forces this widget to claim its
+    // parent's full available width regardless of the table's own content
+    // width, while `DataTable2`'s `minWidth` (and its horizontal-scroll
+    // fallback) still protects the opposite case — a table wider than the
+    // screen — exactly as before. This does NOT reintroduce the
+    // unbounded-width crash class documented above: every current call site
+    // sits inside a vertical (width-bounded) ancestor, never inside a
+    // horizontally-unbounded one (e.g. a horizontal ListView/Row with no
+    // width constraint of its own), which is what actually caused the three
+    // prior crashes.
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: DataTable2(
+          columns: columns,
+          rows: rows,
+          sortColumnIndex: sortColumnIndex,
+          sortAscending: sortAscending,
+          minWidth: _minWidth,
+          fixedTopRows: stickyHeader ? 1 + pinnedRowCount : 0,
+          isVerticalScrollBarVisible: scrollsVertically,
+          isHorizontalScrollBarVisible: true,
+          // 2026-09-08 (row-click cross-filter, Craig): lets a `DataRow` be
+          // made tappable — anywhere in the row, not just one cell — purely
+          // by giving it an `onSelectChanged` callback, with no checkbox
+          // column ever appearing. This is stock `DataRow`/`DataTable`
+          // behavior (`data_table_2` deliberately keeps it unchanged — see
+          // this file's own class doc comment on "What changed for call
+          // sites"): a row's `onSelectChanged` only fires from a checkbox tap
+          // when `showCheckboxColumn` is true; with it false, tapping any
+          // cell in a row that HAS an `onSelectChanged` fires it directly. A
+          // row built with no `onSelectChanged` at all (the Totals row on
+          // every screen that has one) stays inert either way, so this is
+          // safe to turn on globally rather than needing a per-table opt-in.
+          showCheckboxColumn: false,
+        ),
       ),
     );
   }

@@ -171,6 +171,35 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
     _updateOverlay();
   }
 
+  /// 2026-09-08, Craig: "The search description is not as per the company
+  /// dimensions" — the old hint text was a hardcoded, WCSA-specific string
+  /// ('Search customers, items, reps, categories, branches, documents…')
+  /// that named exactly WCSA's own 6 dimensions no matter which client was
+  /// actually signed in. Built dynamically instead, from the exact same
+  /// `drivesCrossFilter`-filtered dimension list `searchAllDimensions`
+  /// (reference_data_repository.dart) already uses to decide what a search
+  /// here can actually match — so the hint always lists what this field can
+  /// really find, for any client's own configured dimensions (e.g.
+  /// Edgetec's Group/Market/Business Unit/Category Type/Revenue Split/Sales
+  /// Person/Customer), not just WCSA's fixed set. 'Company' never appears
+  /// here since migration 054 fixed every client's Company row to
+  /// `drives_cross_filter = false` (see that migration: Company isn't a
+  /// real, filterable entity, so it was never actually searched even when
+  /// it wrongly showed up as a result). Sorted by each dimension's own
+  /// configured `sortOrder` so this reads in the same order the filter bar
+  /// already presents them. Falls back to the old generic string only while
+  /// `clientDimensionsProvider` is still loading or has no data yet, so the
+  /// field never shows a blank or empty-looking hint.
+  String _searchHintText(List<ClientDimensionConfig>? dimensions) {
+    final searchable = (dimensions ?? const <ClientDimensionConfig>[]).where((d) => d.drivesCrossFilter).toList()
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    if (searchable.isEmpty) {
+      return 'Search customers, items, reps, categories, branches, documents…';
+    }
+    final labels = searchable.map((d) => d.displayLabel.toLowerCase()).join(', ');
+    return 'Search $labels, documents…';
+  }
+
   /// How wide the results dropdown can actually be without running off the
   /// right edge of the screen — 2026-09-07, Craig: "optimised for Mobile,
   /// Tablet and Desktop". The dropdown anchors its LEFT edge to this search
@@ -247,6 +276,11 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
 
   @override
   Widget build(BuildContext context) {
+    // Watched (not just `ref.read`, unlike `_runSearch`'s one-off read) so
+    // the hint text updates live if this client's dimension config changes
+    // while the search field is already on screen — see `_searchHintText`'s
+    // own doc comment for why this replaced the old hardcoded string.
+    final clientDimensions = ref.watch(clientDimensionsProvider).valueOrNull;
     return CompositedTransformTarget(
       link: _layerLink,
       child: SizedBox(
@@ -259,7 +293,7 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
           style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
             isDense: true,
-            hintText: 'Search customers, items, reps, categories, branches, documents…',
+            hintText: _searchHintText(clientDimensions),
             hintStyle: const TextStyle(fontSize: 13),
             prefixIcon: const Icon(Icons.search, size: 18),
             prefixIconConstraints: const BoxConstraints(minWidth: 36),
