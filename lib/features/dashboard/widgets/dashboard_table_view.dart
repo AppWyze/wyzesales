@@ -99,7 +99,20 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
         // empty/stale list — same "don't block rendering, but don't cache a
         // wrong answer either" concern every other `.valueOrNull ?? []`
         // caller in this app already has to account for.
-        final dimensionsKey = allDimensions.map((d) => '${d.dimensionKey}:${d.resolutionKind}').join(',');
+        //
+        // 2026-09-08, Craig: "The changed order also doesn't change the
+        // Table View order as we thought" — this key used to be just
+        // `dimensionKey:resolutionKind`, which doesn't change when a
+        // Platform Admin edit ONLY reorders (or relabels) an existing
+        // dimension, so this screen kept serving its already-built, still-
+        // old-order `_future`/panel list forever, even once
+        // `clientDimensionsProvider` itself had correctly refetched the new
+        // order (see platform_admin_screen.dart's `_EditDimensionDialog._save()`
+        // for the other half of this bug — it wasn't invalidating that
+        // provider at all). Including `sortOrder`/`displayLabel` here means
+        // an edit to EITHER now correctly triggers a re-`_load()`.
+        final dimensionsKey =
+            allDimensions.map((d) => '${d.dimensionKey}:${d.resolutionKind}:${d.sortOrder}:${d.displayLabel}').join(',');
         if (_future == null || _loadedForFilters != filters || _loadedForDimensionsKey != dimensionsKey) {
           _loadedForFilters = filters;
           _loadedForDimensionsKey = dimensionsKey;

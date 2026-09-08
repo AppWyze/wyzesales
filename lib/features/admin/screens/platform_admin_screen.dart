@@ -2086,6 +2086,21 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
       } else {
         await repo.updateClientDimension(widget.clientId, key, data);
       }
+      // 2026-09-08, Craig: "When I change the dimension sort order it
+      // changes but doesn't update and refresh the view. I have to
+      // navigate out and then back again to see the change." — this
+      // screen's own table already refreshes itself (see the two call
+      // sites of `_EditDimensionDialog`, which call `_reloadDimensions()`/
+      // `onChanged()` right after this dialog closes), but nothing told
+      // `clientDimensionsProvider` — the shared, app-wide, non-autoDispose
+      // read every OTHER screen uses (Dashboard's dimension pickers/Table
+      // view, Sales By's dimension switcher, etc., via
+      // `reference_data_repository.dart`'s `clientDimensions()`) — that its
+      // cached result was now stale. Invalidating it here is what actually
+      // makes a saved change (sort order, display label, any of this
+      // dialog's other fields) visible elsewhere without navigating away
+      // and back to force a fresh read.
+      ref.invalidate(clientDimensionsProvider);
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       setState(() => _error = e.toString());
