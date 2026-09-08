@@ -54,6 +54,27 @@ class _PanelData {
   final Map<String, String> names;
 }
 
+/// A rough up-front estimate of a `_DimensionPanel`'s rendered height, used
+/// only to balance panels across masonry columns (see the `columns == 2`
+/// branch of `_DashboardTableViewState.build()`'s `builder` above) — NOT a
+/// layout constraint itself, so it doesn't need to be pixel-exact, just
+/// close enough that the greedy shortest-column packing produces a
+/// reasonable result. Mirrors `_DimensionPanelState.build()`'s own actual
+/// height math (label + spacing, then either the "no data" message or the
+/// `SizedBox(height: 56 + (1 + visibleRowCountForHeight) * 52)` table) —
+/// if that widget's own sizing ever changes, this estimate drifting
+/// slightly out of sync would just make the masonry balance a bit less
+/// even, not break anything.
+double _estimatedPanelHeight(_PanelData panel) {
+  const labelAndSpacing = 32.0; // titleMedium label (~24) + the 8px SizedBox under it
+  if (panel.rows.isEmpty) {
+    // Padding(vertical: 12) around one line of bodySmall text.
+    return labelAndSpacing + 12 * 2 + 20;
+  }
+  final visibleRowCountForHeight = panel.rows.length < 5 ? panel.rows.length : 5;
+  return labelAndSpacing + 56 + (1 + visibleRowCountForHeight) * 52;
+}
+
 class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
   Future<List<_PanelData>>? _future;
   GlobalFilters? _loadedForFilters;
@@ -92,72 +113,97 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
               'Split-style breakdowns) — ask a Platform Admin to add one under Dimensions, or switch back to '
               'the standard Dashboard view above.',
           builder: (context, panels) {
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                // 2026-09-08, Craig: "two tables next to each other... this
-                // will hopefully work in Desktop view and maybe Tablet. When
-                // it becomes too narrow then revert to a single table."
-                //
-                // THREE attempts at this now — the first two only ever
-                // touched the yes/no THRESHOLD (1050, then 900 matched
-                // against the wrong width — full window vs. this widget's
-                // own net content width, see git history), but the real bug
-                // was never the threshold at all: it's that `panelWidth`
-                // below was computed from the raw `constraints.maxWidth`
-                // this `LayoutBuilder` measures, while the `Wrap` those
-                // panels actually sit in is nested one level deeper, inside
-                // a `SingleChildScrollView` with `padding: EdgeInsets.all
-                // (20)` — 40px of horizontal padding this math never
-                // accounted for. Two panels at exactly `(constraints.
-                // maxWidth - spacing) / 2` each, plus the spacing between
-                // them, always summed to exactly `constraints.maxWidth` —
-                // but the padded `Wrap` never actually had more than
-                // `constraints.maxWidth - 40` to lay them out in, so the
-                // second panel was 40px too wide to fit on the same line as
-                // the first, EVERY time, on ANY window width, regardless of
-                // whatever `columns` had already correctly decided. This is
-                // why both prior threshold fixes appeared to do nothing —
-                // neither one touched the actual reason two panels could
-                // never physically coexist on one line.
-                //
-                // Fixed by computing the padding-adjusted available width
-                // FIRST, then sizing panels from that — not the raw,
-                // pre-padding `constraints.maxWidth`. The column-count
-                // decision itself still reads the true window width
-                // (matching AppShell's own `_sidebarBreakpoint` source, per
-                // the second attempt) since that part was already correct.
-                const outerPadding = 20.0;
-                const spacing = 16.0;
-                final availableWidth = constraints.maxWidth - outerPadding * 2;
-                final columns = MediaQuery.of(context).size.width >= 900 ? 2 : 1;
-                final panelWidth = columns == 2 ? (availableWidth - spacing) / 2 : availableWidth;
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.all(outerPadding),
-                  child: Wrap(
-                    spacing: spacing,
-                    runSpacing: spacing,
-                    children: [
-                      for (final panel in panels)
-                        SizedBox(
-                          width: panelWidth,
-                          child: _DimensionPanel(
-                            panel: panel,
-                            // Row click -> global cross-filter (Craig,
-                            // 2026-09-08 — see `applyRowCrossFilters`'s own
-                            // doc comment, core/filters/global_filters.dart).
-                            // No date on this screen's rows (each is a whole
-                            // fiscal year's rollup for one entity), so only
-                            // this panel's own dimension gets set.
-                            onEntityTap: (selection) => applyRowCrossFilters(
-                              ref,
-                              dimensions: {panel.dimension.dimensionKey: selection},
-                            ),
-                          ),
-                        ),
-                    ],
+            // 2026-09-08, Craig: "two tables next to each other... this will
+            // hopefully work in Desktop view and maybe Tablet. When it
+            // becomes too narrow then revert to a single table." — matches
+            // AppShell's own `_sidebarBreakpoint` source (the true window
+            // width, not this widget's own net content width — see git
+            // history for two earlier attempts that got that distinction
+            // wrong).
+            const outerPadding = 20.0;
+            const spacing = 16.0;
+            final columns = MediaQuery.of(context).size.width >= 900 ? 2 : 1;
+
+            Widget panelWidget(_PanelData panel) => _DimensionPanel(
+                  panel: panel,
+                  // Row click -> global cross-filter (Craig, 2026-09-08 —
+                  // see `applyRowCrossFilters`'s own doc comment, core/
+                  // filters/global_filters.dart). No date on this screen's
+                  // rows (each is a whole fiscal year's rollup for one
+                  // entity), so only this panel's own dimension gets set.
+                  onEntityTap: (selection) => applyRowCrossFilters(
+                    ref,
+                    dimensions: {panel.dimension.dimensionKey: selection},
                   ),
                 );
-              },
+
+            Widget body;
+            if (columns == 1) {
+              body = Column(
+                children: [
+                  for (final panel in panels)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: spacing),
+                      child: panelWidget(panel),
+                    ),
+                ],
+              );
+            } else {
+              // Masonry-style column packing (2026-09-08, Craig: a
+              // screenshot of the Business Unit panel sitting under a
+              // visible gap of white space — "can we move this up to fill
+              // the white space"). A plain two-per-row `Wrap` (the previous
+              // approach here) pairs panel N (left) with panel N+1 (right)
+              // into the same "row," whose height is whichever of the two
+              // is taller — a shorter left panel (e.g. Category Type, few
+              // rows) paired against a taller right panel (e.g. Revenue
+              // Split, many rows) left a gap under the short one before the
+              // NEXT row (Business Unit) could start, even though Business
+              // Unit had plenty of room to simply continue further up the
+              // left column instead. Fixed by distributing panels into
+              // `columns` independent vertical stacks up front — greedily,
+              // always adding the next panel to whichever column's running
+              // (estimated) height is currently shortest — rather than
+              // pairing them up strictly in declaration order. Each
+              // column's own panels then just stack back to back with no
+              // forced row-height gaps between them. Not a pixel-perfect
+              // balance (`_estimatedPanelHeight` is an approximation — see
+              // its own doc comment), just a much better one than pairing
+              // by position alone.
+              final columnPanels = List.generate(columns, (_) => <_PanelData>[]);
+              final columnHeights = List<double>.filled(columns, 0);
+              for (final panel in panels) {
+                var shortest = 0;
+                for (var i = 1; i < columns; i++) {
+                  if (columnHeights[i] < columnHeights[shortest]) shortest = i;
+                }
+                columnPanels[shortest].add(panel);
+                columnHeights[shortest] += _estimatedPanelHeight(panel) + spacing;
+              }
+              body = Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var c = 0; c < columns; c++) ...[
+                    if (c > 0) const SizedBox(width: spacing),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          for (final panel in columnPanels[c])
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: spacing),
+                              child: panelWidget(panel),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            }
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(outerPadding),
+              child: body,
             );
           },
         );
@@ -377,9 +423,11 @@ class _DimensionPanelState extends State<_DimensionPanel> {
               // `ResponsiveDataTable` gets that for free from an ancestor
               // `Expanded` inside a full-height `Column` (see
               // SalesByScreen.build()'s own `Expanded(child: _buildTable(...))`).
-              // This panel instead sits inside a `Wrap` (so two can sit side
-              // by side), which hands its children unconstrained height —
-              // so a fixed height is worked out explicitly here instead, from
+              // This panel instead sits inside a masonry `Column` (so two
+              // columns can sit side by side — see
+              // `_DashboardTableViewState.build()`'s own doc comment), which
+              // hands its children unconstrained height — so a fixed height
+              // is worked out explicitly here instead, from
               // the actual row count about to be rendered (header + the
               // pinned Total row + up to 5 entity rows), rather than left
               // to an ancestor that was never going to bound it.
