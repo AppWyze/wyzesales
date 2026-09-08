@@ -195,30 +195,43 @@ class SalesRepository {
     GlobalFilters? filters,
   }) async {
     if (!_hasCrossFilters(filters)) {
-      var query = supabase.from('v_dimension_monthly_sales').select().eq('dimension', dimension);
-      if (entityCode != null) query = query.eq('entity_code', entityCode);
-      if (fiscalYears != null && fiscalYears.isNotEmpty) {
-        query = query.inFilter('fiscal_year', fiscalYears);
-      }
-      final rows = await query.order('month');
+      // _fetchAllRows, not a bare `await query...` — see that method's own
+      // doc comment. 2026-09-08, Craig: "2024 data is missing"... "it works
+      // if you call up by customer specific... but not as the entire
+      // bunch" — this exact unbounded query, for the one dimension
+      // (Customer) with enough distinct entities to actually cross this
+      // project's Max Rows API cap.
+      final rows = await _fetchAllRows(() {
+        var query = supabase.from('v_dimension_monthly_sales').select().eq('dimension', dimension);
+        if (entityCode != null) query = query.eq('entity_code', entityCode);
+        if (fiscalYears != null && fiscalYears.isNotEmpty) {
+          query = query.inFilter('fiscal_year', fiscalYears);
+        }
+        return query.order('month');
+      });
       return rows.map<DimensionMonthlySales>((r) => DimensionMonthlySales.fromMap(r)).toList();
     }
 
-    final rows = await supabase.rpc('fn_dimension_monthly_sales_filtered', params: {
-      'p_dimension': dimension,
-      'p_entity_code': entityCode,
-      'p_fiscal_years': fiscalYears,
-      'p_fiscal_month': filters!.fiscalMonth,
-      'p_filters': filters.toFilterParams(),
-      // 2026-09-07 (schema/047) — Quarter, resolved to concrete fiscal
-      // months once already by GlobalFiltersNotifier.setFiscalQuarter (see
-      // GlobalFilters.fiscalQuarterMonths' own doc comment); this repository
-      // has no `ref`/startMonth of its own to resolve 'Q1' itself, so it
-      // just forwards the already-resolved list, same as it's always just
-      // forwarded the already-resolved `fiscalMonth` string above.
-      'p_fiscal_quarter_months': filters.fiscalQuarterMonths,
-    });
-    return (rows as List).map<DimensionMonthlySales>((r) => DimensionMonthlySales.fromMap(r as Map<String, dynamic>)).toList();
+    // Also paginated (see _fetchAllRows) — PostgREST's Max Rows cap applies
+    // to a `rpc()` call returning a table/set exactly the same way it does
+    // to a plain view query (there's no separate, more generous default for
+    // RPC), so this path carried the identical latent bug even though
+    // nothing had yet surfaced it live.
+    final rows = await _fetchAllRows(() => supabase.rpc('fn_dimension_monthly_sales_filtered', params: {
+          'p_dimension': dimension,
+          'p_entity_code': entityCode,
+          'p_fiscal_years': fiscalYears,
+          'p_fiscal_month': filters!.fiscalMonth,
+          'p_filters': filters.toFilterParams(),
+          // 2026-09-07 (schema/047) — Quarter, resolved to concrete fiscal
+          // months once already by GlobalFiltersNotifier.setFiscalQuarter (see
+          // GlobalFilters.fiscalQuarterMonths' own doc comment); this repository
+          // has no `ref`/startMonth of its own to resolve 'Q1' itself, so it
+          // just forwards the already-resolved list, same as it's always just
+          // forwarded the already-resolved `fiscalMonth` string above.
+          'p_fiscal_quarter_months': filters.fiscalQuarterMonths,
+        }));
+    return rows.map<DimensionMonthlySales>((r) => DimensionMonthlySales.fromMap(r)).toList();
   }
 
   /// Whole-company monthly trend — Sales Analysis' Graph tab, and the
@@ -277,24 +290,31 @@ class SalesRepository {
     final hasDimensionFilters = filters != null && filters.hasAnyDimensionSelected;
 
     if (!hasDimensionFilters) {
-      var query = supabase.from('v_dimension_performance').select().eq('dimension', dimension);
-      if (entityCode != null) query = query.eq('entity_code', entityCode);
-      if (fiscalYear != null) query = query.eq('fiscal_year', fiscalYear);
-      if (fiscalMonth != null) query = query.eq('fiscal_month', fiscalMonth);
-      if (fiscalQuarterMonths != null) query = query.inFilter('fiscal_month', fiscalQuarterMonths);
-      final rows = await query.order('fiscal_year').order('fiscal_month');
+      // _fetchAllRows — same fix, same reason, as fetchDimensionMonthlySales'
+      // identical plain-view branch above: Performance is per-entity-per-
+      // month too, so a client with a large Customer dimension carries the
+      // exact same risk here, even though this specific method hasn't yet
+      // been reported broken live.
+      final rows = await _fetchAllRows(() {
+        var query = supabase.from('v_dimension_performance').select().eq('dimension', dimension);
+        if (entityCode != null) query = query.eq('entity_code', entityCode);
+        if (fiscalYear != null) query = query.eq('fiscal_year', fiscalYear);
+        if (fiscalMonth != null) query = query.eq('fiscal_month', fiscalMonth);
+        if (fiscalQuarterMonths != null) query = query.inFilter('fiscal_month', fiscalQuarterMonths);
+        return query.order('fiscal_year').order('fiscal_month');
+      });
       return rows.map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r)).toList();
     }
 
-    final rows = await supabase.rpc('fn_dimension_performance_filtered', params: {
-      'p_dimension': dimension,
-      'p_entity_code': entityCode,
-      'p_fiscal_year': fiscalYear,
-      'p_fiscal_month': fiscalMonth,
-      'p_filters': filters.toFilterParams(),
-      'p_fiscal_quarter_months': fiscalQuarterMonths,
-    });
-    return (rows as List).map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r as Map<String, dynamic>)).toList();
+    final rows = await _fetchAllRows(() => supabase.rpc('fn_dimension_performance_filtered', params: {
+          'p_dimension': dimension,
+          'p_entity_code': entityCode,
+          'p_fiscal_year': fiscalYear,
+          'p_fiscal_month': fiscalMonth,
+          'p_filters': filters.toFilterParams(),
+          'p_fiscal_quarter_months': fiscalQuarterMonths,
+        }));
+    return rows.map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r)).toList();
   }
 
   /// Raw inputs for the "% Coverage Needed" calc (task #93/#101,
@@ -309,11 +329,15 @@ class SalesRepository {
   /// standalone historical baseline, deliberately independent of whatever
   /// period Performance Analysis currently has filtered.
   Future<List<EntitySalesHistory>> fetchSalesHistory({required String dimension, required List<int> fiscalYears}) async {
-    final rows = await supabase.rpc('fn_dimension_sales_history', params: {
-      'p_dimension': dimension,
-      'p_fiscal_years': fiscalYears,
-    });
-    return (rows as List).map<EntitySalesHistory>((r) => EntitySalesHistory.fromMap(r as Map<String, dynamic>)).toList();
+    // _fetchAllRows — this returns one row per ENTITY (every customer/rep/
+    // etc. on record, all at once, for the "% Coverage Needed" calc), so it
+    // carries the exact same large-Customer-dimension risk as the two
+    // methods above, for the same reason.
+    final rows = await _fetchAllRows(() => supabase.rpc('fn_dimension_sales_history', params: {
+          'p_dimension': dimension,
+          'p_fiscal_years': fiscalYears,
+        }));
+    return rows.map<EntitySalesHistory>((r) => EntitySalesHistory.fromMap(r)).toList();
   }
 
   /// True when `filters` carries anything a plain single-dimension rollup
@@ -325,5 +349,57 @@ class SalesRepository {
   bool _hasCrossFilters(GlobalFilters? filters) {
     if (filters == null) return false;
     return filters.hasAnyDimensionSelected || filters.fiscalMonth != null || filters.fiscalQuarter != null;
+  }
+
+  /// A plain `.from(...).select()...` view query — or an `rpc()` call
+  /// returning a table/set, which PostgREST treats the same way — with no
+  /// explicit `.range()` on it is silently capped at this Supabase
+  /// project's own "Max Rows" API setting (Settings > API; 1000 by default
+  /// on a new project, admin-configurable). There's no error and no signal
+  /// anything was cut off: `await query` looks identical whether the true
+  /// result set was 12 rows or 12,000.
+  ///
+  /// This codebase already hit this once, for a different query — Sales
+  /// Analysis' Table tab (2026-08-27, Craig: "What happens when there
+  /// [are] 4000 lines?" — see fn_sales_documents_page, schema/012, this
+  /// repository's own fetchSalesDocumentsPage). That fix only covered that
+  /// one query, via real server-side LIMIT/OFFSET; every other unbounded
+  /// query in this class carried the identical latent bug, just waiting for
+  /// a result set large enough to actually cross whatever this project's
+  /// cap happens to be.
+  ///
+  /// 2026-09-08, Craig (Sales by Customer): "2024 data is missing"... "it
+  /// works if you call up by customer specific... but not as the entire
+  /// bunch" — traced to exactly this. Customer is the one dimension with
+  /// dramatically more distinct entities than any other WyzeSales client
+  /// dimension (Edgetec: ~140 customers vs. a handful of sales reps/
+  /// categories/branches/generic dimensions), so its (entity × month) row
+  /// count for a multi-fiscal-year window was the first — and, so far,
+  /// only — one to actually cross the line. Every other dimension's result
+  /// set was small enough to slip under the cap by accident, not because
+  /// its own query was actually safe.
+  ///
+  /// Pages through `buildQuery()` — which MUST build and return a fresh
+  /// query each call, not reuse one already awaited — in `_pageSize`-row
+  /// windows via `.range()`, advancing by however many rows actually came
+  /// back (not by `_pageSize`) and stopping only on a genuinely EMPTY page.
+  /// That's the one stop condition that's correct no matter what this
+  /// project's own Max Rows setting actually is: if that setting happens to
+  /// be smaller than `_pageSize`, every `.range()` request would come back
+  /// "short" long before the real end of the data, so "shorter than asked
+  /// for" can't be trusted as an end-of-data signal on its own — only an
+  /// outright empty page can.
+  static const int _pageSize = 1000;
+
+  Future<List<Map<String, dynamic>>> _fetchAllRows(dynamic Function() buildQuery) async {
+    final all = <Map<String, dynamic>>[];
+    var start = 0;
+    while (true) {
+      final List page = await buildQuery().range(start, start + _pageSize - 1);
+      if (page.isEmpty) break;
+      all.addAll(page.cast<Map<String, dynamic>>());
+      start += page.length;
+    }
+    return all;
   }
 }
