@@ -98,37 +98,41 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
                 // will hopefully work in Desktop view and maybe Tablet. When
                 // it becomes too narrow then revert to a single table."
                 //
-                // Two prior attempts at a `constraints.maxWidth` threshold
-                // both missed: first 1050 (estimated from ResponsiveDataTable's
-                // per-column width floor, too conservative), then 900 to
-                // match AppShell's own `_sidebarBreakpoint` — but that
-                // second attempt compared the wrong width. `constraints.
-                // maxWidth` here is this widget's own CONTENT area, already
-                // net of AppShell's 260px-wide sidebar (app_shell.dart:
-                // `if (isWide) SizedBox(width: 260, child: sidebar)`) —
-                // `_sidebarBreakpoint` itself is checked against the FULL
-                // WINDOW width (`MediaQuery...size.width`), a different
-                // number. Comparing content width to 900 actually required
-                // a ~1160px WINDOW (900 + 260 sidebar) — wider than even
-                // the original, too-conservative 1050 attempt, which is
-                // exactly why Craig's sidebar-still-expanded screenshot
-                // still showed 1 column after that "fix".
+                // THREE attempts at this now — the first two only ever
+                // touched the yes/no THRESHOLD (1050, then 900 matched
+                // against the wrong width — full window vs. this widget's
+                // own net content width, see git history), but the real bug
+                // was never the threshold at all: it's that `panelWidth`
+                // below was computed from the raw `constraints.maxWidth`
+                // this `LayoutBuilder` measures, while the `Wrap` those
+                // panels actually sit in is nested one level deeper, inside
+                // a `SingleChildScrollView` with `padding: EdgeInsets.all
+                // (20)` — 40px of horizontal padding this math never
+                // accounted for. Two panels at exactly `(constraints.
+                // maxWidth - spacing) / 2` each, plus the spacing between
+                // them, always summed to exactly `constraints.maxWidth` —
+                // but the padded `Wrap` never actually had more than
+                // `constraints.maxWidth - 40` to lay them out in, so the
+                // second panel was 40px too wide to fit on the same line as
+                // the first, EVERY time, on ANY window width, regardless of
+                // whatever `columns` had already correctly decided. This is
+                // why both prior threshold fixes appeared to do nothing —
+                // neither one touched the actual reason two panels could
+                // never physically coexist on one line.
                 //
-                // Fixed properly this time: read the window width directly
-                // (same source AppShell's own `_sidebarBreakpoint` reads)
-                // and compare THAT to the sidebar's own threshold — "two
-                // panels whenever the sidebar itself is showing" is
-                // literally the equivalence Craig described, so there's no
-                // more guessing at a second, independent content-width
-                // number that has to happen to line up with it.
-                // `constraints.maxWidth` (the actual net content width) is
-                // still what sizes each panel below — only the yes/no
-                // decision now comes from the window width.
+                // Fixed by computing the padding-adjusted available width
+                // FIRST, then sizing panels from that — not the raw,
+                // pre-padding `constraints.maxWidth`. The column-count
+                // decision itself still reads the true window width
+                // (matching AppShell's own `_sidebarBreakpoint` source, per
+                // the second attempt) since that part was already correct.
+                const outerPadding = 20.0;
                 const spacing = 16.0;
+                final availableWidth = constraints.maxWidth - outerPadding * 2;
                 final columns = MediaQuery.of(context).size.width >= 900 ? 2 : 1;
-                final panelWidth = columns == 2 ? (constraints.maxWidth - spacing) / 2 : constraints.maxWidth;
+                final panelWidth = columns == 2 ? (availableWidth - spacing) / 2 : availableWidth;
                 return SingleChildScrollView(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(outerPadding),
                   child: Wrap(
                     spacing: spacing,
                     runSpacing: spacing,
@@ -308,7 +312,26 @@ class _DimensionPanelState extends State<_DimensionPanel> {
       }
       return _sortAscending ? cmp : -cmp;
     });
-    final visibleRows = allRows.take(_visibleRowCount).toList();
+
+    // 2026-09-08, Craig (round 2): "Size each list to only show 5 rows plus
+    // a total but allow for vertical scrolling for the rest and remove the
+    // 'showing x or x'." — previously this `.take(_visibleRowCount)`
+    // PERMANENTLY dropped every row past the 5th; the panel's own height
+    // was already capped to roughly fit 5 rows + Total, so scrolling to see
+    // the rest was never actually possible, just quietly unavailable. Every
+    // row now reaches the table (`allRows`, unsliced, below) — `DataTable2`
+    // (behind `ResponsiveDataTable`) always owns and manages its own
+    // internal vertical scroll region once given a bounded height
+    // (`scrollsVertically`/`isVerticalScrollBarVisible` only ever controlled
+    // whether the scrollBAR itself is drawn, never whether scrolling
+    // worked — see that widget's own doc comment), so keeping the SAME
+    // fixed height below and just handing it every row is enough on its
+    // own to make the rest reachable by scrolling, with no other change
+    // needed to that widget. `visibleRowCountForHeight` (not
+    // `allRows.length`) is what still sizes the box — a panel with only 3
+    // entities should size to fit exactly those 3, not pad out to a
+    // 5-row-tall box with nothing in it.
+    final visibleRowCountForHeight = allRows.length < _visibleRowCount ? allRows.length : _visibleRowCount;
 
     const totalStyle = TextStyle(fontWeight: FontWeight.bold);
 
@@ -343,7 +366,7 @@ class _DimensionPanelState extends State<_DimensionPanel> {
               // pinned Total row + up to 5 entity rows), rather than left
               // to an ancestor that was never going to bound it.
               SizedBox(
-                height: 56 + (1 + visibleRows.length) * 52,
+                height: 56 + (1 + visibleRowCountForHeight) * 52,
                 child: ResponsiveDataTable(
                   sortColumnIndex: _sortColumnIndex,
                   sortAscending: _sortAscending,
@@ -374,7 +397,7 @@ class _DimensionPanelState extends State<_DimensionPanel> {
                         DataCell(Text(formatPercent(totalGp), style: totalStyle)),
                       ],
                     ),
-                    for (final row in visibleRows)
+                    for (final row in allRows)
                       DataRow(
                         onSelectChanged: (_) => widget.onEntityTap(FilterSelection(row.code, row.label)),
                         cells: [
@@ -387,14 +410,11 @@ class _DimensionPanelState extends State<_DimensionPanel> {
                   ],
                 ),
               ),
-              if (allRows.length > _visibleRowCount)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    'Showing $_visibleRowCount of ${allRows.length} — sort a column to change which ones.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
+              // 2026-09-08, Craig (round 2): "remove the 'showing x or x'" —
+              // no longer needed now that the rest of the list is one
+              // scroll away inside the panel itself, rather than
+              // permanently cut off (see `visibleRowCountForHeight`'s own
+              // doc comment above).
         ],
       ],
     );
