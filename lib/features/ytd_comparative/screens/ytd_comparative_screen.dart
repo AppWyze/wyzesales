@@ -32,6 +32,34 @@ class _YtdRow {
   const _YtdRow(this.monthLabel, this.yearValues);
 }
 
+/// A single data column in the year comparison — either one fiscal year's
+/// value, or the variance % between it and the next-older year.
+///
+/// 2026-09-08 (Craig, screenshots of the original app): columns render as
+/// "newest year, next-older year, variance between those two, next-older
+/// year, variance between THAT pair, ..." — e.g. for fiscal years
+/// [2024, 2025, 2026]: FY2026, FY2025, vs FY2025 (2026-vs-2025), FY2024,
+/// vs FY2024 (2025-vs-2024). That is deliberately NOT "each year
+/// immediately followed by its own variance" (FY2026, vs FY2025, FY2025,
+/// vs FY2024, FY2024), which is what this screen rendered before and which
+/// put every variance one column too early compared to the original app.
+class _YearColumn {
+  const _YearColumn.value(this.year) : previousYear = null;
+  const _YearColumn.variance(this.year, int previous) : previousYear = previous;
+
+  /// The year this column is about. For a value column, the year whose
+  /// total is shown. For a variance column, the NEWER of the two years
+  /// being compared (matches the "vs FY<previousYear>" header label, which
+  /// names the OLDER one).
+  final int year;
+
+  /// Non-null only for a variance column — the OLDER year [year] is being
+  /// compared against.
+  final int? previousYear;
+
+  bool get isVariance => previousYear != null;
+}
+
 class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
   ValueMeasure _measure = ValueMeasure.rValue;
   late final List<int> _fiscalYears;
@@ -126,29 +154,31 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     );
   }
 
+  /// The full ordered column list for the fiscal-year comparison — see
+  /// `_YearColumn`'s own doc comment for the exact interleaving.
+  List<_YearColumn> _yearColumns() {
+    // Newest fiscal year first (2026-09-01, Craig: "the user having to
+    // scroll to right to view the most recent data").
+    final order = [for (var i = _fiscalYears.length - 1; i >= 0; i--) _fiscalYears[i]];
+    final columns = <_YearColumn>[];
+    for (var idx = 0; idx < order.length; idx++) {
+      columns.add(_YearColumn.value(order[idx]));
+      if (idx > 0) columns.add(_YearColumn.variance(order[idx - 1], order[idx]));
+    }
+    return columns;
+  }
+
   /// Value for whichever column `columnIndex` is, matching the exact same
   /// column layout `_buildTable` lays out below — column 0 is the month
   /// label (handled separately, since it sorts by fiscal-month position, not
-  /// by value); every column after that is either a fiscal year's value or
-  /// a "vs prior FY" variance, alternating per `_fiscalYears`.
+  /// by value); every column after that is `_yearColumns()[columnIndex - 1]`.
   num? _valueForColumn(_YtdRow row, int columnIndex) {
-    var position = 1;
-    // Newest fiscal year first (2026-09-01, Craig: "the user having to
-    // scroll to right to view the most recent data") — walked newest to
-    // oldest so column positions match _buildTable's new left-to-right
-    // order; "vs" still compares to _fiscalYears[i-1], the chronologically
-    // prior year, not whichever column sits to its left.
-    for (var i = _fiscalYears.length - 1; i >= 0; i--) {
-      if (columnIndex == position) return row.yearValues[_fiscalYears[i]];
-      position++;
-      if (i > 0) {
-        if (columnIndex == position) {
-          return variancePercent(row.yearValues[_fiscalYears[i]], row.yearValues[_fiscalYears[i - 1]]);
-        }
-        position++;
-      }
-    }
-    return null;
+    final columns = _yearColumns();
+    final idx = columnIndex - 1;
+    if (idx < 0 || idx >= columns.length) return null;
+    final col = columns[idx];
+    if (!col.isVariance) return row.yearValues[col.year];
+    return variancePercent(row.yearValues[col.year], row.yearValues[col.previousYear]);
   }
 
   int _compareRows(_YtdRow a, _YtdRow b, int columnIndex) {
@@ -191,34 +221,31 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
 
     num yearTotal(int year) => ytdRows.fold<num>(0, (sum, row) => sum + (row.yearValues[year] ?? 0));
 
-    // Newest fiscal year first — matches the on-screen table (see
-    // _valueForColumn's doc comment) so the export lines up with what's
-    // displayed.
+    // Matches the on-screen table (see `_YearColumn`'s doc comment) so the
+    // export lines up with what's displayed.
+    final columns = _yearColumns();
     final totalsRow = <String>['Total'];
-    for (var i = _fiscalYears.length - 1; i >= 0; i--) {
-      final current = yearTotal(_fiscalYears[i]);
-      totalsRow.add(formatRand(current));
-      if (i > 0) totalsRow.add(_varianceLabel(current, yearTotal(_fiscalYears[i - 1])));
+    for (final col in columns) {
+      totalsRow.add(
+        col.isVariance ? _varianceLabel(yearTotal(col.year), yearTotal(col.previousYear!)) : formatRand(yearTotal(col.year)),
+      );
     }
 
     final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
     return ExportData(
       headers: [
         'Month',
-        for (var i = _fiscalYears.length - 1; i >= 0; i--) ...[
-          'FY${_fiscalYears[i]}',
-          if (i > 0) 'vs FY${_fiscalYears[i - 1]}',
-        ],
+        for (final col in columns) col.isVariance ? 'vs FY${col.previousYear}' : 'FY${col.year}',
       ],
       rows: [
         totalsRow,
         for (final row in ytdRows)
           [
             row.monthLabel,
-            for (var i = _fiscalYears.length - 1; i >= 0; i--) ...[
-              formatRand(row.yearValues[_fiscalYears[i]]),
-              if (i > 0) _varianceLabel(row.yearValues[_fiscalYears[i]], row.yearValues[_fiscalYears[i - 1]]),
-            ],
+            for (final col in columns)
+              col.isVariance
+                  ? _varianceLabel(row.yearValues[col.year], row.yearValues[col.previousYear])
+                  : formatRand(row.yearValues[col.year]),
           ],
       ],
       fileNameBase: 'wyzesales_ytd_comparative_${DateTime.now().millisecondsSinceEpoch}',
@@ -243,21 +270,24 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
       pinnedRowCount: 1,
       columns: [
         DataColumn(label: const Text('Month'), onSort: _onSort),
-        // Newest fiscal year first — see _valueForColumn's doc comment.
-        for (var i = _fiscalYears.length - 1; i >= 0; i--) ...[
-          DataColumn(label: Text('FY${_fiscalYears[i]}'), numeric: true, onSort: _onSort),
-          if (i > 0) DataColumn(label: Text('vs FY${_fiscalYears[i - 1]}'), numeric: true, onSort: _onSort),
-        ],
+        // See `_YearColumn`'s doc comment for the column order.
+        for (final col in _yearColumns())
+          DataColumn(
+            label: Text(col.isVariance ? 'vs FY${col.previousYear}' : 'FY${col.year}'),
+            numeric: true,
+            onSort: _onSort,
+          ),
       ],
       rows: [
         _totalsRow(context, ytdRows),
         ...ytdRows.map((row) {
           final cells = <DataCell>[DataCell(Text(row.monthLabel))];
-          for (var i = _fiscalYears.length - 1; i >= 0; i--) {
-            final current = row.yearValues[_fiscalYears[i]];
-            cells.add(DataCell(Text(formatRand(current))));
-            if (i > 0) {
-              final previous = row.yearValues[_fiscalYears[i - 1]];
+          for (final col in _yearColumns()) {
+            if (!col.isVariance) {
+              cells.add(DataCell(Text(formatRand(row.yearValues[col.year]))));
+            } else {
+              final current = row.yearValues[col.year];
+              final previous = row.yearValues[col.previousYear];
               final variance = variancePercent(current, previous);
               final color = variance == null
                   ? null
@@ -301,11 +331,12 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     num yearTotal(int year) => ytdRows.fold<num>(0, (sum, row) => sum + (row.yearValues[year] ?? 0));
     const style = TextStyle(fontWeight: FontWeight.bold);
     final cells = <DataCell>[const DataCell(Text('Total', style: style))];
-    for (var i = _fiscalYears.length - 1; i >= 0; i--) {
-      final current = yearTotal(_fiscalYears[i]);
-      cells.add(DataCell(Text(formatRand(current), style: style)));
-      if (i > 0) {
-        final previous = yearTotal(_fiscalYears[i - 1]);
+    for (final col in _yearColumns()) {
+      if (!col.isVariance) {
+        cells.add(DataCell(Text(formatRand(yearTotal(col.year)), style: style)));
+      } else {
+        final current = yearTotal(col.year);
+        final previous = yearTotal(col.previousYear!);
         final variance = variancePercent(current, previous);
         final color = variance == null ? null : (variance < 0 ? Theme.of(context).colorScheme.error : null);
         cells.add(DataCell(Text(variance == null ? '—' : formatPercent(variance), style: style.copyWith(color: color))));

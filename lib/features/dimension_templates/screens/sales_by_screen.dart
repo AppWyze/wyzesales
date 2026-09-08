@@ -89,6 +89,50 @@ class _ColumnPositions {
   final int? latestMonthVariance;
 }
 
+/// A single data column in either the fiscal-year or recent-month
+/// comparison — either one period's value, or the variance % between it
+/// and the next-older period. `T` is `int` (a fiscal year) or `DateTime`
+/// (a month).
+///
+/// 2026-09-08 (Craig, screenshots of the original app): columns render as
+/// "newest period, next-older period, variance between those two,
+/// next-older period, variance between THAT pair, ..." — e.g. for years
+/// [2024, 2025, 2026]: 2026, 2025, vs 2025 (2026-vs-2025), 2024, vs 2024
+/// (2025-vs-2024). That is deliberately NOT "each period immediately
+/// followed by its own variance", which is what this screen rendered
+/// before and which put every variance one column too early compared to
+/// the original app.
+class _RangeColumn<T> {
+  const _RangeColumn.value(this.current) : previous = null;
+  const _RangeColumn.variance(this.current, this.previous);
+
+  /// The period this column is about. For a value column, the period whose
+  /// total is shown. For a variance column, the NEWER of the two periods
+  /// being compared.
+  final T current;
+
+  /// Non-null only for a variance column — the OLDER period [current] is
+  /// being compared against.
+  final T? previous;
+
+  bool get isVariance => previous != null;
+}
+
+/// Reorders an ascending (oldest-first) list of periods into `_RangeColumn`s
+/// in the "newest, next, variance, next, variance, ..." order documented on
+/// `_RangeColumn` above. Used for both the fiscal-year list (already
+/// ascending) and the recent-months `chronological` list (also built
+/// oldest-first — see `_buildTable`'s own comment on that variable).
+List<_RangeColumn<T>> _interleavedNewestFirst<T>(List<T> ascending) {
+  final order = ascending.reversed.toList();
+  final columns = <_RangeColumn<T>>[];
+  for (var idx = 0; idx < order.length; idx++) {
+    columns.add(_RangeColumn.value(order[idx]));
+    if (idx > 0) columns.add(_RangeColumn.variance(order[idx - 1], order[idx]));
+  }
+  return columns;
+}
+
 class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   ValueMeasure _measure = ValueMeasure.rValue;
 
@@ -231,34 +275,31 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   }
 
   _ColumnPositions _columnPositions(_SalesByData data, List<DateTime> chronological) {
+    // See `_RangeColumn`'s doc comment for the column order these walk in —
+    // the current FY's own value is always the first year column (position
+    // 1), but its variance now sits at position 3 (after the next-older
+    // year's value), not position 2, since 2026-09-08's reordering to match
+    // the original app's column layout.
     var position = 1;
     int? currentFYValue;
     int? currentFYVariance;
-    // Newest fiscal year first (2026-09-01, Craig: "the user having to
-    // scroll to right to view the most recent data") — walked newest to
-    // oldest so the current FY's value/variance columns are always captured
-    // by the `??=` below on the FIRST iteration only, landing them at
-    // positions 1/2 regardless of how many years the history window holds.
-    // Each "vs" variance still compares to fiscalYears[i-1] — the
-    // chronologically PRIOR year — not whichever column sits to its left.
-    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
-      currentFYValue ??= position;
-      position++;
-      if (i > 0) {
+    for (final col in _interleavedNewestFirst(data.fiscalYears)) {
+      if (!col.isVariance) {
+        currentFYValue ??= position;
+      } else {
         currentFYVariance ??= position;
-        position++;
       }
+      position++;
     }
     int? latestMonthValue;
     int? latestMonthVariance;
-    for (var i = 0; i < chronological.length; i++) {
-      latestMonthValue = position;
-      position++;
-      latestMonthVariance = null;
-      if (i > 0) {
-        latestMonthVariance = position;
-        position++;
+    for (final col in _interleavedNewestFirst(chronological)) {
+      if (!col.isVariance) {
+        latestMonthValue ??= position;
+      } else {
+        latestMonthVariance ??= position;
       }
+      position++;
     }
     return _ColumnPositions(
       // data.fiscalYears is never empty in practice (historyYears is always
@@ -281,23 +322,26 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   /// Rand amounts, not percentages (see _resolveInitialRank's doc comment).
   List<num? Function(String code)> _columnValueExtractors(_SalesByData data, List<DateTime> chronological) {
     final extractors = <num? Function(String code)>[];
-    // Newest fiscal year first — see _columnPositions' doc comment. Walking
-    // i from the end down to 0 makes the order extractors are appended in
-    // match the new left-to-right column order exactly; "vs" still compares
-    // to fiscalYears[i-1], the chronologically prior year.
-    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
-      final year = data.fiscalYears[i];
-      extractors.add((code) => data.yearTotals[code]?[year]);
-      if (i > 0) {
-        final previousYear = data.fiscalYears[i - 1];
+    // See `_RangeColumn`'s doc comment — this order must match the columns
+    // `_buildTable` and `_columnPositions` lay out exactly, since sorting
+    // indexes into this list by column position.
+    for (final col in _interleavedNewestFirst(data.fiscalYears)) {
+      if (!col.isVariance) {
+        final year = col.current;
+        extractors.add((code) => data.yearTotals[code]?[year]);
+      } else {
+        final year = col.current;
+        final previousYear = col.previous!;
         extractors.add((code) => variancePercent(data.yearTotals[code]?[year], data.yearTotals[code]?[previousYear]));
       }
     }
-    for (var i = 0; i < chronological.length; i++) {
-      final month = chronological[i];
-      extractors.add((code) => data.monthTotals[code]?[month]);
-      if (i > 0) {
-        final previousMonth = chronological[i - 1];
+    for (final col in _interleavedNewestFirst(chronological)) {
+      if (!col.isVariance) {
+        final month = col.current;
+        extractors.add((code) => data.monthTotals[code]?[month]);
+      } else {
+        final month = col.current;
+        final previousMonth = col.previous!;
         extractors.add((code) => variancePercent(data.monthTotals[code]?[month], data.monthTotals[code]?[previousMonth]));
       }
     }
@@ -438,16 +482,17 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   }
 
   Widget _buildTable(BuildContext context, _SalesByData data, String dimensionLabel) {
-    // recentMonths is sorted most-recent-first; walked oldest-to-newest here
-    // — same direction as the FY columns (FY2025 -> FY2026 -> FY2027, each
-    // "vs" comparing back to the column on its left) — so "vs prior month"
-    // reads left-to-right chronologically. Computed once and shared by the
-    // header loop, the row-cell loop, and the sort machinery below, all of
-    // which must agree on the same column order (a prior version had the
-    // header loop and the cell loop iterating two different orderings,
-    // which silently swapped two columns' data under each other's headers
-    // — caught 2026-08-26 when Craig cross-checked the Dashboard's MTD pie
-    // against this table).
+    // recentMonths is sorted most-recent-first; kept here as the reverse
+    // (oldest-first/ascending) since that's the shape `_interleavedNewestFirst`
+    // expects (same shape as the ascending `data.fiscalYears` list) — it
+    // re-reverses internally to lay columns out newest-first (see
+    // `_RangeColumn`'s doc comment for the exact column order). Computed
+    // once and shared by the header loop, the row-cell loop, and the sort
+    // machinery below, all of which must agree on the same column order (a
+    // prior version had the header loop and the cell loop iterating two
+    // different orderings, which silently swapped two columns' data under
+    // each other's headers — caught 2026-08-26 when Craig cross-checked the
+    // Dashboard's MTD pie against this table).
     final chronological = data.recentMonths.reversed.toList();
 
     if (_rankPending) {
@@ -481,6 +526,8 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     }
 
     final monthFormat = DateFormat('MMM yy');
+    final yearColumns = _interleavedNewestFirst(data.fiscalYears);
+    final monthColumns = _interleavedNewestFirst(chronological);
 
     return ResponsiveDataTable(
       sortColumnIndex: _sortColumnIndex,
@@ -492,33 +539,39 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       pinnedRowCount: 1,
       columns: [
         DataColumn(label: Text(dimensionLabel), onSort: _onSort),
-        // Newest fiscal year first — see _columnPositions' doc comment.
-        for (var i = data.fiscalYears.length - 1; i >= 0; i--) ...[
-          DataColumn(label: Text('FY${data.fiscalYears[i]}'), numeric: true, onSort: _onSort),
-          if (i > 0) DataColumn(label: Text('vs FY${data.fiscalYears[i - 1]}'), numeric: true, onSort: _onSort),
-        ],
-        for (var i = 0; i < chronological.length; i++) ...[
-          DataColumn(label: Text(monthFormat.format(chronological[i])), numeric: true, onSort: _onSort),
-          if (i > 0) DataColumn(label: const Text('vs prior month'), numeric: true, onSort: _onSort),
-        ],
+        // See `_RangeColumn`'s doc comment for the column order.
+        for (final col in yearColumns)
+          DataColumn(
+            label: Text(col.isVariance ? 'vs FY${col.previous}' : 'FY${col.current}'),
+            numeric: true,
+            onSort: _onSort,
+          ),
+        for (final col in monthColumns)
+          DataColumn(
+            label: Text(col.isVariance ? 'vs prior month' : monthFormat.format(col.current)),
+            numeric: true,
+            onSort: _onSort,
+          ),
       ],
       rows: [
         _totalsRow(context, data, chronological),
         ...entities.map((code) {
           final cells = <DataCell>[DataCell(Text(data.names[code] ?? code))];
-          for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
-            final current = data.yearTotals[code]?[data.fiscalYears[i]];
-            cells.add(DataCell(Text(formatRand(current))));
-            if (i > 0) {
-              final previous = data.yearTotals[code]?[data.fiscalYears[i - 1]];
+          for (final col in yearColumns) {
+            if (!col.isVariance) {
+              cells.add(DataCell(Text(formatRand(data.yearTotals[code]?[col.current]))));
+            } else {
+              final current = data.yearTotals[code]?[col.current];
+              final previous = data.yearTotals[code]?[col.previous];
               cells.add(DataCell(Text(_varianceLabel(current, previous))));
             }
           }
-          for (var i = 0; i < chronological.length; i++) {
-            final current = data.monthTotals[code]?[chronological[i]];
-            cells.add(DataCell(Text(formatRand(current))));
-            if (i > 0) {
-              final previous = data.monthTotals[code]?[chronological[i - 1]];
+          for (final col in monthColumns) {
+            if (!col.isVariance) {
+              cells.add(DataCell(Text(formatRand(data.monthTotals[code]?[col.current]))));
+            } else {
+              final current = data.monthTotals[code]?[col.current];
+              final previous = data.monthTotals[code]?[col.previous];
               cells.add(DataCell(Text(_varianceLabel(current, previous))));
             }
           }
@@ -563,20 +616,18 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
 
     const style = TextStyle(fontWeight: FontWeight.bold);
     final cells = <DataCell>[const DataCell(Text('Total', style: style))];
-    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
-      final current = yearTotal(data.fiscalYears[i]);
-      cells.add(DataCell(Text(formatRand(current), style: style)));
-      if (i > 0) {
-        final previous = yearTotal(data.fiscalYears[i - 1]);
-        cells.add(DataCell(Text(_varianceLabel(current, previous), style: style)));
+    for (final col in _interleavedNewestFirst(data.fiscalYears)) {
+      if (!col.isVariance) {
+        cells.add(DataCell(Text(formatRand(yearTotal(col.current)), style: style)));
+      } else {
+        cells.add(DataCell(Text(_varianceLabel(yearTotal(col.current), yearTotal(col.previous!)), style: style)));
       }
     }
-    for (var i = 0; i < chronological.length; i++) {
-      final current = monthTotal(chronological[i]);
-      cells.add(DataCell(Text(formatRand(current), style: style)));
-      if (i > 0) {
-        final previous = monthTotal(chronological[i - 1]);
-        cells.add(DataCell(Text(_varianceLabel(current, previous), style: style)));
+    for (final col in _interleavedNewestFirst(chronological)) {
+      if (!col.isVariance) {
+        cells.add(DataCell(Text(formatRand(monthTotal(col.current)), style: style)));
+      } else {
+        cells.add(DataCell(Text(_varianceLabel(monthTotal(col.current), monthTotal(col.previous!)), style: style)));
       }
     }
     return DataRow(
@@ -625,57 +676,50 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     }
 
     final monthFormat = DateFormat('MMM yy');
+    final yearColumns = _interleavedNewestFirst(data.fiscalYears);
+    final monthColumns = _interleavedNewestFirst(chronological);
     final headers = <String>[dimensionLabel];
-    // Newest fiscal year first — matches the on-screen table (see
-    // _columnPositions' doc comment) so the export lines up with what's
-    // displayed.
-    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
-      headers.add('FY${data.fiscalYears[i]}');
-      if (i > 0) headers.add('vs FY${data.fiscalYears[i - 1]}');
+    // Matches the on-screen table (see `_RangeColumn`'s doc comment) so the
+    // export lines up with what's displayed.
+    for (final col in yearColumns) {
+      headers.add(col.isVariance ? 'vs FY${col.previous}' : 'FY${col.current}');
     }
-    for (var i = 0; i < chronological.length; i++) {
-      headers.add(monthFormat.format(chronological[i]));
-      if (i > 0) headers.add('vs prior month');
+    for (final col in monthColumns) {
+      headers.add(col.isVariance ? 'vs prior month' : monthFormat.format(col.current));
     }
 
     num yearTotal(int year) => data.entityCodes.fold<num>(0, (sum, code) => sum + (data.yearTotals[code]?[year] ?? 0));
     num monthTotal(DateTime month) => data.entityCodes.fold<num>(0, (sum, code) => sum + (data.monthTotals[code]?[month] ?? 0));
 
     final totalsRow = <String>['Total'];
-    for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
-      final current = yearTotal(data.fiscalYears[i]);
-      totalsRow.add(formatRand(current));
-      if (i > 0) {
-        final previous = yearTotal(data.fiscalYears[i - 1]);
-        totalsRow.add(_varianceLabel(current, previous));
-      }
+    for (final col in yearColumns) {
+      totalsRow.add(
+        col.isVariance ? _varianceLabel(yearTotal(col.current), yearTotal(col.previous!)) : formatRand(yearTotal(col.current)),
+      );
     }
-    for (var i = 0; i < chronological.length; i++) {
-      final current = monthTotal(chronological[i]);
-      totalsRow.add(formatRand(current));
-      if (i > 0) {
-        final previous = monthTotal(chronological[i - 1]);
-        totalsRow.add(_varianceLabel(current, previous));
-      }
+    for (final col in monthColumns) {
+      totalsRow.add(
+        col.isVariance
+            ? _varianceLabel(monthTotal(col.current), monthTotal(col.previous!))
+            : formatRand(monthTotal(col.current)),
+      );
     }
 
     final rows = <List<String>>[totalsRow];
     for (final code in entities) {
       final cells = <String>[data.names[code] ?? code];
-      for (var i = data.fiscalYears.length - 1; i >= 0; i--) {
-        final current = data.yearTotals[code]?[data.fiscalYears[i]];
-        cells.add(formatRand(current));
-        if (i > 0) {
-          final previous = data.yearTotals[code]?[data.fiscalYears[i - 1]];
-          cells.add(_varianceLabel(current, previous));
+      for (final col in yearColumns) {
+        if (!col.isVariance) {
+          cells.add(formatRand(data.yearTotals[code]?[col.current]));
+        } else {
+          cells.add(_varianceLabel(data.yearTotals[code]?[col.current], data.yearTotals[code]?[col.previous]));
         }
       }
-      for (var i = 0; i < chronological.length; i++) {
-        final current = data.monthTotals[code]?[chronological[i]];
-        cells.add(formatRand(current));
-        if (i > 0) {
-          final previous = data.monthTotals[code]?[chronological[i - 1]];
-          cells.add(_varianceLabel(current, previous));
+      for (final col in monthColumns) {
+        if (!col.isVariance) {
+          cells.add(formatRand(data.monthTotals[code]?[col.current]));
+        } else {
+          cells.add(_varianceLabel(data.monthTotals[code]?[col.current], data.monthTotals[code]?[col.previous]));
         }
       }
       rows.add(cells);
