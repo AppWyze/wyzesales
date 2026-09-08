@@ -839,7 +839,7 @@ class _DataLoadHistoryCard extends ConsumerWidget {
           padding: EdgeInsets.symmetric(vertical: 20),
           child: Center(child: CircularProgressIndicator()),
         ),
-        error: (e, _) => Text('Error: $e', style: TextStyle(color: AppColors.negative)),
+        error: (e, _) => Text('Error: $e', style: const TextStyle(color: AppColors.negative)),
         data: (runs) {
           if (runs.isEmpty) {
             return Text(
@@ -1703,8 +1703,8 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
     ]);
     if (!mounted) return;
     setState(() {
-      _reps = results[0] as List<CodeName>;
-      _scopeValues = results[1] as List<CodeName>;
+      _reps = results[0];
+      _scopeValues = results[1];
       _scopeDimension = scopeDimension;
     });
   }
@@ -1961,8 +1961,8 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
     ]);
     if (!mounted) return;
     setState(() {
-      _reps = results[0] as List<CodeName>;
-      _scopeValues = results[1] as List<CodeName>;
+      _reps = results[0];
+      _scopeValues = results[1];
       _scopeDimension = scopeDimension;
     });
   }

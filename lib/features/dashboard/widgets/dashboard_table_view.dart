@@ -185,12 +185,30 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
     // toggle should behave).
     final year = filters.fiscalYear ?? fiscalYearFor(DateTime.now(), startMonth: startMonth);
 
+    // 2026-09-08, Craig: "the lists are defaulting to YTD[,] can they default
+    // to MTD please" — with no Month/Quarter filter active, `filters` alone
+    // narrowed nothing past the fiscal year above, so every panel was
+    // summing every month on record for that year (a year-to-date total, in
+    // effect). This screen still deliberately has no period toggle of its
+    // OWN (see the comment above — it tracks the global fiscal filter
+    // instead), so rather than adding one, the DEFAULT it falls back to
+    // when nothing else is chosen is what changes here: current fiscal
+    // month only, not the whole year. Only applied when the user hasn't
+    // already picked a Month or Quarter themselves (whichever they picked
+    // stays authoritative, same as every other screen reading `filters`) —
+    // this is a LOCAL copy passed to the fetch calls below, never written
+    // back to `globalFiltersProvider`, so it doesn't touch the Month chip
+    // shown in GlobalFilterBar or any other screen's own query.
+    final effectiveFilters = (filters.fiscalMonth == null && filters.fiscalQuarter == null)
+        ? filters.copyWith(fiscalMonth: fiscalMonthLabelFor(DateTime.now()))
+        : filters;
+
     final salesRepo = ref.read(salesRepositoryProvider);
     final referenceRepo = ref.read(referenceDataRepositoryProvider);
 
     return Future.wait(dimensions.map((dimension) async {
       final results = await Future.wait([
-        salesRepo.fetchDimensionMonthlySales(dimension: dimension.dimensionKey, fiscalYears: [year], filters: filters),
+        salesRepo.fetchDimensionMonthlySales(dimension: dimension.dimensionKey, fiscalYears: [year], filters: effectiveFilters),
         referenceRepo.namesForConfig(dimension),
       ]);
       final rows = results[0] as List<DimensionMonthlySales>;

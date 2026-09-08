@@ -70,8 +70,8 @@ void main() {
 
       final merged = mergeAcrossYears(rows, 2027);
 
-      final wrongSummedTarget = 60000 * 3; // bug #1's actual output
-      final wrongScaledTarget = 60000 * 3; // bug #2 landed on the identical number as bug #1
+      const wrongSummedTarget = 60000 * 3; // bug #1's actual output
+      const wrongScaledTarget = 60000 * 3; // bug #2 landed on the identical number as bug #1
       expect(merged.single.targetValue, isNot(wrongSummedTarget));
       expect(merged.single.targetValue, isNot(wrongScaledTarget));
       expect(merged.single.targetValue, 50000 + 55000 + 60000); // past actuals (105k) + target (60k)
@@ -143,7 +143,7 @@ void main() {
 
       final merged = mergeAcrossYears(rows, 2027);
 
-      final expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not 25%
+      const expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not 25%
       expect(merged.single.gpPercent, closeTo(expectedGpPercent, 0.0001));
     });
 
@@ -281,7 +281,7 @@ void main() {
 
       final merged = mergeAcrossMonths(rows);
 
-      final expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not the naive 25% average
+      const expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not the naive 25% average
       expect(merged.single.gpPercent, closeTo(expectedGpPercent, 0.0001));
     });
 
@@ -424,7 +424,7 @@ void main() {
 
       final merged = mergeAcrossQuarterMonths(rows, 2027);
 
-      final expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not a naive 25% average
+      const expectedGpPercent = (40000 + 5000) / (100000 + 50000) * 100; // = 30%, not a naive 25% average
       expect(merged.single.gpPercent, closeTo(expectedGpPercent, 0.0001));
     });
 

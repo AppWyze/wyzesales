@@ -679,7 +679,7 @@ class _DocumentTable extends StatelessWidget {
     return DataRow(
       color: WidgetStatePropertyAll(Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.04)),
       cells: [
-        DataCell(Text('Total', style: style)),
+        const DataCell(Text('Total', style: style)),
         for (var i = 0; i < leadingBlanks; i++) const DataCell(Text('')),
         DataCell(Text(formatQuantity(current.quantity), style: style)),
         DataCell(Text(formatRand(current.value, precise: true), style: style)),
