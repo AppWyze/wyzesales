@@ -2012,6 +2012,19 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
     return [..._kExistingDimensionKeys, ..._kGenericDimensionKeys].where((k) => !used.contains(k)).toList();
   }
 
+  /// True only for the reserved `company` pseudo-dimension — there's only
+  /// ever one "entity" (`entity_code = 'ALL'`), so it already means "no
+  /// narrowing at all" (see fiscal.dart's own `SalesDimension.company` doc
+  /// comment) and can never sensibly drive a cross-filter or appear in the
+  /// Dashboard's ranking-breakdown picker, on ANY client. Used below both to
+  /// auto-correct those two flags the moment 'company' is picked (see
+  /// `_onKeyChanged`) and to lock their switches from being flipped back —
+  /// schema/054 also enforces this as a hard CHECK constraint, so this is
+  /// belt-and-suspenders (a friendly locked control here beats a raw
+  /// constraint-violation error surfacing on Save), not the only thing
+  /// stopping it.
+  bool get _isCompany => _dimensionKey == 'company';
+
   void _onKeyChanged(String? key) {
     if (key == null) return;
     setState(() {
@@ -2023,6 +2036,18 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
       }
       if (_labelController.text.isEmpty && _kExistingDimensionLabels.containsKey(key)) {
         _labelController.text = _kExistingDimensionLabels[key]!;
+      }
+      // 2026-09-08, Craig, top-bar search: typing "jacqi" also returned a
+      // spurious "Company" result — traced to Edgetec's own 'company' row
+      // having `drives_cross_filter`/`shows_on_dashboard_top5` left at this
+      // form's normal (sensible-for-a-real-dimension) `true` defaults. Force
+      // both false the moment 'company' is selected, rather than leaving it
+      // to whoever's filling in this form to remember — see `_isCompany`'s
+      // own doc comment and schema/054 for the full story and the data fix
+      // for the row this already happened to.
+      if (key == 'company') {
+        _drivesCrossFilter = false;
+        _showsOnDashboardTop5 = false;
       }
     });
   }
@@ -2154,13 +2179,27 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
                       (v) => setState(() => _drivesBudgets = v),
                       isDark,
                     ),
-                    _switchTile(
-                      'Drives cross-filter',
-                      'Offered as a global filter and a Sales By/Performance dimension.',
-                      _drivesCrossFilter,
-                      (v) => setState(() => _drivesCrossFilter = v),
-                      isDark,
-                    ),
+                    // Locked off for 'company' — see `_isCompany`'s own doc
+                    // comment. A plain disabled-looking row instead of the
+                    // normal interactive `_switchTile` (which takes a
+                    // non-nullable `onChanged` shared by every other dialog
+                    // using it, so it has no built-in "disabled" state of its
+                    // own) — this is the ONE dimension these two can never
+                    // apply to, not a temporary/conditional restriction
+                    // worth a more general disabled-switch mechanism.
+                    _isCompany
+                        ? _lockedSwitchNote(
+                            'Drives cross-filter',
+                            'Always off for Company — there\'s only ever one company-wide total, nothing to narrow down to.',
+                            isDark,
+                          )
+                        : _switchTile(
+                            'Drives cross-filter',
+                            'Offered as a global filter and a Sales By/Performance dimension.',
+                            _drivesCrossFilter,
+                            (v) => setState(() => _drivesCrossFilter = v),
+                            isDark,
+                          ),
                     _switchTile(
                       'RLS scope (RegUser boundary)',
                       'Only one dimension per client can be this — turning it on here turns it off everywhere else for this client.',
@@ -2168,13 +2207,19 @@ class _EditDimensionDialogState extends ConsumerState<_EditDimensionDialog> {
                       (v) => setState(() => _isRlsScope = v),
                       isDark,
                     ),
-                    _switchTile(
-                      'Shows on Dashboard breakdown',
-                      'Selectable in the Dashboard\'s ranking-breakdown dropdown.',
-                      _showsOnDashboardTop5,
-                      (v) => setState(() => _showsOnDashboardTop5 = v),
-                      isDark,
-                    ),
+                    _isCompany
+                        ? _lockedSwitchNote(
+                            'Shows on Dashboard breakdown',
+                            'Always off for Company — nothing to rank within a single whole-company total.',
+                            isDark,
+                          )
+                        : _switchTile(
+                            'Shows on Dashboard breakdown',
+                            'Selectable in the Dashboard\'s ranking-breakdown dropdown.',
+                            _showsOnDashboardTop5,
+                            (v) => setState(() => _showsOnDashboardTop5 = v),
+                            isDark,
+                          ),
                     _switchTile(
                       'Live',
                       'Off keeps this dimension hidden from every filter/screen — a draft, '
@@ -3138,6 +3183,40 @@ Widget _switchTile(String title, String subtitle, bool value, ValueChanged<bool>
           ),
         ),
         Switch(value: value, onChanged: onChanged),
+      ],
+    ),
+  );
+}
+
+/// Same layout as `_switchTile`, permanently off and non-interactive
+/// (`Switch.onChanged: null`, Flutter's own built-in disabled state) — for
+/// a flag that's always false for one specific, known case rather than a
+/// live editable value, so there's no `ValueChanged<bool>` to wire up at
+/// all. Currently only `_EditDimensionDialog`'s "Drives cross-filter"/"Shows
+/// on Dashboard breakdown" rows when editing the `company` dimension — see
+/// `_isCompany`'s own doc comment there.
+Widget _lockedSwitchNote(String title, String subtitle, bool isDark) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkText : AppColors.lightText),
+              ),
+              Text(
+                subtitle,
+                style: TextStyle(fontSize: 10, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+              ),
+            ],
+          ),
+        ),
+        const Switch(value: false, onChanged: null),
       ],
     ),
   );
