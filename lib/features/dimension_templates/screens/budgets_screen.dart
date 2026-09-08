@@ -591,6 +591,22 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
 
   @override
   Widget build(BuildContext context) {
+    // Deliberately no row-click cross-filter here either (2026-09-08, see
+    // `applyRowCrossFilters`'s own doc comment, core/filters/
+    // global_filters.dart, for the app-wide feature this screen is the one
+    // exception to) — `ResponsiveDataTable`'s new "tap anywhere in a row
+    // with onSelectChanged set" mechanism relies on `showCheckboxColumn:
+    // false` making every DataCell itself tappable, and this table's Sales
+    // Budget column is a live `TextField` an admin needs to tap INTO to
+    // edit — wiring a row-level tap handler on top of that risks stealing
+    // focus or misfiring on every edit tap, exactly the kind of thing this
+    // screen's existing "no onSort here either" call already guards
+    // against for a similar reason (see that comment, just below). Rows
+    // with no `onSelectChanged` (every row in this table) stay completely
+    // inert either way, so this table is entirely unaffected by
+    // `showCheckboxColumn: false` being set globally in
+    // `ResponsiveDataTable` now.
+    //
     // No onSort here, deliberately — unlike every other table in the app,
     // this one is an editable grid where the row order (fiscal month, Mar ->
     // Feb) IS the meaningful, expected order for entering a budget, and each

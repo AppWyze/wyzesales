@@ -120,7 +120,23 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
                     spacing: spacing,
                     runSpacing: spacing,
                     children: [
-                      for (final panel in panels) SizedBox(width: panelWidth, child: _DimensionPanel(panel: panel)),
+                      for (final panel in panels)
+                        SizedBox(
+                          width: panelWidth,
+                          child: _DimensionPanel(
+                            panel: panel,
+                            // Row click -> global cross-filter (Craig,
+                            // 2026-09-08 — see `applyRowCrossFilters`'s own
+                            // doc comment, core/filters/global_filters.dart).
+                            // No date on this screen's rows (each is a whole
+                            // fiscal year's rollup for one entity), so only
+                            // this panel's own dimension gets set.
+                            onEntityTap: (selection) => applyRowCrossFilters(
+                              ref,
+                              dimensions: {panel.dimension.dimensionKey: selection},
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 );
@@ -205,8 +221,18 @@ class _EntityRow {
 /// by name/Profit/%GP instead — one consistent "sort, then take 5" rule
 /// rather than a separate fixed "top 5" behind the scenes.
 class _DimensionPanel extends StatefulWidget {
-  const _DimensionPanel({required this.panel});
+  const _DimensionPanel({required this.panel, required this.onEntityTap});
   final _PanelData panel;
+
+  /// Row click -> global cross-filter, one entity at a time (see this
+  /// panel's own `_DimensionPanelState.build()` for where each row's
+  /// `FilterSelection` is built, and `applyRowCrossFilters`'s doc comment,
+  /// core/filters/global_filters.dart, for the feature itself). Left as a
+  /// plain callback rather than reaching for `ref` directly in here —
+  /// `_DimensionPanel`/`_DimensionPanelState` stay plain, ref-free widgets,
+  /// same as before this feature, with the one place that actually needs
+  /// `ref` (`_DashboardTableViewState`, a `ConsumerState`) owning the call.
+  final ValueChanged<FilterSelection> onEntityTap;
 
   @override
   State<_DimensionPanel> createState() => _DimensionPanelState();
@@ -336,12 +362,15 @@ class _DimensionPanelState extends State<_DimensionPanel> {
                       ],
                     ),
                     for (final row in visibleRows)
-                      DataRow(cells: [
-                        DataCell(Text(row.label, overflow: TextOverflow.ellipsis)),
-                        DataCell(Text(formatRand(row.value, precise: true))),
-                        DataCell(Text(formatRand(row.profit, precise: true))),
-                        DataCell(Text(formatPercent(row.gp))),
-                      ]),
+                      DataRow(
+                        onSelectChanged: (_) => widget.onEntityTap(FilterSelection(row.code, row.label)),
+                        cells: [
+                          DataCell(Text(row.label, overflow: TextOverflow.ellipsis)),
+                          DataCell(Text(formatRand(row.value, precise: true))),
+                          DataCell(Text(formatRand(row.profit, precise: true))),
+                          DataCell(Text(formatPercent(row.gp))),
+                        ],
+                      ),
                   ],
                 ),
               ),

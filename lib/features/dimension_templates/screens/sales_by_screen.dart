@@ -526,6 +526,17 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
             color: code == highlightCode
                 ? WidgetStatePropertyAll(Theme.of(context).colorScheme.primary.withValues(alpha: 0.12))
                 : null,
+            // Row click -> global cross-filter (Craig, 2026-09-08 — see
+            // `applyRowCrossFilters`'s own doc comment, core/filters/
+            // global_filters.dart). No date on this screen's rows (each is
+            // a per-entity rollup across whole fiscal years/months, not one
+            // document), so only this screen's own dimension gets set —
+            // same "just the fields the row actually carries" rule every
+            // other screen's row click follows.
+            onSelectChanged: (_) => applyRowCrossFilters(
+              ref,
+              dimensions: {widget.dimension: FilterSelection(code, data.names[code] ?? code)},
+            ),
             cells: cells,
           );
         }),

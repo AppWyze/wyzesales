@@ -1423,27 +1423,61 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         .toList();
     final dimensionLabel = rankableDimensions.forKey(_dimension)?.displayLabel ?? _dimension;
 
-    List<PieSlice> mtdSlices = const [];
-    List<PieSlice> ytdSlices = const [];
+    // One pie, following the SAME shared MTD/QTD/YTD toggle the KPI row
+    // already uses (`_selectedPeriod`) — Craig, 2026-09-08: "does it make
+    // sense to have the two charts MTD/YTD? Does it rather make sense to
+    // only have one that then renders according to what is toggled?"
+    // Confirmed: one pie, driven by the toggle that already exists, not a
+    // second toggle of its own. This also fills in QTD for this section,
+    // which the old two-fixed-pie layout never had at all.
+    List<PieSlice> periodSlices = const [];
     if (dimData != null) {
       final now = DateTime.now();
-      final currentMonthStart = DateTime(now.year, now.month, 1);
-      final previousMonthStart = DateTime(now.year, now.month - 1, 1);
+      final startMonth = ref.watch(fiscalYearStartMonthProvider).valueOrNull ?? 3;
 
-      final mtdCurrent = _sumRows(dimData.rows.where((r) => _sameMonth(r.month, currentMonthStart)));
-      final mtdPrevious = _sumRows(dimData.rows.where((r) => _sameMonth(r.month, previousMonthStart)));
-      mtdSlices = _pickSlices(current: mtdCurrent, previous: mtdPrevious, names: dimData.names);
-
-      // "YTD looks at the yearly trend" (Craig, 2026-08-26) — compared
-      // against the SAME set of elapsed fiscal months last year, not the
-      // whole prior year, so a 5-month-old fiscal year isn't compared
-      // against a full 12 months of the one before it.
-      final elapsedFiscalMonths = dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear).map((r) => r.fiscalMonth).toSet();
-      final ytdCurrent = _sumRows(dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear));
-      final ytdPrevious = _sumRows(
-        dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear - 1 && elapsedFiscalMonths.contains(r.fiscalMonth)),
-      );
-      ytdSlices = _pickSlices(current: ytdCurrent, previous: ytdPrevious, names: dimData.names);
+      switch (_selectedPeriod) {
+        case StatPeriod.mtd:
+          final currentMonthStart = DateTime(now.year, now.month, 1);
+          final previousMonthStart = DateTime(now.year, now.month - 1, 1);
+          final mtdCurrent = _sumRows(dimData.rows.where((r) => _sameMonth(r.month, currentMonthStart)));
+          final mtdPrevious = _sumRows(dimData.rows.where((r) => _sameMonth(r.month, previousMonthStart)));
+          periodSlices = _pickSlices(current: mtdCurrent, previous: mtdPrevious, names: dimData.names);
+          break;
+        case StatPeriod.qtd:
+          // Same "compare against whichever of the period's months actually
+          // have data this year" idea YTD uses below, just narrowed to the
+          // current fiscal quarter's 3 months instead of the whole fiscal
+          // year — mirrors `_loadKpis`' own currentQuarterMonths/
+          // elapsedQuarterMonths pair (see that method's 2026-09-07 doc
+          // comment) rather than inventing a second QTD convention just for
+          // this pie.
+          final currentQuarterMonths =
+              fiscalMonthsInQuarter(fiscalQuarterFor(now, startMonth: startMonth), startMonth: startMonth).toSet();
+          final elapsedQuarterMonths = dimData.rows
+              .where((r) => r.fiscalYear == dimData.fiscalYear && currentQuarterMonths.contains(r.fiscalMonth))
+              .map((r) => r.fiscalMonth)
+              .toSet();
+          final qtdCurrent = _sumRows(
+            dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear && currentQuarterMonths.contains(r.fiscalMonth)),
+          );
+          final qtdPrevious = _sumRows(
+            dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear - 1 && elapsedQuarterMonths.contains(r.fiscalMonth)),
+          );
+          periodSlices = _pickSlices(current: qtdCurrent, previous: qtdPrevious, names: dimData.names);
+          break;
+        case StatPeriod.ytd:
+          // "YTD looks at the yearly trend" (Craig, 2026-08-26) — compared
+          // against the SAME set of elapsed fiscal months last year, not the
+          // whole prior year, so a 5-month-old fiscal year isn't compared
+          // against a full 12 months of the one before it.
+          final elapsedFiscalMonths = dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear).map((r) => r.fiscalMonth).toSet();
+          final ytdCurrent = _sumRows(dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear));
+          final ytdPrevious = _sumRows(
+            dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear - 1 && elapsedFiscalMonths.contains(r.fiscalMonth)),
+          );
+          periodSlices = _pickSlices(current: ytdCurrent, previous: ytdPrevious, names: dimData.names);
+          break;
+      }
     }
 
     // Option A/B (schema/053) — see `_layoutOverride`'s own doc comment for
@@ -1949,27 +1983,35 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   else if (dimData == null)
                     const Padding(padding: EdgeInsets.all(32), child: Center(child: RepaintBoundary(child: CircularProgressIndicator())))
                   else
-                    GridView.count(
-                      crossAxisCount: MediaQuery.of(context).size.width > 900 ? 2 : 1,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 16,
-                      crossAxisSpacing: 16,
-                      childAspectRatio: 1.5,
-                      children: [
-                        _PieCard(
-                          title: '$dimensionLabel — MTD',
-                          totalLabel: 'MTD',
-                          slices: mtdSlices,
-                          onSliceTap: (slice) => _drillDown(slice, period: 'mtd'),
+                    // Single pie now (see the switch above) — sized to a
+                    // fixed box rather than stretched full-width the way the
+                    // old 2-up GridView cell was, since a lone pie stretched
+                    // across a wide desktop window reads as oversized/oddly
+                    // proportioned. `_PieCard` renders an `Expanded` inside a
+                    // `Column` internally (for its chart), so it still needs
+                    // a bounded height from here regardless of layout.
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SizedBox(
+                        width: 480,
+                        height: 300,
+                        child: _PieCard(
+                          title: '$dimensionLabel — ${_selectedPeriod.name.toUpperCase()}',
+                          totalLabel: _selectedPeriod.name.toUpperCase(),
+                          slices: periodSlices,
+                          // Sales By's own drill-down only understands two
+                          // buckets today (latest month vs current FY) —
+                          // there's no "current quarter" column there yet.
+                          // Rather than growing that screen's column model
+                          // just for this, a QTD-triggered click opens the
+                          // same current-FY bucket a YTD click does (the
+                          // closer match of the two), while the pie itself
+                          // still shows/labels true QTD data. Flagged as a
+                          // good follow-up if exact QTD drill-down ever
+                          // matters, not applied unasked.
+                          onSliceTap: (slice) => _drillDown(slice, period: _selectedPeriod == StatPeriod.mtd ? 'mtd' : 'ytd'),
                         ),
-                        _PieCard(
-                          title: '$dimensionLabel — YTD',
-                          totalLabel: 'YTD',
-                          slices: ytdSlices,
-                          onSliceTap: (slice) => _drillDown(slice, period: 'ytd'),
-                        ),
-                      ],
+                      ),
                     ),
                 ],
               );

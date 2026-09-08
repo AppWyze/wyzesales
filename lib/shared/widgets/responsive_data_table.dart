@@ -165,6 +165,19 @@ class ResponsiveDataTable extends StatelessWidget {
         fixedTopRows: stickyHeader ? 1 + pinnedRowCount : 0,
         isVerticalScrollBarVisible: scrollsVertically,
         isHorizontalScrollBarVisible: true,
+        // 2026-09-08 (row-click cross-filter, Craig): lets a `DataRow` be
+        // made tappable — anywhere in the row, not just one cell — purely
+        // by giving it an `onSelectChanged` callback, with no checkbox
+        // column ever appearing. This is stock `DataRow`/`DataTable`
+        // behavior (`data_table_2` deliberately keeps it unchanged — see
+        // this file's own class doc comment on "What changed for call
+        // sites"): a row's `onSelectChanged` only fires from a checkbox tap
+        // when `showCheckboxColumn` is true; with it false, tapping any
+        // cell in a row that HAS an `onSelectChanged` fires it directly. A
+        // row built with no `onSelectChanged` at all (the Totals row on
+        // every screen that has one) stays inert either way, so this is
+        // safe to turn on globally rather than needing a per-table opt-in.
+        showCheckboxColumn: false,
       ),
     );
   }

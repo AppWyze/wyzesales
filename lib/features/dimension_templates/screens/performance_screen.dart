@@ -685,18 +685,30 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                 final coverage = data.coverageFor(row);
                 final coverageColor = _coverageColor(context, coverage);
                 final gpColor = row.actualProfit < 0 ? Theme.of(context).colorScheme.error : null;
-                return DataRow(cells: [
-                  DataCell(Text(data.names[row.entityCode] ?? row.entityCode)),
-                  DataCell(Text(formatPercent(row.contributionPercent))),
-                  DataCell(Text(formatRand(row.actualValue))),
-                  DataCell(Text(formatRand(row.targetValue))),
-                  DataCell(Text(formatPercent(row.targetPercent))),
-                  DataCell(Text(formatRand(coverage.rGap), style: TextStyle(color: coverageColor))),
-                  DataCell(Text(_coverageText(coverage, data.isLivePeriod), style: TextStyle(color: coverageColor))),
-                  DataCell(Text(formatRand(row.actualProfit), style: TextStyle(color: gpColor))),
-                  DataCell(Text(formatPercent(row.gpPercent), style: TextStyle(color: gpColor))),
-                  DataCell(Text(formatQuantity(row.actualQuantity))),
-                ]);
+                return DataRow(
+                  // Row click -> global cross-filter (Craig, 2026-09-08 —
+                  // see `applyRowCrossFilters`'s own doc comment,
+                  // core/filters/global_filters.dart). No date on this
+                  // screen's rows (each is a per-entity rollup for whatever
+                  // Year/Month/Quarter is already filtered), so only this
+                  // screen's own dimension gets set.
+                  onSelectChanged: (_) => applyRowCrossFilters(
+                    ref,
+                    dimensions: {widget.dimension: FilterSelection(row.entityCode, data.names[row.entityCode] ?? row.entityCode)},
+                  ),
+                  cells: [
+                    DataCell(Text(data.names[row.entityCode] ?? row.entityCode)),
+                    DataCell(Text(formatPercent(row.contributionPercent))),
+                    DataCell(Text(formatRand(row.actualValue))),
+                    DataCell(Text(formatRand(row.targetValue))),
+                    DataCell(Text(formatPercent(row.targetPercent))),
+                    DataCell(Text(formatRand(coverage.rGap), style: TextStyle(color: coverageColor))),
+                    DataCell(Text(_coverageText(coverage, data.isLivePeriod), style: TextStyle(color: coverageColor))),
+                    DataCell(Text(formatRand(row.actualProfit), style: TextStyle(color: gpColor))),
+                    DataCell(Text(formatPercent(row.gpPercent), style: TextStyle(color: gpColor))),
+                    DataCell(Text(formatQuantity(row.actualQuantity))),
+                  ],
+                );
               }),
             ],
           ),

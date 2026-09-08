@@ -330,6 +330,17 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     });
   }
 
+  /// Row click -> global cross-filter (Craig, 2026-09-08 — see
+  /// `applyRowCrossFilters`'s own doc comment, core/filters/global_filters.dart,
+  /// for the full reasoning; this is the exact screen his example used).
+  /// `startMonth` is read fresh here rather than threaded down from
+  /// `_loadPage`, since a click only ever needs whatever the CURRENT value
+  /// is, not one cached from whenever the page last loaded.
+  void _onRowTap(Map<String, FilterSelection> dimensions, DateTime date) {
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    applyRowCrossFilters(ref, dimensions: dimensions, date: date, startMonth: startMonth);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Covers every way the filter set can change — this screen's own
@@ -379,6 +390,7 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
                       sortColumnIndex: _sortColumnIndex,
                       sortAscending: _sortAscending,
                       onSort: _onSort,
+                      onRowTap: _onRowTap,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -601,6 +613,7 @@ class _DocumentTable extends StatelessWidget {
     required this.sortColumnIndex,
     required this.sortAscending,
     required this.onSort,
+    required this.onRowTap,
   });
 
   final List<SalesDocument> rows;
@@ -626,6 +639,14 @@ class _DocumentTable extends StatelessWidget {
   final int sortColumnIndex;
   final bool sortAscending;
   final void Function(int columnIndex, bool ascending) onSort;
+
+  /// Row click -> global cross-filter (see this file's `_onRowTap`/
+  /// `applyRowCrossFilters`'s own doc comments). Built here, not passed a
+  /// bare `SalesDocument`, because the code->FilterSelection mapping needs
+  /// `dimensions`/`namesByDimension` — already in scope right here for
+  /// building each row's own cells — and there's no reason to hand the raw
+  /// document back up just to redo that same lookup a second time.
+  final void Function(Map<String, FilterSelection> dimensions, DateTime date) onRowTap;
 
   /// Pinned as the FIRST row now, not the last — 2026-08-27, Craig: "Does it
   /// make sense to have the Totals as the first line in a view?" Sourced
@@ -693,16 +714,24 @@ class _DocumentTable extends StatelessWidget {
         _totalsRow(context),
         ...rows.map((doc) {
           final gpColor = doc.profit < 0 ? Theme.of(context).colorScheme.error : null;
-          return DataRow(cells: [
-            DataCell(Text(doc.document)),
-            DataCell(Text(doc.documentKind)),
-            DataCell(Text(dateFormat.format(doc.docDate))),
-            for (final d in dimensions) DataCell(Text(doc.displayFor(d, namesByDimension[d.dimensionKey] ?? const {}))),
-            DataCell(Text(formatQuantity(doc.quantity))),
-            DataCell(Text(formatRand(doc.value, precise: true))),
-            DataCell(Text(formatRand(doc.profit, precise: true), style: TextStyle(color: gpColor))),
-            DataCell(Text(formatPercent(doc.profitPercent), style: TextStyle(color: gpColor))),
-          ]);
+          final rowDimensions = <String, FilterSelection>{
+            for (final d in dimensions)
+              if (doc.codeFor(d) != null)
+                d.dimensionKey: FilterSelection(doc.codeFor(d)!, doc.displayFor(d, namesByDimension[d.dimensionKey] ?? const {})),
+          };
+          return DataRow(
+            onSelectChanged: (_) => onRowTap(rowDimensions, doc.docDate),
+            cells: [
+              DataCell(Text(doc.document)),
+              DataCell(Text(doc.documentKind)),
+              DataCell(Text(dateFormat.format(doc.docDate))),
+              for (final d in dimensions) DataCell(Text(doc.displayFor(d, namesByDimension[d.dimensionKey] ?? const {}))),
+              DataCell(Text(formatQuantity(doc.quantity))),
+              DataCell(Text(formatRand(doc.value, precise: true))),
+              DataCell(Text(formatRand(doc.profit, precise: true), style: TextStyle(color: gpColor))),
+              DataCell(Text(formatPercent(doc.profitPercent), style: TextStyle(color: gpColor))),
+            ],
+          );
         }),
       ],
     );

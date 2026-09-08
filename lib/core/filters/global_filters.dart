@@ -298,3 +298,48 @@ class GlobalFiltersNotifier extends StateNotifier<GlobalFilters> {
 final globalFiltersProvider = StateNotifierProvider<GlobalFiltersNotifier, GlobalFilters>(
   (ref) => GlobalFiltersNotifier(ref),
 );
+
+/// Applies a clicked table row's own fields as cross-filters — writes to the
+/// SAME `GlobalFilters` state the "Add filter" dropdown does, so from here on
+/// every screen (including whichever one was clicked on) re-queries as if
+/// each of these had been picked by hand, one at a time (Craig, 2026-09-08:
+/// "if I am on Sales Analysis and I click on a row. Set the filters
+/// according to the selected row and filter out everything that does not
+/// meet the filters across the app. Just as if we had setup the filters
+/// independently. If the Date on the row is 2026-09-01 then year = 2026 and
+/// month = sep. If sales person = Jacqi then set etc."). This is
+/// deliberately additive/replacing only for the specific fields the row
+/// actually carries — it never clears a filter for a dimension (or Year/
+/// Month) the row says nothing about, matching "as if... independently"
+/// literally: exactly one `setDimension`/`setFiscalYear`/`setFiscalMonth`
+/// call per field the row has, nothing else touched. A row from a screen
+/// with no date column (most dimension-rollup screens — Sales By,
+/// Performance, the Dashboard's Table view) simply omits `date` and only
+/// sets whichever dimension(s) it has.
+///
+/// `date`, when given, is resolved to the client's own FISCAL year/month
+/// (never the plain calendar year/month) via `fiscalYearFor`/
+/// `fiscalMonthLabelFor` — the same two functions every other "a real
+/// calendar date maps to which fiscal period" call site in the app already
+/// uses — so a row from 1 September under an October-start fiscal year sets
+/// Year/Month exactly the way the global Year/Month pickers themselves
+/// would, not a plain calendar-year/month guess. Setting Month this way also
+/// clears any active Quarter, same as picking a Month from the filter bar
+/// itself (see `GlobalFiltersNotifier.setFiscalMonth`'s own doc comment) —
+/// Year/Month/Quarter are all "which period" at different granularities, and
+/// a row click is picking one specific month, not a quarter.
+void applyRowCrossFilters(
+  WidgetRef ref, {
+  Map<String, FilterSelection> dimensions = const {},
+  DateTime? date,
+  int startMonth = 3,
+}) {
+  final notifier = ref.read(globalFiltersProvider.notifier);
+  for (final entry in dimensions.entries) {
+    notifier.setDimension(entry.key, entry.value);
+  }
+  if (date != null) {
+    notifier.setFiscalYear(fiscalYearFor(date, startMonth: startMonth));
+    notifier.setFiscalMonth(fiscalMonthLabelFor(date));
+  }
+}

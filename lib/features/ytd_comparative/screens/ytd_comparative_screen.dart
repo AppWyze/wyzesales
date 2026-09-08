@@ -265,7 +265,23 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
               cells.add(DataCell(Text(variance == null ? '—' : formatPercent(variance), style: TextStyle(color: color))));
             }
           }
-          return DataRow(cells: cells);
+          return DataRow(
+            // Row click -> global cross-filter (Craig, 2026-09-08 — see
+            // `applyRowCrossFilters`'s own doc comment, core/filters/
+            // global_filters.dart). This screen's own rows don't fit that
+            // helper directly, though: each row is a fiscal MONTH spanning
+            // every year in the comparison window at once (FY2025/FY2026/
+            // FY2027 are separate columns on the SAME row), so there's no
+            // single calendar date to derive a Year from the way Sales
+            // Analysis' per-document rows have. Setting Month alone, leaving
+            // Year untouched, is the same "as if set up independently"
+            // behavior a bare Month filter already has everywhere else in
+            // the app (it applies across every fiscal year on record, not
+            // just one) — see document_analysis_view.dart's own
+            // `_effectiveFiscalYear` doc comment for that established rule.
+            onSelectChanged: (_) => ref.read(globalFiltersProvider.notifier).setFiscalMonth(row.monthLabel),
+            cells: cells,
+          );
         }),
       ],
     );
