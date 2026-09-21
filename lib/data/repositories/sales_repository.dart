@@ -73,6 +73,14 @@ class SalesRepository {
     List<String>? fiscalQuarterMonths,
     Map<String, String> filters = const {},
     String? document,
+    // 2026-09-21 (schema/055) — Sales Analysis' own custom date-range
+    // filter. Mutually exclusive with fiscalYear/fiscalMonth/
+    // fiscalQuarterMonths at the CALLER's level (document_analysis_view.dart
+    // decides which set to pass, never both) — this method itself just
+    // forwards whatever it's given straight to the RPC, same as every other
+    // param here.
+    DateTime? fromDate,
+    DateTime? toDate,
     String sortColumn = 'doc_date',
     bool sortAscending = false,
     int page = 0,
@@ -85,6 +93,8 @@ class SalesRepository {
       fiscalQuarterMonths: fiscalQuarterMonths,
       filters: filters,
       document: document,
+      fromDate: fromDate,
+      toDate: toDate,
     )..addAll({
         'p_sort_column': sortColumn,
         'p_sort_ascending': sortAscending,
@@ -111,6 +121,9 @@ class SalesRepository {
     List<String>? fiscalQuarterMonths,
     Map<String, String> filters = const {},
     String? document,
+    // See fetchSalesDocumentsPage's identical params just above.
+    DateTime? fromDate,
+    DateTime? toDate,
   }) async {
     final params = _salesDocumentsFilterParams(
       documentKinds: documentKinds,
@@ -119,10 +132,48 @@ class SalesRepository {
       fiscalQuarterMonths: fiscalQuarterMonths,
       filters: filters,
       document: document,
+      fromDate: fromDate,
+      toDate: toDate,
     );
     final rows = await supabase.rpc('fn_sales_documents_totals', params: params);
     return SalesDocumentTotals.fromMap((rows as List).first as Map<String, dynamic>);
   }
+
+  /// Sales Analysis' Chart tab under a custom date range (schema/055,
+  /// 2026-09-21) — replaces the normal trailing-3-fiscal-year comparison
+  /// with ONE line, bucketed by calendar month, for exactly the picked
+  /// range. Craig: "if the range is mar 15 2026 to june 12 2026 then show
+  /// the partial data for March and the partial data for june and the full
+  /// data for the in between" — `fn_sales_documents_monthly_totals` does
+  /// that with a plain `date_trunc('month', doc_date)` GROUP BY inside the
+  /// already-range-restricted WHERE clause, so the boundary months come back
+  /// partial with no special-casing needed on either side. Sparse — a month
+  /// with zero matching rows simply has no row in the result, same
+  /// convention `fetchConsolidatedSales`/`fetchDimensionMonthlySales`
+  /// already follow for their own monthly rollups.
+  Future<List<MonthlyDocumentTotals>> fetchSalesDocumentsMonthlyTotals({
+    required List<String> documentKinds,
+    required DateTime fromDate,
+    required DateTime toDate,
+    Map<String, String> filters = const {},
+  }) async {
+    final rows = await supabase.rpc('fn_sales_documents_monthly_totals', params: {
+      'p_document_kinds': documentKinds,
+      'p_from_date': _dateOnly(fromDate),
+      'p_to_date': _dateOnly(toDate),
+      'p_filters': filters,
+    });
+    return (rows as List).map<MonthlyDocumentTotals>((r) => MonthlyDocumentTotals.fromMap(r as Map<String, dynamic>)).toList();
+  }
+
+  /// `date` params on every method above go to a Postgres `date` column —
+  /// serializing the full `DateTime` (with whatever local time-of-day
+  /// happens to be attached) would risk an off-by-one against `v.doc_date`
+  /// depending on timezone; this strips it down to the plain yyyy-MM-dd the
+  /// RPC layer actually expects, same as `document_analysis_view.dart`'s own
+  /// `DateFormat('yyyy-MM-dd')` already formats `doc_date` for display.
+  String _dateOnly(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   /// `fetchDocumentCounts` (`fn_document_counts`, schema/015) was removed
   /// 2026-09-02, task #93/#103 — its only caller was the Dashboard's Quote →
@@ -162,6 +213,8 @@ class SalesRepository {
     List<String>? fiscalQuarterMonths,
     Map<String, String> filters = const {},
     String? document,
+    DateTime? fromDate,
+    DateTime? toDate,
   }) {
     return {
       'p_document_kinds': documentKinds,
@@ -170,6 +223,8 @@ class SalesRepository {
       'p_fiscal_quarter_months': fiscalQuarterMonths,
       'p_filters': filters,
       'p_document': (document == null || document.isEmpty) ? null : document,
+      'p_from_date': fromDate == null ? null : _dateOnly(fromDate),
+      'p_to_date': toDate == null ? null : _dateOnly(toDate),
     };
   }
 

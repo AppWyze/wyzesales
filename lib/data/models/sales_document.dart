@@ -175,3 +175,28 @@ class SalesDocumentTotals {
     );
   }
 }
+
+/// One calendar month's totals within a custom date range — Sales Analysis'
+/// Chart tab under a picked from/to date (schema/055, `fn_sales_documents_
+/// monthly_totals`, 2026-09-21). Sparse: a month with no matching rows at
+/// all simply has no `MonthlyDocumentTotals` for it, same convention
+/// `ConsolidatedSales`/`DimensionMonthlySales` already follow for their own
+/// monthly rollups — see `SalesRepository.fetchSalesDocumentsMonthlyTotals`'s
+/// own doc comment for why the two boundary months come back correctly
+/// partial with no special handling needed here.
+class MonthlyDocumentTotals {
+  final DateTime monthStart;
+  final num quantity;
+  final num value;
+  final num profit;
+  const MonthlyDocumentTotals({required this.monthStart, required this.quantity, required this.value, required this.profit});
+
+  factory MonthlyDocumentTotals.fromMap(Map<String, dynamic> map) {
+    return MonthlyDocumentTotals(
+      monthStart: DateTime.parse(map['month_start'] as String),
+      quantity: map['total_quantity'] as num,
+      value: map['total_value'] as num,
+      profit: map['total_profit'] as num,
+    );
+  }
+}

@@ -9,6 +9,7 @@ import '../../../core/utils/formatters.dart';
 import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../data/models/profile.dart';
+import '../../../data/models/sales_document.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
@@ -45,6 +46,41 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
   // Defaults to table — Craig, 2026-08-26: "Toggle Table / Chart defaults to
   // Table" (carried over from the old TabBar's initialIndex: 1).
   _ViewMode _mode = _ViewMode.table;
+
+  // 2026-09-21 (schema/055) — the custom date-range filter Edgetec asked
+  // for, scoped to Sales Analysis only (both tabs) per Craig's own
+  // confirmation. Deliberately screen-local State, NOT part of the shared
+  // `globalFiltersProvider` — every other screen (Dashboard, Budgets,
+  // Performance, Sales By, YTD Comparative) reads from the monthly-
+  // pre-aggregated rollup views, which carry no day-level detail to filter
+  // by at all, so a date range picked here has nothing to mean on any of
+  // them. Keeping it local also means navigating away and back leaves it
+  // exactly as it was — it doesn't leak into the global Year/Month/Quarter
+  // chips other screens show, and clearing it just means "go back to
+  // whatever the global filters already say."
+  DateTime? _fromDate;
+  DateTime? _toDate;
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2015),
+      lastDate: now,
+      initialDateRange: _fromDate != null && _toDate != null ? DateTimeRange(start: _fromDate!, end: _toDate!) : null,
+      helpText: 'Sales Analysis date range',
+    );
+    if (picked == null) return;
+    setState(() {
+      _fromDate = picked.start;
+      _toDate = picked.end;
+    });
+  }
+
+  void _clearDateRange() => setState(() {
+        _fromDate = null;
+        _toDate = null;
+      });
 
   // Handed up by the two IndexedStack children once each mounts (see
   // DocumentAnalysisView.onExportReady's own doc comment) — this screen's
@@ -98,13 +134,26 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
                 spacing: 16,
                 runSpacing: 12,
                 children: [
-                  SegmentedButton<_ViewMode>(
-                    segments: const [
-                      ButtonSegment(value: _ViewMode.chart, label: Text('Chart')),
-                      ButtonSegment(value: _ViewMode.table, label: Text('Table')),
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      SegmentedButton<_ViewMode>(
+                        segments: const [
+                          ButtonSegment(value: _ViewMode.chart, label: Text('Chart')),
+                          ButtonSegment(value: _ViewMode.table, label: Text('Table')),
+                        ],
+                        selected: {_mode},
+                        onSelectionChanged: (selection) => setState(() => _mode = selection.first),
+                      ),
+                      _DateRangeControl(
+                        fromDate: _fromDate,
+                        toDate: _toDate,
+                        onPick: _pickDateRange,
+                        onClear: _clearDateRange,
+                      ),
                     ],
-                    selected: {_mode},
-                    onSelectionChanged: (selection) => setState(() => _mode = selection.first),
                   ),
                   DataExportButtons(onExport: _export),
                 ],
@@ -116,10 +165,16 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
             child: IndexedStack(
               index: _mode.index,
               children: [
-                _GraphTab(onExportReady: (fn) => _chartExporter = fn),
+                _GraphTab(
+                  fromDate: _fromDate,
+                  toDate: _toDate,
+                  onExportReady: (fn) => _chartExporter = fn,
+                ),
                 DocumentAnalysisView(
                   documentKinds: const ['invoice', 'credit_note'],
                   showExportButtons: false,
+                  fromDate: _fromDate,
+                  toDate: _toDate,
                   onExportReady: (fn) => _tableExporter = fn,
                 ),
               ],
@@ -127,6 +182,44 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The date-range control itself — an "Add filter"-style button when no
+/// range is picked, an `_RemovableChip`-style chip (global_filter_bar.dart's
+/// own styling, reused here rather than imported since this one lives
+/// entirely outside `GlobalFilters`) once one is. Deliberately its own small
+/// widget rather than inlined — both `onPick`/`onClear` are plain callbacks,
+/// so this has no state of its own to manage.
+class _DateRangeControl extends StatelessWidget {
+  const _DateRangeControl({required this.fromDate, required this.toDate, required this.onPick, required this.onClear});
+
+  final DateTime? fromDate;
+  final DateTime? toDate;
+  final VoidCallback onPick;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    if (fromDate == null || toDate == null) {
+      return OutlinedButton.icon(
+        onPressed: onPick,
+        icon: const Icon(Icons.date_range, size: 18),
+        label: const Text('Date Range'),
+      );
+    }
+    final format = DateFormat('d MMM yyyy');
+    return InputChip(
+      label: Text('${format.format(fromDate!)} – ${format.format(toDate!)}', style: const TextStyle(fontSize: 12)),
+      avatar: const Icon(Icons.date_range, size: 16),
+      onPressed: onPick,
+      onDeleted: onClear,
+      deleteIconColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      backgroundColor: AppColors.teal.withValues(alpha: 0.14),
+      side: BorderSide.none,
     );
   }
 }
@@ -184,8 +277,28 @@ class _GraphData {
   });
 }
 
+/// The Chart tab's date-range mode (schema/055, 2026-09-21) — see
+/// `_GraphTabState._loadRangeData`'s own doc comment. One entry per calendar
+/// month touched by the picked range, index-aligned across all three lists;
+/// `categories[i]` is that month's label (e.g. "Mar 2026").
+class _DateRangeGraphData {
+  final List<String> categories;
+  final List<num?> values;
+  final List<num?> profits;
+  const _DateRangeGraphData({required this.categories, required this.values, required this.profits});
+}
+
 class _GraphTab extends ConsumerStatefulWidget {
-  const _GraphTab({this.onExportReady});
+  const _GraphTab({this.fromDate, this.toDate, this.onExportReady});
+
+  /// 2026-09-21 (schema/055) — see SalesAnalysisScreen's own `_fromDate`/
+  /// `_toDate` doc comment. When both are set, this tab shows a single
+  /// calendar-month-bucketed line for exactly the picked range instead of
+  /// its normal trailing-3-fiscal-year comparison — see `_loadRangeData`'s
+  /// own doc comment for why that comparison has no sensible reading for an
+  /// arbitrary date span in the first place.
+  final DateTime? fromDate;
+  final DateTime? toDate;
 
   /// Same handoff pattern as DocumentAnalysisView.onExportReady — this tab
   /// has no DataExportButtons of its own, the parent's shared row exports
@@ -210,12 +323,23 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   // fiscal month label like 'Sep' back to the specific calendar date it
   // falls on in the current fiscal year, via calendarMonthStartFor).
   late final int _startMonth;
-  late Future<_GraphData> _future;
+  Future<_GraphData>? _future;
+
+  // 2026-09-21 (schema/055) — the date-range mode's own future, kept
+  // entirely separate from `_future` above rather than trying to force both
+  // shapes through one Future<T>. See `_hasDateRange`/`_loadRangeData`'s own
+  // doc comments.
+  Future<_DateRangeGraphData>? _rangeFuture;
+
+  bool get _hasDateRange => widget.fromDate != null && widget.toDate != null;
 
   // Same overlapping-batch guard as dashboard_screen.dart's own
   // `_initialKpiLoadInFlight`/`_profileReloadQueued` — see that file's
   // profile-loaded `ref.listen` for the full reasoning (2026-09-03,
-  // Section 62/65 of the Decisions doc).
+  // Section 62/65 of the Decisions doc). Only meaningful for the normal
+  // (non-range) path — date-range mode has no session-scoped Target logic
+  // to race against (see `_loadRangeData`'s own doc comment), so it's simply
+  // left at its default and never toggled while a range is active.
   bool _initialLoadInFlight = true;
   bool _profileReloadQueued = false;
 
@@ -233,29 +357,57 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: _startMonth);
     final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     // Oldest-to-newest so the chart's series order (and its legend) reads
-    // left-to-right the same way the lines do on screen.
+    // left-to-right the same way the lines do on screen. Computed
+    // unconditionally (even in date-range mode, where they go unused) —
+    // cheap, no network round trip, and keeps this block identical to
+    // before rather than adding a branch here too.
     _fiscalYears = fiscalYearWindow(currentFy, historyYears);
     _months = fiscalMonthOrderFor(startMonth: _startMonth);
-    _future = _load(ref.read(globalFiltersProvider))
-      ..whenComplete(() {
-        _initialLoadInFlight = false;
-        // Same `mounted` guard dashboard_screen.dart's own equivalent
-        // callback uses — the user may have navigated away before this
-        // settles, and calling _refetch() (setState) after disposal would
-        // throw.
-        if (!mounted) return;
-        if (_profileReloadQueued) {
-          _profileReloadQueued = false;
-          _refetch();
-        }
-      });
-    widget.onExportReady?.call(_buildExportData);
+    if (_hasDateRange) {
+      _rangeFuture = _loadRangeData(widget.fromDate!, widget.toDate!);
+    } else {
+      _future = _load(ref.read(globalFiltersProvider))
+        ..whenComplete(() {
+          _initialLoadInFlight = false;
+          // Same `mounted` guard dashboard_screen.dart's own equivalent
+          // callback uses — the user may have navigated away before this
+          // settles, and calling _refetch() (setState) after disposal would
+          // throw.
+          if (!mounted) return;
+          if (_profileReloadQueued) {
+            _profileReloadQueued = false;
+            _refetch();
+          }
+        });
+    }
+    widget.onExportReady?.call(_hasDateRange ? _buildRangeExportData : _buildExportData);
   }
 
   void _refetch() {
     setState(() {
-      _future = _load(ref.read(globalFiltersProvider));
+      if (_hasDateRange) {
+        _rangeFuture = _loadRangeData(widget.fromDate!, widget.toDate!);
+      } else {
+        _future = _load(ref.read(globalFiltersProvider));
+      }
     });
+  }
+
+  /// The date range itself changing (picked, edited, or cleared) doesn't go
+  /// through `globalFiltersProvider` at all — see `fromDate`/`toDate`'s own
+  /// doc comment — so `ref.listen<GlobalFilters>` in `build()` below can't
+  /// catch it; this is the equivalent hook for a plain constructor-param
+  /// change, same as document_analysis_view.dart's identical override.
+  /// Re-registers the export callback too — switching in or out of
+  /// date-range mode also switches which of `_buildExportData`/
+  /// `_buildRangeExportData` the parent's shared Export button should call.
+  @override
+  void didUpdateWidget(covariant _GraphTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.fromDate != oldWidget.fromDate || widget.toDate != oldWidget.toDate) {
+      widget.onExportReady?.call(_hasDateRange ? _buildRangeExportData : _buildExportData);
+      _refetch();
+    }
   }
 
   Future<_GraphData> _load(GlobalFilters filters) async {
@@ -499,6 +651,89 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     return 'R${value.toStringAsFixed(0)}';
   }
 
+  /// Sales Analysis' Chart tab under a custom date range (schema/055,
+  /// 2026-09-21) — Craig: "if the range is mar 15 2026 to june 12 2026 then
+  /// show the partial data for March and the partial data for june and the
+  /// full data for the in between." Replaces the normal trailing-3-fiscal-
+  /// year, one-line-per-year comparison entirely — there's no sensible
+  /// year-over-year reading of an arbitrary date span (which fiscal years
+  /// would even be compared?) — with ONE line, bucketed by calendar month,
+  /// sourced from the same per-line document data the Table tab reads
+  /// (`fn_sales_documents_monthly_totals`, schema/055) rather than the
+  /// fiscal-month-keyed monthly rollup `fetchConsolidatedSales` uses. No
+  /// Target overlay in this mode: Budgets/Forecast are entered per FISCAL
+  /// month, which has no clean correspondence to a boundary month that's
+  /// only partially inside the picked range.
+  ///
+  /// Both `value` and `profit` are computed here regardless of the CURRENT
+  /// `_measure` (same reasoning as `_GraphData.rows` in the normal path) —
+  /// toggling R Value/R Gross Profit is then just a rebuild against whichever
+  /// list `_buildRangeChart`/`_buildRangeExportData` pick, not a re-fetch.
+  /// Sparse server-side (a month with zero matching rows has no row at all —
+  /// see `SalesRepository.fetchSalesDocumentsMonthlyTotals`'s own doc
+  /// comment); filled in as a real 0 here, not left as a gap — unlike the
+  /// normal chart's "still-future fiscal month" null, every month touched by
+  /// a picked, definite date range has either real data or genuinely zero
+  /// data, never an unknown future.
+  Future<_DateRangeGraphData> _loadRangeData(DateTime fromDate, DateTime toDate) async {
+    final repo = ref.read(salesRepositoryProvider);
+    final filters = ref.read(globalFiltersProvider);
+    final totals = await repo.fetchSalesDocumentsMonthlyTotals(
+      documentKinds: const ['invoice', 'credit_note'],
+      fromDate: fromDate,
+      toDate: toDate,
+      filters: filters.toFilterParams(),
+    );
+    final byMonth = {for (final t in totals) DateTime(t.monthStart.year, t.monthStart.month): t};
+    final categories = <String>[];
+    final values = <num?>[];
+    final profits = <num?>[];
+    final labelFormat = DateFormat('MMM yyyy');
+    var cursor = DateTime(fromDate.year, fromDate.month);
+    final end = DateTime(toDate.year, toDate.month);
+    while (!cursor.isAfter(end)) {
+      categories.add(labelFormat.format(cursor));
+      final row = byMonth[cursor];
+      values.add(row?.value ?? 0);
+      profits.add(row?.profit ?? 0);
+      cursor = DateTime(cursor.year, cursor.month + 1);
+    }
+    return _DateRangeGraphData(categories: categories, values: values, profits: profits);
+  }
+
+  Widget _buildRangeChart(_DateRangeGraphData data) {
+    final series = [
+      TrendSeries(
+        label: _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit',
+        color: AppColors.teal,
+        values: _measure == ValueMeasure.rValue ? data.values : data.profits,
+      ),
+    ];
+    return TrendLineChart(
+      categories: data.categories,
+      series: series,
+      axisValueFormatter: _compactRand,
+      detailValueFormatter: (v) => formatRand(v),
+    );
+  }
+
+  Future<ExportData> _buildRangeExportData() async {
+    final data = await _rangeFuture!;
+    final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
+    final dateFormat = DateFormat('yyyy-MM-dd');
+    final fromLabel = dateFormat.format(widget.fromDate!);
+    final toLabel = dateFormat.format(widget.toDate!);
+    return ExportData(
+      headers: ['Month', measureLabel],
+      rows: [
+        for (var i = 0; i < data.categories.length; i++)
+          [data.categories[i], _formatOrDash(_measure == ValueMeasure.rValue ? data.values[i] : data.profits[i])],
+      ],
+      fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
+      title: 'WyzeSales — Sales Analysis ($measureLabel, $fromLabel to $toLabel)',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // ref.listen, not a manual diff-in-build + WidgetsBinding.
@@ -561,7 +796,9 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
               runSpacing: 8,
               children: [
                 Text(
-                  'Trailing ${_fiscalYears.length} fiscal years, monthly.',
+                  _hasDateRange
+                      ? '${DateFormat('d MMM yyyy').format(widget.fromDate!)} – ${DateFormat('d MMM yyyy').format(widget.toDate!)}, monthly.'
+                      : 'Trailing ${_fiscalYears.length} fiscal years, monthly.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 ValueGpToggle(value: _measure, onChanged: (v) => setState(() => _measure = v)),
@@ -570,17 +807,29 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: AsyncSection<_GraphData>(
-              future: _future,
-              isEmpty: (data) => data.rows.isEmpty,
-              builder: (context, data) => Card(
-                margin: EdgeInsets.zero,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: _buildChart(data),
-                ),
-              ),
-            ),
+            child: _hasDateRange
+                ? AsyncSection<_DateRangeGraphData>(
+                    future: _rangeFuture!,
+                    isEmpty: (data) => data.categories.isEmpty,
+                    builder: (context, data) => Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _buildRangeChart(data),
+                      ),
+                    ),
+                  )
+                : AsyncSection<_GraphData>(
+                    future: _future!,
+                    isEmpty: (data) => data.rows.isEmpty,
+                    builder: (context, data) => Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _buildChart(data),
+                      ),
+                    ),
+                  ),
           ),
         ],
       ),
@@ -630,7 +879,9 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   }
 
   Future<ExportData> _buildExportData() async {
-    final data = await _future;
+    // Only ever called while !_hasDateRange (see initState/didUpdateWidget's
+    // onExportReady registration) — _future is guaranteed set in that mode.
+    final data = await _future!;
     final byMonth = _groupByMonth(data.rows);
     final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
     // Target is a Rand-revenue figure (Sales Budget) — only meaningful

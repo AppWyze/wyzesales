@@ -96,9 +96,26 @@ class DocumentAnalysisView extends ConsumerStatefulWidget {
     required this.documentKinds,
     this.showExportButtons = true,
     this.onExportReady,
+    this.fromDate,
+    this.toDate,
   });
 
   final List<String> documentKinds;
+
+  /// 2026-09-21 (schema/055) — Sales Analysis' own custom date-range filter,
+  /// screen-local state owned by SalesAnalysisScreen, NOT part of the
+  /// shared `GlobalFilters` (Craig scoped this to Sales Analysis only —
+  /// Quote/Sales Order Analysis, the other two callers of this widget, never
+  /// pass these and see zero behaviour change). When both are set, they
+  /// REPLACE the global Year/Month/Quarter filters for this widget's own
+  /// queries — same mutual-exclusivity shape Month/Quarter already have with
+  /// each other (see `GlobalFiltersNotifier.setFiscalMonth`'s doc comment) —
+  /// rather than trying to combine "Year 2026" with "1 Mar - 30 Jun", which
+  /// has no sensible combined meaning. Dimension filters (Category/Item/
+  /// Sales Person/etc.) and the Document text filter still apply normally
+  /// alongside a date range; only the period axis changes.
+  final DateTime? fromDate;
+  final DateTime? toDate;
 
   /// 2026-08-27, cosmetic fix: Sales Analysis passes `false` here and
   /// renders its own `DataExportButtons` sharing a row with the Chart/Table
@@ -193,6 +210,28 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     widget.onExportReady?.call(_buildExportData);
   }
 
+  /// `fromDate`/`toDate` live on SalesAnalysisScreen's own State, not on
+  /// `globalFiltersProvider` — a plain constructor-param change like this
+  /// doesn't trigger `build()`'s `ref.listen<GlobalFilters>` below at all,
+  /// so this widget needs its own explicit hook to notice a new range was
+  /// picked (or cleared) and refetch, same as `_onFiltersChanged` already
+  /// does for a real GlobalFilters change.
+  @override
+  void didUpdateWidget(covariant DocumentAnalysisView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.fromDate != oldWidget.fromDate || widget.toDate != oldWidget.toDate) {
+      _onFiltersChanged();
+    }
+  }
+
+  /// Both set together or not at all — SalesAnalysisScreen only ever hands
+  /// this widget a range via `showDateRangePicker`, which itself always
+  /// returns both bounds or nothing, so there's no real "only one set" case
+  /// in practice; treated as inactive here regardless, just so a partial
+  /// state (if one ever reached this widget) fails safe back to the normal
+  /// Year/Month/Quarter behaviour rather than querying with only one bound.
+  bool get _hasDateRange => widget.fromDate != null && widget.toDate != null;
+
   /// This client's own configured Document Analysis columns, plus a
   /// code -> name map for whichever of them are a generic dim_N/attr_N
   /// dimension — see `_DimensionSetup`'s own doc comment. The five
@@ -253,11 +292,17 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     final dimSetup = await _dimSetupFuture;
     final filters = ref.read(globalFiltersProvider);
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    // A custom date range (Sales Analysis only — see `fromDate`/`toDate`'s
+    // own doc comment) REPLACES Year/Month/Quarter entirely for this fetch,
+    // rather than combining with them — same mutual-exclusivity Month and
+    // Quarter already have with each other.
     final rows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: _effectiveFiscalYear(filters, startMonth),
-          fiscalMonth: filters.fiscalMonth,
-          fiscalQuarterMonths: filters.fiscalQuarterMonths,
+          fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters, startMonth),
+          fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
+          fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
+          fromDate: widget.fromDate,
+          toDate: widget.toDate,
           filters: filters.toFilterParams(),
           document: filters.document,
           sortColumn: _sortColumnKeys(dimSetup.dimensions)[_sortColumnIndex],
@@ -274,9 +319,11 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     try {
       final totals = await ref.read(salesRepositoryProvider).fetchSalesDocumentsTotals(
             documentKinds: widget.documentKinds,
-            fiscalYear: _effectiveFiscalYear(filters, startMonth),
-            fiscalMonth: filters.fiscalMonth,
-            fiscalQuarterMonths: filters.fiscalQuarterMonths,
+            fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters, startMonth),
+            fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
+            fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
+            fromDate: widget.fromDate,
+            toDate: widget.toDate,
             filters: filters.toFilterParams(),
             document: filters.document,
           );
@@ -463,9 +510,11 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final allRows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: _effectiveFiscalYear(filters, startMonth),
-          fiscalMonth: filters.fiscalMonth,
-          fiscalQuarterMonths: filters.fiscalQuarterMonths,
+          fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters, startMonth),
+          fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
+          fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
+          fromDate: widget.fromDate,
+          toDate: widget.toDate,
           filters: filters.toFilterParams(),
           document: filters.document,
           sortColumn: _sortColumnKeys(dimSetup.dimensions)[_sortColumnIndex],
