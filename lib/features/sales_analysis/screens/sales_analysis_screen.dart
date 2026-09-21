@@ -9,7 +9,6 @@ import '../../../core/utils/formatters.dart';
 import '../../../core/utils/target_overlay.dart';
 import '../../../data/models/consolidated_sales.dart';
 import '../../../data/models/profile.dart';
-import '../../../data/models/sales_document.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
