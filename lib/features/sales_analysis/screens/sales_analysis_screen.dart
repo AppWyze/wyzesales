@@ -359,13 +359,13 @@ class _DateRangeGraphData {
 /// dimension... tick box next to each one and then we select as many as we
 /// want and they will then chart... for the selected year"). Replaces the
 /// normal "one line per fiscal year" comparison with "one line per ticked
-/// entity" for a single fiscal year (`_GraphTabState._compareYear`) — the
-/// two comparisons (which entities, which years) don't fit on one line chart
-/// at once (more than a handful of lines stops being readable regardless of
-/// how they're coloured), so this mode picks entities and holds years fixed
-/// at one, same as the normal mode picks years and holds the filtered
-/// entity fixed at one. Month/quarter granularity and R Value/R Gross Profit
-/// still apply exactly as they do in every other mode.
+/// entity" for a single fiscal year — the two comparisons (which entities,
+/// which years) don't fit on one line chart at once (more than a handful of
+/// lines stops being readable regardless of how they're coloured), so this
+/// mode picks entities and holds years fixed at one, same as the normal mode
+/// picks years and holds the filtered entity fixed at one. Month/quarter
+/// granularity and R Value/R Gross Profit still apply exactly as they do in
+/// every other mode.
 ///
 /// Pre-aggregated here (entity code -> fiscal month label -> that month's R
 /// Value/R Gross Profit) rather than stored as the raw
@@ -375,7 +375,18 @@ class _DateRangeGraphData {
 /// reason to carry them past `_loadCompareData`.
 class _CompareGraphData {
   final Map<String, Map<String, ({num value, num profit})>> byEntityAndMonth;
-  const _CompareGraphData({required this.byEntityAndMonth});
+
+  /// 2026-09-26, Craig: "I don't see the need to include the year selection
+  /// as we can already select this from the main filter." The fiscal year
+  /// this batch was fetched for — resolved once, in `_loadCompareData`, from
+  /// the global Year filter (falling back to the current fiscal year when
+  /// unset) and carried alongside the data rather than re-read from the
+  /// global filter at render time, so a fetch already in flight can't render
+  /// against a DIFFERENT year than the one it actually queried for if the
+  /// global filter changes again before it resolves.
+  final int year;
+
+  const _CompareGraphData({required this.year, required this.byEntityAndMonth});
 }
 
 /// 2026-09-25, Craig: "The chart displays months on years. Can we have a
@@ -439,14 +450,26 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
 
   bool get _hasDateRange => widget.fromDate != null && widget.toDate != null;
 
-  // 2026-09-25, Craig — see `_CompareGraphData`'s own doc comment. All
-  // screen-local, same treatment as `_fromDate`/`_toDate` on the parent
-  // screen: this mode has nothing to do with `globalFiltersProvider`, since
-  // "tick several entities of one dimension to compare" isn't a shape any
-  // OTHER screen's single-entity global filter can represent.
+  // 2026-09-25, Craig — see `_CompareGraphData`'s own doc comment. Which
+  // entities, in which dimension, is screen-local state, same treatment as
+  // `_fromDate`/`_toDate` on the parent screen: "tick several entities of
+  // one dimension to compare" isn't a shape any OTHER screen's single-entity
+  // global filter can represent. Which YEAR to plot them for is NOT
+  // screen-local, though — see `_compareFuture`'s own doc comment just below
+  // for why that one deliberately reads the global Year filter instead.
   ClientDimensionConfig? _compareDimension;
   List<CodeName> _compareEntities = const [];
-  late int _compareYear;
+
+  /// 2026-09-26, Craig: "I don't see the need to include the year selection
+  /// as we can already select this from the main filter" — replaces this
+  /// mode's original own year dropdown. Unlike the normal trailing-years
+  /// chart (`_load`/`_graphFilters`), which deliberately EXCLUDES the global
+  /// Year filter because showing several years side by side is that view's
+  /// whole point, Compare mode only ever shows ONE year at a time regardless
+  /// — there's no "several years" behaviour for the global Year filter to
+  /// collide with here, so reading it directly is the natural fit, not a
+  /// special case. See `_loadCompareData` for where `filters.fiscalYear` is
+  /// actually read (falling back to the current fiscal year when unset).
   Future<_CompareGraphData>? _compareFuture;
 
   // Only meaningful outside date-range mode (see `_ChartGranularity`'s own
@@ -497,12 +520,6 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // before rather than adding a branch here too.
     _fiscalYears = fiscalYearWindow(currentFy, historyYears);
     _months = fiscalMonthOrderFor(startMonth: _startMonth);
-    // Compare mode's default year — Craig: "for the selected year... default
-    // current." `_fiscalYears.last` is always the current fiscal year (see
-    // that field's own doc comment), computed unconditionally here whether
-    // or not Compare mode ever gets turned on, same as `_fiscalYears`/
-    // `_months` themselves.
-    _compareYear = _fiscalYears.last;
     if (_hasDateRange) {
       _rangeFuture = _loadRangeData(widget.fromDate!, widget.toDate!);
     } else {
@@ -529,6 +546,12 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         _rangeFuture = _loadRangeData(widget.fromDate!, widget.toDate!);
       } else {
         _future = _load(ref.read(globalFiltersProvider));
+        // Compare mode now reads the global Year filter directly
+        // (`_loadCompareData`) rather than its own local state, so a Year
+        // pick has to trigger a Compare refetch the same way it already
+        // triggers this normal-mode one — `ref.listen<GlobalFilters>` in
+        // build() calls this on every global filter change, Year included.
+        if (_isComparing) _compareFuture = _loadCompareData();
       }
     });
   }
@@ -1009,19 +1032,15 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     widget.onExportReady?.call(_currentExporter());
   }
 
-  void _setCompareYear(int year) {
-    setState(() {
-      _compareYear = year;
-      if (_compareDimension != null) _compareFuture = _loadCompareData();
-    });
-  }
-
   /// Fetches every ticked entity's month-level R Value/R Gross Profit for
-  /// `_compareYear`, off the exact same `fetchDimensionMonthlySales` call
-  /// the "Sales by [Dimension]" table already uses (sales_by_screen.dart's
-  /// own `_load`) — no new backend query, just a different client-side
-  /// grouping (by entity, for one year, instead of by year, for every
-  /// entity).
+  /// the global Year filter (`filters.fiscalYear`, falling back to the
+  /// current fiscal year when unset — see `_CompareGraphData.year`'s own
+  /// doc comment for why this mode reads that filter directly instead of
+  /// its own local state), off the exact same `fetchDimensionMonthlySales`
+  /// call the "Sales by [Dimension]" table already uses
+  /// (sales_by_screen.dart's own `_load`) — no new backend query, just a
+  /// different client-side grouping (by entity, for one year, instead of by
+  /// year, for every entity).
   ///
   /// `filters.withDimension(dimension.dimensionKey, null)` strips only the
   /// dimension being compared out of whatever's globally filtered right now
@@ -1033,13 +1052,16 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   /// comparing several.
   Future<_CompareGraphData> _loadCompareData() async {
     final dimension = _compareDimension;
-    if (dimension == null || _compareEntities.isEmpty) return const _CompareGraphData(byEntityAndMonth: {});
+    if (dimension == null || _compareEntities.isEmpty) {
+      return _CompareGraphData(year: _fiscalYears.last, byEntityAndMonth: const {});
+    }
     final tickedCodes = _compareEntities.map((e) => e.code).toSet();
-    final filters = ref.read(globalFiltersProvider).withDimension(dimension.dimensionKey, null);
+    final filters = ref.read(globalFiltersProvider);
+    final year = filters.fiscalYear ?? _fiscalYears.last;
     final rows = await ref.read(salesRepositoryProvider).fetchDimensionMonthlySales(
           dimension: dimension.dimensionKey,
-          fiscalYears: [_compareYear],
-          filters: filters,
+          fiscalYears: [year],
+          filters: filters.withDimension(dimension.dimensionKey, null),
         );
     final byEntityAndMonth = <String, Map<String, ({num value, num profit})>>{};
     for (final row in rows) {
@@ -1048,20 +1070,20 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       byEntityAndMonth.putIfAbsent(row.entityCode, () => {});
       byEntityAndMonth[row.entityCode]![label] = (value: row.value, profit: row.profit);
     }
-    return _CompareGraphData(byEntityAndMonth: byEntityAndMonth);
+    return _CompareGraphData(year: year, byEntityAndMonth: byEntityAndMonth);
   }
 
   /// Same "null only means genuinely still-future" rule `_valueFor` uses for
   /// the normal trailing-years path — a month with no row for this entity is
-  /// a real 0 (nothing sold that month) UNLESS `_compareYear` is the current,
+  /// a real 0 (nothing sold that month) UNLESS `year` is the current,
   /// still-partial fiscal year AND this month hasn't happened yet, in which
   /// case it's a gap, not a zero.
-  num? _compareValueFor(Map<String, ({num value, num profit})> monthMap, String month) {
+  num? _compareValueFor(Map<String, ({num value, num profit})> monthMap, String month, int year) {
     final row = monthMap[month];
     if (row != null) return _measure == ValueMeasure.rValue ? row.value : row.profit;
     final currentFiscalMonthIndex = _months.indexOf(fiscalMonthLabelFor(DateTime.now()));
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: _startMonth);
-    final isStillFuture = _compareYear == currentFy && _months.indexOf(month) > currentFiscalMonthIndex;
+    final isStillFuture = year == currentFy && _months.indexOf(month) > currentFiscalMonthIndex;
     return isStillFuture ? null : 0;
   }
 
@@ -1069,9 +1091,9 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   /// the 3 months is" reasoning as `_quarterlyValueFor` uses for the normal
   /// path, just keyed by this mode's own per-entity month map instead of
   /// `_groupByMonth`'s fiscal-year one.
-  num? _compareQuarterlyValueFor(Map<String, ({num value, num profit})> monthMap, String quarterLabel) {
+  num? _compareQuarterlyValueFor(Map<String, ({num value, num profit})> monthMap, String quarterLabel, int year) {
     final monthValues = [
-      for (final month in fiscalMonthsInQuarter(quarterLabel, startMonth: _startMonth)) _compareValueFor(monthMap, month),
+      for (final month in fiscalMonthsInQuarter(quarterLabel, startMonth: _startMonth)) _compareValueFor(monthMap, month, year),
     ];
     if (monthValues.every((v) => v == null)) return null;
     return monthValues.fold<num>(0, (sum, v) => sum + (v ?? 0));
@@ -1084,7 +1106,9 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   /// read the exact same figure for the exact same cell.
   num? _compareEntityValue(_CompareGraphData data, CodeName entity, String category, bool isQuarterly) {
     final monthMap = data.byEntityAndMonth[entity.code] ?? const {};
-    return isQuarterly ? _compareQuarterlyValueFor(monthMap, category) : _compareValueFor(monthMap, category);
+    return isQuarterly
+        ? _compareQuarterlyValueFor(monthMap, category, data.year)
+        : _compareValueFor(monthMap, category, data.year);
   }
 
   Widget _buildCompareChart(_CompareGraphData data) {
@@ -1136,7 +1160,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
           ],
       ],
       fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
-      title: 'WyzeSales — Sales Analysis ($measureLabel, comparing $dimensionLabel, FY$_compareYear)',
+      title: 'WyzeSales — Sales Analysis ($measureLabel, comparing $dimensionLabel, FY${data.year})',
     );
   }
 
@@ -1180,6 +1204,14 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       }
     });
 
+    // Compare mode's effective year — same fallback `_loadCompareData` uses
+    // (`filters.fiscalYear ?? _fiscalYears.last`), computed again here so the
+    // header can show it immediately rather than waiting on `_compareFuture`
+    // to resolve. Watched, not read, so picking a Year in the global filter
+    // updates this label the instant it changes rather than lagging behind
+    // the refetch it also triggers (`ref.listen<GlobalFilters>` above).
+    final compareYear = ref.watch(globalFiltersProvider).fiscalYear ?? _fiscalYears.last;
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -1205,7 +1237,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
                   _hasDateRange
                       ? '${DateFormat('d MMM yyyy').format(widget.fromDate!)} – ${DateFormat('d MMM yyyy').format(widget.toDate!)}, monthly.'
                       : _isComparing
-                          ? 'Comparing ${_compareEntities.length} of ${_compareDimension!.displayLabel}, FY$_compareYear, '
+                          ? 'Comparing ${_compareEntities.length} of ${_compareDimension!.displayLabel}, FY$compareYear, '
                               '${_granularity == _ChartGranularity.quarters ? 'quarterly' : 'monthly'}.'
                           : 'Trailing ${_fiscalYears.length} fiscal years, ${_granularity == _ChartGranularity.quarters ? 'quarterly' : 'monthly'}.',
                   style: Theme.of(context).textTheme.bodyMedium,
@@ -1250,49 +1282,28 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
                               icon: const Icon(Icons.compare_arrows, size: 16),
                               label: const Text('Compare entities'),
                             )
-                          : Wrap(
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                InputChip(
-                                  label: Text(
-                                    'Comparing ${_compareEntities.length} of ${_compareDimension!.displayLabel}',
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                  avatar: const Icon(Icons.compare_arrows, size: 16),
-                                  onPressed: () => _openCompareDialog(pickDimension: false),
-                                  onDeleted: _clearCompare,
-                                  deleteIconColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-                                  visualDensity: VisualDensity.compact,
-                                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                  backgroundColor: AppColors.teal.withValues(alpha: 0.14),
-                                  side: BorderSide.none,
-                                ),
-                                // The year Compare mode plots — "for the
-                                // selected year... default current" — bounded
-                                // to the same trailing-years window
-                                // (`_fiscalYears`) every other Year picker in
-                                // the app already offers, defaulting to the
-                                // current fiscal year (see `_compareYear`'s
-                                // own initState comment). Deliberately its own
-                                // screen-local control, not the global Year
-                                // filter — same reasoning as the date range's
-                                // own local state (this screen's `_fromDate`/
-                                // `_toDate` doc comment): every OTHER screen
-                                // reading the global Year filter has nothing
-                                // to do with which single year Compare mode
-                                // happens to be plotting right now.
-                                DropdownButton<int>(
-                                  value: _compareYear,
-                                  isDense: true,
-                                  underline: const SizedBox.shrink(),
-                                  items: [for (final year in _fiscalYears) DropdownMenuItem(value: year, child: Text('FY$year'))],
-                                  onChanged: (year) {
-                                    if (year != null) _setCompareYear(year);
-                                  },
-                                ),
-                              ],
+                          // 2026-09-26, Craig: "I don't see the need to
+                          // include the year selection as we can already
+                          // select this from the main filter" — replaces the
+                          // local year dropdown that used to sit next to this
+                          // chip. The year Compare mode is plotting is now
+                          // the global Year filter (`compareYear`, computed
+                          // above), so it's folded into the chip's own label
+                          // instead of a separate control — there's nothing
+                          // left here for a dropdown to pick.
+                          : InputChip(
+                              label: Text(
+                                'Comparing ${_compareEntities.length} of ${_compareDimension!.displayLabel} (FY$compareYear)',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              avatar: const Icon(Icons.compare_arrows, size: 16),
+                              onPressed: () => _openCompareDialog(pickDimension: false),
+                              onDeleted: _clearCompare,
+                              deleteIconColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              backgroundColor: AppColors.teal.withValues(alpha: 0.14),
+                              side: BorderSide.none,
                             ),
                   ],
                 ),
