@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/app_providers.dart';
 import '../../core/filters/global_filters.dart';
+import '../../core/theme/app_theme.dart';
 import '../../data/models/client_dimension_config.dart';
 import '../../data/models/reference_data.dart';
 import '../utils/responsive.dart';
@@ -341,12 +342,23 @@ class _EntityMultiSelectDialogState extends ConsumerState<_EntityMultiSelectDial
                 spacing: 6,
                 runSpacing: 6,
                 children: [
+                  // 2026-09-28, Craig: "The formatting of this looks default
+                  // and untidy. Please can you polish this to align with the
+                  // rest of the app." — this Chip was missing the
+                  // teal-tinted, borderless treatment every OTHER removable
+                  // chip in the app already gets (global_filter_bar.dart's
+                  // `_RemovableChip`, and this same Compare feature's own
+                  // dimension chip in sales_analysis_screen.dart), so it fell
+                  // back to Material's plain grey/outlined default instead.
                   for (final entity in _selected.values)
                     Chip(
                       label: Text(entity.displayLabel, style: const TextStyle(fontSize: 12)),
                       onDeleted: () => _toggle(entity, false),
+                      deleteIconColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                       visualDensity: VisualDensity.compact,
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      backgroundColor: AppColors.teal.withValues(alpha: 0.14),
+                      side: BorderSide.none,
                     ),
                 ],
               ),
