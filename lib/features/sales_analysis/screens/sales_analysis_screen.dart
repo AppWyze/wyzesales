@@ -352,6 +352,15 @@ class _DateRangeGraphData {
   });
 }
 
+/// 2026-09-25, Craig: "The chart displays months on years. Can we have a
+/// toggle to flip to Quarters. i.e. quarters on years." Only meaningful for
+/// the normal trailing-fiscal-years comparison (`_buildChart`) — date-range
+/// mode (`_buildRangeChart`) already buckets by calendar month across a
+/// single, arbitrary span rather than comparing fiscal years against each
+/// other, so there's no "years" axis there for a quarter rollup to sit
+/// alongside; the toggle only renders when `!_hasDateRange` (see `build()`).
+enum _ChartGranularity { months, quarters }
+
 class _GraphTab extends ConsumerStatefulWidget {
   const _GraphTab({this.fromDate, this.toDate, this.onExportReady});
 
@@ -375,6 +384,13 @@ class _GraphTab extends ConsumerStatefulWidget {
 
 class _GraphTabState extends ConsumerState<_GraphTab> {
   ValueMeasure _measure = ValueMeasure.rValue;
+
+  // 2026-09-25, Craig — see `_ChartGranularity`'s own doc comment. Plain
+  // screen-local State, same treatment as `_measure` above: purely a
+  // client-side rebuild against the already-fetched `_GraphData`/`_future`,
+  // no refetch needed (see `_buildChart`'s quarterly aggregation below), so
+  // this never needs to touch `_refetch()`.
+  _ChartGranularity _granularity = _ChartGranularity.months;
   late final List<int> _fiscalYears;
   // Computed once at mount, same as _fiscalYears — this chart's category/
   // row ORDER is display-only, every lookup below is keyed by the calendar
@@ -928,10 +944,35 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
                 Text(
                   _hasDateRange
                       ? '${DateFormat('d MMM yyyy').format(widget.fromDate!)} – ${DateFormat('d MMM yyyy').format(widget.toDate!)}, monthly.'
-                      : 'Trailing ${_fiscalYears.length} fiscal years, monthly.',
+                      : 'Trailing ${_fiscalYears.length} fiscal years, ${_granularity == _ChartGranularity.quarters ? 'quarterly' : 'monthly'}.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
-                ValueGpToggle(value: _measure, onChanged: (v) => setState(() => _measure = v)),
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    // 2026-09-25, Craig: "The chart displays months on
+                    // years. Can we have a toggle to flip to Quarters. i.e.
+                    // quarters on years." Only shown for the normal
+                    // trailing-fiscal-years comparison — see
+                    // `_ChartGranularity`'s own doc comment for why
+                    // date-range mode has no "years" axis for this to apply
+                    // to. A plain client-side toggle, same as `_measure`
+                    // below it — both rebuild `_buildChart` against the
+                    // already-fetched `_future`, no refetch needed.
+                    if (!_hasDateRange)
+                      SegmentedButton<_ChartGranularity>(
+                        segments: const [
+                          ButtonSegment(value: _ChartGranularity.months, label: Text('Months')),
+                          ButtonSegment(value: _ChartGranularity.quarters, label: Text('Quarters')),
+                        ],
+                        selected: {_granularity},
+                        onSelectionChanged: (selection) => setState(() => _granularity = selection.first),
+                      ),
+                    ValueGpToggle(value: _measure, onChanged: (v) => setState(() => _measure = v)),
+                  ],
+                ),
               ],
             ),
           ),
@@ -1008,46 +1049,87 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     return isStillFuture ? null : 0;
   }
 
+  /// 2026-09-25 — see `_ChartGranularity`'s own doc comment. Sums the 3
+  /// months making up `quarterLabel` (via `fiscalMonthsInQuarter`) using
+  /// `_valueFor` above, so it inherits that method's exact "null only means
+  /// genuinely still-future" rule rather than a separate one: a quarter is
+  /// null only when EVERY one of its 3 months is (the whole quarter hasn't
+  /// happened yet); a quarter already partway through sums whatever real
+  /// months exist so far (a still-future month inside it contributes 0, not
+  /// a missing value) instead of hiding the running total until the quarter
+  /// closes — same "show real partial data, don't hide it" reasoning behind
+  /// `_valueFor`'s own 0-vs-null split (Craig, 2026-08-27: "if there is a 0
+  /// value the chart line disappears... can it rather continue").
+  num? _quarterlyValueFor(Map<String, Map<int, ConsolidatedSales>> byMonth, String quarterLabel, int fiscalYear) {
+    final monthValues = [
+      for (final month in fiscalMonthsInQuarter(quarterLabel, startMonth: _startMonth)) _valueFor(byMonth, month, fiscalYear),
+    ];
+    if (monthValues.every((v) => v == null)) return null;
+    return monthValues.fold<num>(0, (sum, v) => sum + (v ?? 0));
+  }
+
+  /// Same rollup, for the Target overlay's monthly bars (`_GraphData
+  /// .targetBars`, indexed by `_months`) — sums the 3 months' figures the
+  /// same way. Deliberately takes the raw bars list rather than a
+  /// `_GraphData`, since `_buildChart` calls this once per quarter with the
+  /// same `data.targetBars` each time.
+  num? _quarterlyTargetFor(List<num?> monthlyTargetBars, String quarterLabel) {
+    final values = [
+      for (final month in fiscalMonthsInQuarter(quarterLabel, startMonth: _startMonth)) monthlyTargetBars[_months.indexOf(month)],
+    ];
+    if (values.every((v) => v == null)) return null;
+    return values.fold<num>(0, (sum, v) => sum + (v ?? 0));
+  }
+
   Future<ExportData> _buildExportData() async {
     // Only ever called while !_hasDateRange (see initState/didUpdateWidget's
     // onExportReady registration) — _future is guaranteed set in that mode.
     final data = await _future!;
     final byMonth = _groupByMonth(data.rows);
     final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
+    // 2026-09-25, Craig — export mirrors whichever granularity the chart is
+    // currently showing (see `_ChartGranularity`'s own doc comment), same as
+    // it already mirrors `_measure`.
+    final isQuarterly = _granularity == _ChartGranularity.quarters;
+    final categories = isQuarterly ? fiscalQuarterLabels : _months;
+    final targetBars = isQuarterly ? [for (final q in fiscalQuarterLabels) _quarterlyTargetFor(data.targetBars, q)] : data.targetBars;
     // Target is a Rand-revenue figure (Sales Budget) — only meaningful
     // alongside R Value, not R Gross Profit, same reasoning _buildChart
     // below uses to decide whether to pass targetBars to the chart at all.
     // Also skipped when every entry is null (a failed fetch, or genuinely
     // nothing entered) — same as the chart, no point in an all-dash column.
-    final includeTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
+    final includeTarget = _measure == ValueMeasure.rValue && targetBars.any((v) => v != null);
     final targetHeader = includeTarget ? (data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})') : null;
     // 2026-09-04, Craig — same "surface the actual percentage" request that
     // added it to the chart's own hover row: only meaningful for a derived
     // estimate (a real target has no "share"/"basis" to report), so these
     // two extra columns are skipped entirely for the exact-single-dimension
     // case, same as `includeTarget` itself already skips the whole Target
-    // column when nothing was ever entered at all.
-    final includeTargetBasis = includeTarget && data.targetIsEstimated;
+    // column when nothing was ever entered at all. Also skipped entirely at
+    // quarterly granularity (2026-09-25) — see `_buildChart`'s own comment
+    // on why a quarter's target has no single share/basis to report.
+    final includeTargetBasis = includeTarget && data.targetIsEstimated && !isQuarterly;
     return ExportData(
       headers: [
-        'Month',
+        isQuarterly ? 'Quarter' : 'Month',
         for (final fy in _fiscalYears) 'FY$fy',
         if (targetHeader != null) targetHeader,
         if (includeTargetBasis) 'Target Basis',
         if (includeTargetBasis) 'Target Share %',
       ],
       rows: [
-        for (var i = 0; i < _months.length; i++)
+        for (var i = 0; i < categories.length; i++)
           [
-            _months[i],
-            for (final fy in _fiscalYears) _formatOrDash(_valueFor(byMonth, _months[i], fy)),
-            if (includeTarget) _formatOrDash(data.targetBars[i]),
+            categories[i],
+            for (final fy in _fiscalYears)
+              _formatOrDash(isQuarterly ? _quarterlyValueFor(byMonth, categories[i], fy) : _valueFor(byMonth, categories[i], fy)),
+            if (includeTarget) _formatOrDash(targetBars[i]),
             if (includeTargetBasis) data.targetBasisBars[i] ?? '—',
             if (includeTargetBasis) _formatShareOrDash(data.targetShareBars[i]),
           ],
       ],
       fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
-      title: 'WyzeSales — Sales Analysis ($measureLabel, trailing ${_fiscalYears.length} fiscal years)',
+      title: 'WyzeSales — Sales Analysis ($measureLabel, trailing ${_fiscalYears.length} fiscal years${isQuarterly ? ', quarterly' : ''})',
     );
   }
 
@@ -1058,6 +1140,12 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   Widget _buildChart(_GraphData data) {
     final byMonth = _groupByMonth(data.rows);
     num? valueFor(String month, int fiscalYear) => _valueFor(byMonth, month, fiscalYear);
+
+    // 2026-09-25, Craig: "The chart displays months on years. Can we have a
+    // toggle to flip to Quarters. i.e. quarters on years." — see
+    // `_ChartGranularity`'s own doc comment.
+    final isQuarterly = _granularity == _ChartGranularity.quarters;
+    final categories = isQuarterly ? fiscalQuarterLabels : _months;
 
     // A genuinely distinct colour per fiscal year (2026-09-01, Craig: "Line
     // chart colours. Please can we have a separate colour for each set of
@@ -1078,7 +1166,10 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         TrendSeries(
           label: 'FY${_fiscalYears[i]}',
           color: seriesColors[i],
-          values: [for (final month in _months) valueFor(month, _fiscalYears[i])],
+          values: [
+            for (final category in categories)
+              isQuarterly ? _quarterlyValueFor(byMonth, category, _fiscalYears[i]) : valueFor(category, _fiscalYears[i]),
+          ],
         ),
     ];
 
@@ -1099,20 +1190,34 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // genuinely nothing has ever been entered for this combination) — no
     // point showing a legend entry and swatch for an overlay with no
     // visible bars behind it.
-    final showTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
+    //
+    // 2026-09-25 — rolled up to quarters too when that's the active
+    // granularity, via `_quarterlyTargetFor`. `targetShareBars`/
+    // `targetBasisBars` are NOT summed alongside it: each of a quarter's 3
+    // months can genuinely resolve to a different basis (see
+    // `_loadTargetBars`'s own per-month hierarchical fallback above), so
+    // there's no single clean "X% of Y" to report for the quarter as a
+    // whole — the bar itself still shows (a plain total), just without that
+    // per-month detail in the hover row, and the legend tooltip explaining
+    // the mechanism is suppressed too rather than left describing a detail
+    // no longer there.
+    final targetBars = isQuarterly ? [for (final q in fiscalQuarterLabels) _quarterlyTargetFor(data.targetBars, q)] : data.targetBars;
+    final targetShareBars = isQuarterly ? List<double?>.filled(categories.length, null) : data.targetShareBars;
+    final targetBasisBars = isQuarterly ? List<String?>.filled(categories.length, null) : data.targetBasisBars;
+    final showTarget = _measure == ValueMeasure.rValue && targetBars.any((v) => v != null);
     final targetColor = AppColors.info.withValues(alpha: data.targetIsEstimated ? 0.30 : 0.45);
     final targetLabel = data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})';
     return TrendLineChart(
-      categories: _months,
+      categories: categories,
       series: series,
       axisValueFormatter: _compactRand,
       detailValueFormatter: (v) => formatRand(v),
-      targetBars: showTarget ? data.targetBars : null,
-      targetShareBars: showTarget ? data.targetShareBars : null,
-      targetBasisBars: showTarget ? data.targetBasisBars : null,
+      targetBars: showTarget ? targetBars : null,
+      targetShareBars: showTarget ? targetShareBars : null,
+      targetBasisBars: showTarget ? targetBasisBars : null,
       targetLabel: showTarget ? targetLabel : null,
       targetColor: showTarget ? targetColor : null,
-      targetTooltip: showTarget && data.targetIsEstimated ? _targetTooltip : null,
+      targetTooltip: showTarget && data.targetIsEstimated && !isQuarterly ? _targetTooltip : null,
     );
   }
 
