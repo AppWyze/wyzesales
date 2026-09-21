@@ -8,6 +8,7 @@ import '../../../core/app_providers.dart';
 import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
 import '../../../core/supabase/supabase_config.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/budget_figure.dart';
 import '../../../data/models/client_dimension_config.dart';
@@ -589,6 +590,92 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     }
   }
 
+  /// Sum of every fiscal month's value in `series` — the denominator for
+  /// `_pctOf` below, and what the (unchanged) Totals row already sums
+  /// separately for the Sales Budget/Seasonal Forecast columns themselves.
+  num _annualTotal(Map<String, num> series) => _months.fold<num>(0, (sum, m) => sum + (series[m] ?? 0));
+
+  /// Sum of the 3 fiscal months making up quarter `quarterIndex` (0=Q1 ..
+  /// 3=Q4) — `_months` is already in fiscal order (`fiscalMonthOrderFor`),
+  /// so a quarter is just the next unclaimed run of 3, same grouping
+  /// `fiscalMonthsInQuarter` uses elsewhere, without needing to resolve a
+  /// quarter LABEL here (this table has no quarter/month granularity toggle
+  /// to serve — every row already IS one month).
+  num _quarterTotal(Map<String, num> series, int quarterIndex) {
+    num sum = 0;
+    for (var i = quarterIndex * 3; i < quarterIndex * 3 + 3 && i < _months.length; i++) {
+      sum += series[_months[i]] ?? 0;
+    }
+    return sum;
+  }
+
+  /// 2026-09-28, Craig: "on the right of each number can you show the % of
+  /// contribution and on the right of that the contribution per quarter."
+  /// Shared by both the Sales Budget and Seasonal Forecast columns — each
+  /// has its own total, so a month's Budget % and Forecast % can genuinely
+  /// differ even though they're computed the same way. Whole numbers, not
+  /// decimals — this is a quick at-a-glance annotation in an already dense
+  /// row, not a figure anyone needs to the tenth of a percent. "—" rather
+  /// than a division-by-zero when nothing's been entered/forecast for the
+  /// whole year yet.
+  String _pctOf(num value, num total) => total == 0 ? '—' : '${(value / total * 100).round()}%';
+
+  /// Text colour for a Seasonal Forecast figure, by its own month's
+  /// confidence tier — 2026-09-28, Craig: "remove this column and rather
+  /// colour code the numbers. Red = Low; Amber = Partial and Green = Full."
+  /// Reuses `AppColors.negative`/`caution`/`positive` rather than new
+  /// colours — see this file's own new import: those three already exist
+  /// specifically for "positive/negative GP%, over/under budget, forecast
+  /// confidence" (app_theme.dart's own doc comment lists forecast
+  /// confidence by name), just unused for that third purpose until now.
+  /// Null (default text colour) for a month with no forecast at all — see
+  /// `_legend` below for what the three colours mean, now that the
+  /// Confidence column itself is gone.
+  Color? _confidenceColor(String? confidence) {
+    switch (confidence) {
+      case 'low':
+        return AppColors.negative;
+      case 'partial':
+        return AppColors.caution;
+      case 'full':
+        return AppColors.positive;
+      default:
+        return null;
+    }
+  }
+
+  /// 2026-09-28, Craig: "Include a legend at the bottom explaining this."
+  /// Explains what the Seasonal Forecast column's text colour means, now
+  /// that the Confidence column itself is gone — one dot + label per tier,
+  /// same order/wording as `compute-forecast`'s own three-tier scheme
+  /// (schema/041, <12 months history = low, 12-23 = partial, 24+ = full)
+  /// rather than re-deriving the thresholds here.
+  Widget _legend() {
+    final textStyle = Theme.of(context).textTheme.bodySmall;
+    return Wrap(
+      spacing: 16,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('Forecast confidence:', style: textStyle),
+        _legendEntry(AppColors.negative, 'Low', textStyle),
+        _legendEntry(AppColors.caution, 'Partial', textStyle),
+        _legendEntry(AppColors.positive, 'Full', textStyle),
+      ],
+    );
+  }
+
+  Widget _legendEntry(Color color, String label, TextStyle? textStyle) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 6),
+        Text(label, style: textStyle),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Deliberately no row-click cross-filter here either (2026-09-08, see
@@ -629,6 +716,16 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     // included in the "Totals to the top" scope Craig confirmed for the
     // other tables). A frozen HEADER alone would be safe to add here today
     // if wanted — flagged as an easy follow-up, not applied unasked.
+    //
+    // Computed once here rather than per row — every month's contribution
+    // % shares the same annual/quarterly totals, and (unlike the Sales
+    // Budget/Seasonal Forecast figures themselves) none of this depends on
+    // anything that changes mid-edit, so there's no reason to recompute it
+    // 12 times over.
+    final budgetTotal = _annualTotal(widget.data.budget);
+    final forecastTotal = _annualTotal(widget.data.forecast);
+    final budgetQuarterTotals = [for (var q = 0; q < 4; q++) _quarterTotal(widget.data.budget, q)];
+    final forecastQuarterTotals = [for (var q = 0; q < 4; q++) _quarterTotal(widget.data.forecast, q)];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -656,11 +753,33 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
               // aligning container is provably identical, not just
               // presumed to be, between the input rows and the Total row.
               DataColumn2(label: Text('Sales Budget'), numeric: true, fixedWidth: _budgetColumnWidth),
+              // 2026-09-28, Craig: "on the right of each number can you show
+              // the % of contribution and on the right of that the
+              // contribution per quarter... This should also show for the
+              // manually entered targets." Two more, single-line columns
+              // rather than folding these into the Sales Budget/Seasonal
+              // Forecast cells themselves as a second line of text —
+              // `dataTableTheme.dataRowMaxHeight` (app_theme.dart) fixes
+              // every table row in the app at 36px, which is enough for
+              // exactly one line of text; a two-line cell here would be the
+              // exact class of overflow just fixed in
+              // platform_admin_screen.dart, just vertical instead of
+              // horizontal. Separate columns stay inside that row height and
+              // fall back to this table's existing horizontal scroll
+              // (ResponsiveDataTable) instead.
+              DataColumn(label: Text('Budget %'), numeric: true),
+              DataColumn(label: Text('Budget Qtr %'), numeric: true),
+              // 2026-09-28, Craig: "remove this column and rather colour
+              // code the numbers" — the Confidence column is gone; its
+              // information now lives entirely in this cell's own text
+              // colour (`_confidenceColor`) instead of a separate column.
               DataColumn(label: Text('Seasonal Forecast'), numeric: true),
-              DataColumn(label: Text('Confidence')),
+              DataColumn(label: Text('Forecast %'), numeric: true),
+              DataColumn(label: Text('Forecast Qtr %'), numeric: true),
             ],
             rows: [
               ..._months.map((month) {
+                final quarterIndex = _months.indexOf(month) ~/ 3;
                 return DataRow(cells: [
                   DataCell(Text(month)),
                   DataCell(
@@ -716,14 +835,24 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
                           )
                         : Text(formatRand(widget.data.budget[month])),
                   ),
-                  DataCell(Text(formatRand(widget.data.forecast[month]))),
-                  DataCell(Text(widget.data.confidence[month] ?? '—')),
+                  DataCell(Text(_pctOf(widget.data.budget[month] ?? 0, budgetTotal))),
+                  DataCell(Text(_pctOf(budgetQuarterTotals[quarterIndex], budgetTotal))),
+                  DataCell(
+                    Text(
+                      formatRand(widget.data.forecast[month]),
+                      style: TextStyle(color: _confidenceColor(widget.data.confidence[month])),
+                    ),
+                  ),
+                  DataCell(Text(_pctOf(widget.data.forecast[month] ?? 0, forecastTotal))),
+                  DataCell(Text(_pctOf(forecastQuarterTotals[quarterIndex], forecastTotal))),
                 ]);
               }),
               _totalsRow(),
             ],
           ),
         ),
+        const SizedBox(height: 8),
+        _legend(),
         if (widget.canEdit) ...[
           const SizedBox(height: 12),
           Align(
@@ -756,8 +885,10 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   /// rebuild on every keystroke (only on save), so a total sourced from the
   /// text controllers would just as often show a stale figure as a current
   /// one; summing the saved values is the one source that's always accurate
-  /// for what's actually been recorded. Confidence has no meaningful total
-  /// (it's a label, not a number) so that cell is left blank.
+  /// for what's actually been recorded. The 4 contribution-% columns
+  /// (2026-09-28) have no meaningful total of their own — see their own
+  /// blank cells below for why — so this row stays exactly 2 real figures
+  /// wide, same as before that change.
   DataRow _totalsRow() {
     final totalBudget = _months.fold<num>(0, (sum, month) => sum + (widget.data.budget[month] ?? 0));
     final totalForecast = _months.fold<num>(0, (sum, month) => sum + (widget.data.forecast[month] ?? 0));
@@ -783,7 +914,19 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
           child: Align(alignment: Alignment.centerRight, child: Text(formatRand(totalBudget), style: style)),
         ),
       ),
+      // Budget %/Budget Qtr % — a month's contribution to a total it's
+      // already PART of; the Total row itself has no meaningful "% of
+      // total" to show (it'd always just read 100%), same reasoning as the
+      // pre-existing blank Confidence total cell below.
+      const DataCell(Text('')),
+      const DataCell(Text('')),
       DataCell(Text(formatRand(totalForecast), style: style)),
+      // Forecast %/Forecast Qtr % — blank for the same reason as Budget
+      // %/Budget Qtr % above. Confidence itself is gone as a column (see
+      // this table's build() header comments) so there's no longer a
+      // trailing blank cell for that specifically — these two take its
+      // place.
+      const DataCell(Text('')),
       const DataCell(Text('')),
     ]);
   }
