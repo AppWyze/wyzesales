@@ -40,6 +40,8 @@ class AppShell extends ConsumerWidget {
     this.currentRoute,
     this.showGlobalFilters = true,
     this.extraFilterBarChip,
+    this.extraFilterLabel,
+    this.onExtraFilterSelected,
   });
 
   final String title;
@@ -51,7 +53,20 @@ class AppShell extends ConsumerWidget {
   /// control to the shared filter strip without that control's state
   /// joining `globalFiltersProvider`, which every other screen also reads.
   /// AppShell doesn't know or care what this widget is; it's just a slot.
+  /// 2026-09-23: now only ever passed non-null once a range is actually
+  /// picked (see `extraFilterLabel` below for how it gets picked) — before
+  /// that, this stays null and nothing extra shows in the strip at all.
   final Widget? extraFilterBarChip;
+
+  /// Passed straight through to GlobalFilterBar's own `extraFilterLabel` —
+  /// 2026-09-23, Craig (re: Sales Analysis' date range): "add the date range
+  /// option into the filters drop down and not as a selection on the
+  /// screen." Same plain-passthrough shape as `extraFilterBarChip`; see that
+  /// class's own doc comment for the full reasoning.
+  final String? extraFilterLabel;
+
+  /// Passed straight through to GlobalFilterBar's own `onExtraFilterSelected`.
+  final VoidCallback? onExtraFilterSelected;
 
   /// Hides the global filter strip (2026-08-26, Craig: "Selection filters
   /// need to be iterative throughout the application") on screens that
@@ -92,7 +107,11 @@ class AppShell extends ConsumerWidget {
                   _TopBar(title: title, actions: actions, showMenuButton: !isWide, themeMode: themeMode),
                   const Divider(height: 1),
                   if (showGlobalFilters) ...[
-                    GlobalFilterBar(extraChip: extraFilterBarChip),
+                    GlobalFilterBar(
+                      extraChip: extraFilterBarChip,
+                      extraFilterLabel: extraFilterLabel,
+                      onExtraFilterSelected: onExtraFilterSelected,
+                    ),
                     const Divider(height: 1),
                   ],
                   Expanded(child: body),

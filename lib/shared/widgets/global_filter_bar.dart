@@ -24,7 +24,7 @@ import 'entity_search_field.dart';
 /// select a sales person on any screen and I navigate to another screen
 /// that filtered salesperson must stay filtered").
 class GlobalFilterBar extends ConsumerWidget {
-  const GlobalFilterBar({super.key, this.extraChip});
+  const GlobalFilterBar({super.key, this.extraChip, this.extraFilterLabel, this.onExtraFilterSelected});
 
   /// A screen-local filter control to render inline with the shared
   /// Year/Month/Quarter/dimension chips, without that control's own state
@@ -33,8 +33,31 @@ class GlobalFilterBar extends ConsumerWidget {
   /// other filters." Threaded down from AppShell's own `extraFilterBarChip`
   /// (see that class's doc comment for why this stays a plain passthrough
   /// rather than GlobalFilterBar reaching into a specific screen's state).
-  /// Null on every screen except the one that opts in.
+  /// Null on every screen except the one that opts in, and — since
+  /// 2026-09-23 — null again on that screen too whenever nothing's picked
+  /// (see `extraFilterLabel` below for how it's picked in the first place).
   final Widget? extraChip;
+
+  /// 2026-09-23, Craig (re: Sales Analysis' date range): "add the date range
+  /// option into the filters drop down and not as a selection on the
+  /// screen." When set, appends one more entry to the "Add filter" dropdown
+  /// below, alongside Year/Month/Quarter/Document — picking it calls
+  /// `onExtraFilterSelected` instead of this bar's own `_handleAdd`, since
+  /// what happens next (opening a screen-local date-range picker, in Sales
+  /// Analysis' case) is something only the screen that opted in knows how to
+  /// do. Same "plain passthrough, GlobalFilterBar doesn't know what it is"
+  /// shape as `extraChip` — null on every screen except the one that opts
+  /// in, and unlike `extraChip`, this one's ALWAYS shown in the dropdown
+  /// once set, whether or not a range is currently picked (that's the whole
+  /// point — it's now the only way to open the picker in the first place).
+  final String? extraFilterLabel;
+
+  /// Called when `extraFilterLabel`'s dropdown entry is picked. Left null
+  /// has no effect (the entry just wouldn't be added in the first place,
+  /// since `extraFilterLabel` gates it) — required together in practice, but
+  /// not enforced as a pair here since AppShell already threads both through
+  /// from the exact same screen-local callback.
+  final VoidCallback? onExtraFilterSelected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -123,8 +146,17 @@ class GlobalFilterBar extends ConsumerWidget {
               // 2026-08-27, Craig: "We need to add Document to the Filters
               // dropdown" — see _pickDocument below.
               const DropdownMenuItem<String?>(value: '_document', child: Text('Document')),
+              // 2026-09-23, Craig — see `extraFilterLabel`'s own doc comment
+              // above. '_extra' is a fixed sentinel, not the screen's actual
+              // filter key, since GlobalFilterBar only ever supports one of
+              // these at a time and doesn't need to tell several apart.
+              if (extraFilterLabel != null) DropdownMenuItem<String?>(value: '_extra', child: Text(extraFilterLabel!)),
             ],
             onChanged: (key) {
+              if (key == '_extra') {
+                onExtraFilterSelected?.call();
+                return;
+              }
               if (key != null) _handleAdd(context, ref, notifier, filters, key, filterableDimensions);
             },
           ),

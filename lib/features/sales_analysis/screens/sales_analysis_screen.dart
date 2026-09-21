@@ -120,7 +120,19 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
       // shared GlobalFilterBar strip, alongside Year/Month/Quarter, even
       // though its state stays screen-local (see `_fromDate`/`_toDate`'s own
       // doc comment for why it isn't part of globalFiltersProvider).
-      extraFilterBarChip: _DateRangeControl(fromDate: _fromDate, toDate: _toDate, onPick: _pickDateRange, onClear: _clearDateRange),
+      //
+      // 2026-09-23, Craig: "add the date range option into the filters drop
+      // down and not as a selection on the screen" — `extraFilterBarChip`
+      // now only renders once a range is actually picked (a removable chip,
+      // same as every other active filter); picking it in the first place
+      // goes through the "Add filter" dropdown itself via `extraFilterLabel`/
+      // `onExtraFilterSelected` instead of a standalone always-visible
+      // button sitting in the strip.
+      extraFilterBarChip: _fromDate != null && _toDate != null
+          ? _DateRangeControl(fromDate: _fromDate!, toDate: _toDate!, onPick: _pickDateRange, onClear: _clearDateRange)
+          : null,
+      extraFilterLabel: 'Date range',
+      onExtraFilterSelected: _pickDateRange,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -193,39 +205,41 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
   }
 }
 
-/// The date-range control itself — an "Add filter"-style button when no
-/// range is picked, an `_RemovableChip`-style chip (global_filter_bar.dart's
-/// own styling, reused here rather than imported since this one lives
-/// entirely outside `GlobalFilters`) once one is. Deliberately its own small
-/// widget rather than inlined — both `onPick`/`onClear` are plain callbacks,
-/// so this has no state of its own to manage. Rendered inside the shared
-/// GlobalFilterBar strip via AppShell's `extraFilterBarChip` (2026-09-22),
-/// not inline in this screen's own body — see SalesAnalysisScreen.build's
-/// own comment on that.
+/// The active date-range filter's own removable chip — `_RemovableChip`-style
+/// (global_filter_bar.dart's own styling, reused here rather than imported
+/// since this one lives entirely outside `GlobalFilters`). Deliberately its
+/// own small widget rather than inlined — both `onPick`/`onClear` are plain
+/// callbacks, so this has no state of its own to manage. Rendered inside the
+/// shared GlobalFilterBar strip via AppShell's `extraFilterBarChip`
+/// (2026-09-22), not inline in this screen's own body — see
+/// SalesAnalysisScreen.build's own comment on that.
+///
+/// 2026-09-23, Craig: "add the date range option into the filters drop down
+/// and not as a selection on the screen" — this widget is now ONLY ever
+/// built once a range is picked (SalesAnalysisScreen.build passes
+/// `extraFilterBarChip: null` otherwise), so `fromDate`/`toDate` are
+/// non-nullable and the "nothing picked yet" button branch this used to have
+/// is gone — that job now belongs to the "Add filter" dropdown's own "Date
+/// range" entry (`extraFilterLabel`/`onExtraFilterSelected`) instead.
+/// Tapping the chip itself still reopens the picker (`onPick`), same as
+/// every other InputChip in the app.
 class _DateRangeControl extends StatelessWidget {
   const _DateRangeControl({required this.fromDate, required this.toDate, required this.onPick, required this.onClear});
 
-  final DateTime? fromDate;
-  final DateTime? toDate;
+  final DateTime fromDate;
+  final DateTime toDate;
   final VoidCallback onPick;
   final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    if (fromDate == null || toDate == null) {
-      return OutlinedButton.icon(
-        onPressed: onPick,
-        icon: const Icon(Icons.date_range, size: 18),
-        label: const Text('Date Range'),
-      );
-    }
     // dd/mm/yyyy — 2026-09-22, Craig: "Format must be dd/mm/yyyy" (the app
     // sets no `locale` on MaterialApp.router, so DateFormat's own implicit
     // default would otherwise follow whatever `Intl.systemLocale` resolves
     // to in the browser, not necessarily this).
     final format = DateFormat('dd/MM/yyyy');
     return InputChip(
-      label: Text('${format.format(fromDate!)} – ${format.format(toDate!)}', style: const TextStyle(fontSize: 12)),
+      label: Text('${format.format(fromDate)} – ${format.format(toDate)}', style: const TextStyle(fontSize: 12)),
       avatar: const Icon(Icons.date_range, size: 16),
       onPressed: onPick,
       onDeleted: onClear,
