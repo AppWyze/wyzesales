@@ -28,6 +28,65 @@
 // service_role key did (see Section 59's own postscript for that gap on
 // profiles/clients/license/pricing_plan; this migration is the same fix for
 // the tables/function this function touches instead).
+//
+// 2026-09-21: three robustness fixes, all found the same day investigating
+// "why does one dimension entity forecast fine while another (same
+// dimension) doesn't" for Edgetec (Craig). Verified against real client
+// data (not synthetic) before and after — see EDGETEC_FORECAST_ROBUSTNESS_
+// FIX_NOTES.md alongside this file for the four real cases this was tested
+// against and the before/after numbers. Summary of what was actually wrong:
+//
+//   1. yearAverages was a plain arithmetic mean of each 12-month block, used
+//      to seed level/trend AND as the denominator for every seasonal ratio
+//      in that block. A single outlier month anywhere in a year (one huge
+//      one-off sale, or one big credit note) dominates a 12-month mean, so
+//      it was silently poisoning both the starting point the whole forecast
+//      builds from and, far worse, occasionally landing a whole year's
+//      average within a hair of zero (two large, mostly-offsetting entries
+//      in the same year) — dividing by that near-zero number then produced
+//      a seasonal ratio in the hundreds of thousands, which is how one
+//      Edgetec customer forecast R0 for eleven months and R77 MILLION for
+//      the twelfth. Switched to the MEDIAN of each year's 12 months instead
+//      of the mean — median is the standard robust stand-in for exactly
+//      this failure mode (one or two extreme points can't drag it far),
+//      and for a year where most months cluster around a normal, repeating
+//      value (the common case here), it lands on that real value instead of
+//      on whatever a single anomaly happens to average in at.
+//
+//   2. The recursive level/trend update already capped the deseasonalized
+//      value fed into it at 1.5x the entity's own highest actual month ever
+//      (see the 2026-09-04 note below on the ORIGINAL over-forecast bug this
+//      guarded against) — but only on the high side. A single very large
+//      NEGATIVE month (a big credit note/return landing mid-series) had no
+//      equivalent floor, and when it happened to divide by a small seasonal
+//      factor, the same kind of numeric blowup happened in the other
+//      direction — one Edgetec market segment's April 2025 credit note
+//      (-R2m) produced a deseasonalized value of roughly -R10.4m in one
+//      step, which is what actually crashed that segment's trend deeply
+//      negative and floored 7 of its next 12 forecast months to R0 despite
+//      3 full, unbroken years of otherwise healthy, still-growing trade.
+//      Added a symmetric floor at 1.5x the lowest actual ever recorded,
+//      mirroring the existing ceiling exactly.
+//
+//   3. Even with #1 and #2, a linear trend applied identically to all 12
+//      forecast months can still run a forecast negative (and floor to R0)
+//      for the back half of the horizon whenever the trend estimate is
+//      meaningfully negative — correct behaviour for an entity that's
+//      genuinely still declining, but needlessly harsh for one that dropped
+//      once and has since leveled off, since the same fixed slope keeps
+//      getting applied 12 times over regardless. Switched to a DAMPED trend
+//      (Gardner & McKenzie's standard variant of Holt-Winters, built exactly
+//      for this): each successive month's trend contribution is discounted
+//      by a further factor of TREND_DAMPING, so its influence tapers off
+//      the further out the forecast runs instead of accumulating without
+//      limit. Applied consistently to both the in-sample recursion (as a
+//      1-step-ahead damped contribution) and the final 12-month projection,
+//      which is the standard formulation, not just the output.
+//
+// None of this changes alpha/beta/gamma/full_history_months/partial_
+// history_months, which stay exactly as configured (client-overridable via
+// forecast_settings, same as before) — these three fixes are about numeric
+// robustness, not about changing how aggressively the model reacts.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getServiceKey } from "../_shared/service_key.ts";
@@ -36,6 +95,15 @@ const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+
+// 2026-09-21: standard damped-trend factor (see Fix #3 above). 0.90 is a
+// conventional middle-of-the-road choice in the damped Holt-Winters
+// literature — damps meaningfully over a 12-month horizon (by month 12 the
+// cumulative trend contribution is roughly half of what an undamped model
+// would apply) without discarding a genuine, still-in-progress trend in the
+// near term. Not exposed via forecast_settings — this is a numeric-
+// robustness constant, not a per-client tuning knob like alpha/beta/gamma.
+const TREND_DAMPING = 0.90;
 
 type Confidence = "full" | "partial" | "low";
 
@@ -59,6 +127,28 @@ const DEFAULT_SETTINGS: ForecastSettings = {
   full_history_months: 24,
   partial_history_months: 12,
 };
+
+// 2026-09-21: median of a small numeric array — the robust stand-in for a
+// plain mean used in Fix #1 above. Standard textbook definition (average of
+// the two middle values on an even-length input); nothing forecast-specific
+// about it, kept local rather than pulled in as a dependency for one line.
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+// 2026-09-21: the damped-trend cumulative contribution over `steps` months
+// ahead — sum_{i=1}^{steps} trend * phi^i, closed-form. Used identically for
+// the in-sample 1-step-ahead expectation (steps=1) and the final h-step-
+// ahead forecast (steps=h+1), which is the standard damped Holt-Winters
+// formulation (see Fix #3 above) rather than only damping the output.
+function dampedTrendContribution(trend: number, phi: number, steps: number): number {
+  if (phi >= 1) return trend * steps; // undamped fallback; TREND_DAMPING never actually reaches this
+  return (trend * phi * (1 - Math.pow(phi, steps))) / (1 - phi);
+}
 
 /**
  * monthlyHistory: oldest -> newest, one entry per calendar month, no gaps
@@ -89,18 +179,23 @@ function holtWintersForecast(
   // Tiers 1 & 2: full Holt-Winters. Initialize from however many full years
   // of history are available (1 year -> flat trend/no cross-year seasonal
   // averaging; 2+ years -> real trend and averaged seasonal ratios).
+  //
+  // 2026-09-21 (Fix #1): each year's "typical value" is now its MEDIAN, not
+  // its mean — see this file's header note. yearTypicalValues seeds level
+  // and trend below, and is the denominator for every seasonal ratio in
+  // that year, so a single outlier month can no longer dominate either.
   const years = Math.floor(n / PERIOD);
-  const yearAverages = Array.from({ length: years }, (_, y) => {
+  const yearTypicalValues = Array.from({ length: years }, (_, y) => {
     const slice = monthlyHistory.slice(y * PERIOD, (y + 1) * PERIOD);
-    return slice.reduce((a, b) => a + b, 0) / PERIOD;
+    return median(slice);
   });
 
-  let level = yearAverages[0];
-  let trend = years >= 2 ? (yearAverages[1] - yearAverages[0]) / PERIOD : 0;
+  let level = yearTypicalValues[0];
+  let trend = years >= 2 ? (yearTypicalValues[1] - yearTypicalValues[0]) / PERIOD : 0;
 
   const seasonal = Array.from({ length: PERIOD }, (_, m) => {
     const ratios = Array.from({ length: years }, (_, y) => {
-      const denom = yearAverages[y] === 0 ? 1 : yearAverages[y];
+      const denom = yearTypicalValues[y] === 0 ? 1 : yearTypicalValues[y];
       return monthlyHistory[y * PERIOD + m] / denom;
     });
     return ratios.reduce((a, b) => a + b, 0) / ratios.length;
@@ -129,23 +224,39 @@ function holtWintersForecast(
   // fires exactly once for the real series that broke - after which the
   // forecast for that item came back in line with (a plausible, moderately
   // elevated multiple of) its real historical range instead of ~9x it.
+  //
+  // 2026-09-21 (Fix #2): added the symmetric floor (deseasonalizedFloor) —
+  // see this file's header note. Same reasoning, opposite direction: one
+  // very large NEGATIVE month (a big credit note) landing on a small
+  // seasonal factor produces the same kind of blowup, just downward, and
+  // was crashing level/trend for the rest of the series just as badly as
+  // the original over-forecast bug did.
   const maxActual = Math.max(...monthlyHistory, 0);
   const deseasonalizedCap = maxActual * 1.5;
+  const minActual = Math.min(...monthlyHistory, 0);
+  const deseasonalizedFloor = minActual * 1.5;
 
   // Recursive updates across ALL available history (not just whole years) -
   // this is what lets a trailing partial year still sharpen the estimate.
   for (let t = 0; t < n; t++) {
     const s = seasonal[t % PERIOD] || 1;
     const prevLevel = level;
-    const deseasonalized = Math.min(monthlyHistory[t] / s, deseasonalizedCap);
-    level = settings.alpha * deseasonalized + (1 - settings.alpha) * (level + trend);
+    const deseasonalized = Math.max(deseasonalizedFloor, Math.min(monthlyHistory[t] / s, deseasonalizedCap));
+    // 2026-09-21 (Fix #3): the one-step-ahead expectation used here is now
+    // level + a DAMPED 1-step trend contribution, not the raw trend value -
+    // consistent with the damped forecast below rather than only damping
+    // the final output.
+    level = settings.alpha * deseasonalized + (1 - settings.alpha) * (level + dampedTrendContribution(trend, TREND_DAMPING, 1));
     trend = settings.beta * (level - prevLevel) + (1 - settings.beta) * trend;
     seasonal[t % PERIOD] = settings.gamma * (monthlyHistory[t] / (level || 1)) + (1 - settings.gamma) * s;
   }
 
   const forecastByMonth: Record<string, number> = {};
   for (let h = 0; h < 12; h++) {
-    const value = Math.max(0, (level + (h + 1) * trend) * seasonal[(n + h) % PERIOD]);
+    // 2026-09-21 (Fix #3): damped multi-step trend contribution instead of
+    // trend * (h + 1) - tapers the further out the forecast runs instead of
+    // extrapolating one fixed slope, unchecked, for all 12 months.
+    const value = Math.max(0, (level + dampedTrendContribution(trend, TREND_DAMPING, h + 1)) * seasonal[(n + h) % PERIOD]);
     forecastByMonth[monthAt(n + h)] = value;
   }
 
