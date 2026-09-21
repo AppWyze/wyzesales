@@ -31,6 +31,17 @@ const double _bottomMargin = 26;
 /// series' value for that point — deliberately simple rather than a
 /// floating tooltip, which would need overlay positioning this sandbox has
 /// no way to visually check.
+///
+/// 2026-09-27, Craig: "The total on the chart shows that for the last
+/// period... should we rather default to the sum total and then change if
+/// the cursor is positioned on a specific month or quarter as it currently
+/// does?" — that detail row used to default (nothing hovered) to whichever
+/// category had the most recent data, e.g. "Sep: FY2026 R950,000 ...",
+/// which reads almost like a total at a glance without actually being one.
+/// It now defaults to each series' own running total instead — see
+/// `_TrendLineChartState._buildTotalsRow` — and only falls back to a
+/// specific period's figures once something is actually hovered/tapped,
+/// same as before.
 class TrendLineChart extends StatefulWidget {
   const TrendLineChart({
     super.key,
@@ -136,6 +147,15 @@ class _TrendLineChartState extends State<TrendLineChart> {
     return '$base  (${(share * 100).toStringAsFixed(1)}% of $basis)';
   }
 
+  /// The last category (across every series) that actually has data — the
+  /// real "today" boundary, since a null only ever means "still-future"
+  /// (see `TrendSeries.values`' own doc comment), never a genuine gap.
+  /// Originally this was also the detail row's default fallback (nothing
+  /// hovered -> show this one period); 2026-09-27, Craig: "should we rather
+  /// default to the sum total" — it's now used only as the cutoff for the
+  /// Target overlay's own total (`_targetTotalText`), which needs the exact
+  /// same boundary a partial series' own total stops at, so "budget-to-date"
+  /// and "actual-to-date" stay a fair comparison. See `_buildTotalsRow`.
   int? _lastIndexWithData() {
     for (var i = widget.categories.length - 1; i >= 0; i--) {
       for (final s in widget.series) {
@@ -145,9 +165,160 @@ class _TrendLineChartState extends State<TrendLineChart> {
     return null;
   }
 
+  /// One series' own last populated category — same "walk back from the
+  /// end" logic as `_lastIndexWithData`, just scoped to a single series
+  /// rather than "any series." Null when this series has no data at all.
+  int? _lastDataIndexFor(TrendSeries s) {
+    for (var i = widget.categories.length - 1; i >= 0; i--) {
+      if (i < s.values.length && s.values[i] != null) return i;
+    }
+    return null;
+  }
+
+  /// Sum of every non-null value in the series — nulls (still-future
+  /// months) are skipped rather than treated as zero, so a still-partial
+  /// current fiscal year's total comes out as its genuine year-to-date
+  /// figure, not a full-year total dragged down by months that haven't
+  /// happened yet.
+  num _seriesTotal(TrendSeries s) {
+    num sum = 0;
+    for (final v in s.values) {
+      if (v != null) sum += v;
+    }
+    return sum;
+  }
+
+  /// 2026-09-27, Craig: "should we rather default to the sum total... as it
+  /// currently does [for hover]?" — the default (unhovered) row's per-series
+  /// text. Flags a series as partial whenever its own last data point isn't
+  /// the chart's final category: for the trailing-fiscal-years chart that's
+  /// only ever the current, still-in-progress year (every prior year is
+  /// fully populated, no nulls — see `TrendSeries.values`' doc comment), so
+  /// in practice at most one series ever carries this suffix. Labelled
+  /// rather than left silent — a bare "FY2026  R8,540,000" sitting next to
+  /// "FY2025  R11,820,000" would read as FY2026 badly down for the year,
+  /// when it's really just 9 months in.
+  String _seriesTotalLabel(TrendSeries s) {
+    final lastIndex = _lastDataIndexFor(s)!; // caller already checked non-null
+    final total = _seriesTotal(s);
+    final isPartial = lastIndex < widget.categories.length - 1;
+    final suffix = isPartial ? ' (through ${widget.categories[lastIndex]})' : '';
+    return '${s.label}$suffix  ${widget.detailValueFormatter(total)}';
+  }
+
+  /// The Target overlay's own total, alongside the series totals — same
+  /// "budget-to-date vs actual-to-date" reasoning that already applies to
+  /// `_GraphTabState`'s per-period Target overlay: `targetBars` is entered
+  /// up front for the WHOLE fiscal year (unlike actual sales, which
+  /// genuinely doesn't exist yet for a future month), so summing it in full
+  /// would compare a complete year's budget against a partial year's actual
+  /// — always reading as "behind," purely because the year isn't over.
+  /// Capped at `_lastIndexWithData()` instead: the same boundary the
+  /// current year's own actual total stops at, so the two totals answer the
+  /// same question ("how are we doing so far") rather than two different
+  /// ones. Share/basis (`targetShareBars`/`targetBasisBars`) are left out of
+  /// this total entirely, same reasoning `_quarterlyTargetFor`'s caller
+  /// already uses for a quarter's rollup — each month can resolve to a
+  /// different basis, so there's no single clean percentage to report for a
+  /// multi-month sum.
+  String? _targetTotalText() {
+    final bars = widget.targetBars;
+    final label = widget.targetLabel;
+    if (bars == null || label == null) return null;
+    final cutoff = _lastIndexWithData();
+    if (cutoff == null) return null;
+    num sum = 0;
+    var any = false;
+    for (var i = 0; i <= cutoff && i < bars.length; i++) {
+      final v = bars[i];
+      if (v != null) {
+        sum += v;
+        any = true;
+      }
+    }
+    if (!any) return null;
+    final isPartial = cutoff < widget.categories.length - 1;
+    final suffix = isPartial ? ' (through ${widget.categories[cutoff]})' : '';
+    return '$label$suffix  ${widget.detailValueFormatter(sum)}';
+  }
+
+  /// The detail row for one specific hovered/tapped category — unchanged
+  /// behaviour from before 2026-09-27, just pulled out to its own method so
+  /// `build()` can switch between this and `_buildTotalsRow` below.
+  Widget _buildPeriodRow(int index, TextTheme textTheme) {
+    return Row(
+      children: [
+        Text('${widget.categories[index]}:  ', style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+        Expanded(
+          child: Wrap(
+            spacing: 16,
+            children: [
+              for (final s in widget.series)
+                if (index < s.values.length && s.values[index] != null)
+                  Text(
+                    '${s.label}  ${widget.detailValueFormatter(s.values[index]!)}',
+                    style: textTheme.bodyMedium?.copyWith(color: s.color, fontWeight: FontWeight.w600),
+                  ),
+              // Target overlay's own value alongside the series values at
+              // the hovered point — same treatment as any other series
+              // here, just sourced from targetBars/targetLabel instead of a
+              // TrendSeries.
+              if (widget.targetBars != null &&
+                  widget.targetLabel != null &&
+                  index < widget.targetBars!.length &&
+                  widget.targetBars![index] != null)
+                Text(
+                  _targetDetailText(index),
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: widget.targetColor ?? Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 2026-09-27, Craig: "should we rather default to the sum total and then
+  /// change if the cursor is positioned on a specific month or quarter as it
+  /// currently does?" — the new default (nothing hovered) row, replacing
+  /// what used to fall back to `_lastIndexWithData()`'s single period. Skips
+  /// a series entirely if it has no data at all (mirrors `_buildPeriodRow`
+  /// skipping a series with no value at that one index); returns an empty
+  /// box rather than a bare "Total:" label if nothing ends up with anything
+  /// to show, same as the old `activeIndex == null` case.
+  Widget _buildTotalsRow(TextTheme textTheme) {
+    final seriesTexts = [
+      for (final s in widget.series)
+        if (_lastDataIndexFor(s) != null)
+          Text(_seriesTotalLabel(s), style: textTheme.bodyMedium?.copyWith(color: s.color, fontWeight: FontWeight.w600)),
+    ];
+    final targetText = _targetTotalText();
+    if (seriesTexts.isEmpty && targetText == null) return const SizedBox.shrink();
+    return Row(
+      children: [
+        Text('Total:  ', style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+        Expanded(
+          child: Wrap(
+            spacing: 16,
+            children: [
+              ...seriesTexts,
+              if (targetText != null)
+                Text(
+                  targetText,
+                  style: textTheme.bodyMedium?.copyWith(color: widget.targetColor ?? Colors.grey, fontWeight: FontWeight.w600),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final activeIndex = _hoverIndex ?? _lastIndexWithData();
     final textTheme = Theme.of(context).textTheme;
     final gridColor = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08);
     final axisTextColor = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
@@ -157,41 +328,7 @@ class _TrendLineChartState extends State<TrendLineChart> {
       children: [
         SizedBox(
           height: 20,
-          child: activeIndex == null
-              ? null
-              : Row(
-                  children: [
-                    Text('${widget.categories[activeIndex]}:  ', style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
-                    Expanded(
-                      child: Wrap(
-                        spacing: 16,
-                        children: [
-                          for (final s in widget.series)
-                            if (activeIndex < s.values.length && s.values[activeIndex] != null)
-                              Text(
-                                '${s.label}  ${widget.detailValueFormatter(s.values[activeIndex]!)}',
-                                style: textTheme.bodyMedium?.copyWith(color: s.color, fontWeight: FontWeight.w600),
-                              ),
-                          // Target overlay's own value alongside the series
-                          // values at the hovered point — same treatment as
-                          // any other series here, just sourced from
-                          // targetBars/targetLabel instead of a TrendSeries.
-                          if (widget.targetBars != null &&
-                              widget.targetLabel != null &&
-                              activeIndex < widget.targetBars!.length &&
-                              widget.targetBars![activeIndex] != null)
-                            Text(
-                              _targetDetailText(activeIndex),
-                              style: textTheme.bodyMedium?.copyWith(
-                                color: widget.targetColor ?? Colors.grey,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+          child: _hoverIndex != null ? _buildPeriodRow(_hoverIndex!, textTheme) : _buildTotalsRow(textTheme),
         ),
         const SizedBox(height: 8),
         Expanded(
