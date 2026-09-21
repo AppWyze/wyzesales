@@ -3111,9 +3111,22 @@ Widget _dialogHeader(String title, bool isDark) {
     ),
     child: Row(
       children: [
-        Text(
-          title,
-          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: isDark ? AppColors.darkText : AppColors.lightText),
+        // 2026-09-28, Craig — "A RenderFlex overflowed by 166 pixels on the
+        // right", this Row (line 3112 in the crash he pasted). The bare Text
+        // had no flex factor, so a title long enough to exceed the dialog's
+        // width (the actual trigger: `_dialogHeader('Edit license —
+        // ${widget.clientName}', ...)` at line 992, for a client whose name
+        // pushed the whole string past 380px) sized itself to its natural
+        // width instead of shrinking to fit. Expanded + ellipsis is the same
+        // treatment every other unbounded-length label already gets
+        // elsewhere in this app (e.g. entity_search_field.dart's own
+        // `Text(entity.displayLabel, overflow: TextOverflow.ellipsis)`).
+        Expanded(
+          child: Text(
+            title,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: isDark ? AppColors.darkText : AppColors.lightText),
+          ),
         ),
       ],
     ),
