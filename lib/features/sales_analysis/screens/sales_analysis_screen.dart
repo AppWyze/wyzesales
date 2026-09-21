@@ -68,6 +68,14 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
       lastDate: now,
       initialDateRange: _fromDate != null && _toDate != null ? DateTimeRange(start: _fromDate!, end: _toDate!) : null,
       helpText: 'Sales Analysis date range',
+      // en_GB, not the app's default (no `locale`/`supportedLocales` is set
+      // on MaterialApp.router, so Flutter's MaterialLocalizations falls
+      // back to en_US) — 2026-09-22, Craig: "Format must be dd/mm/yyyy."
+      // Overriding just this dialog's Localizations, rather than the whole
+      // app's, keeps this scoped to the one thing Craig actually flagged;
+      // formatters.dart's own hardcoded en_US currency formatting elsewhere
+      // in the app is untouched.
+      builder: (context, child) => Localizations.override(context: context, locale: const Locale('en', 'GB'), child: child),
     );
     if (picked == null) return;
     setState(() {
@@ -107,6 +115,12 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
     return AppShell(
       title: 'Sales Analysis',
       currentRoute: '/sales-analysis',
+      // 2026-09-22, Craig: "put the date range selection with the other
+      // filters" — moved out of the Chart/Table toggle row (below) into the
+      // shared GlobalFilterBar strip, alongside Year/Month/Quarter, even
+      // though its state stays screen-local (see `_fromDate`/`_toDate`'s own
+      // doc comment for why it isn't part of globalFiltersProvider).
+      extraFilterBarChip: _DateRangeControl(fromDate: _fromDate, toDate: _toDate, onPick: _pickDateRange, onClear: _clearDateRange),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -146,12 +160,6 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
                         selected: {_mode},
                         onSelectionChanged: (selection) => setState(() => _mode = selection.first),
                       ),
-                      _DateRangeControl(
-                        fromDate: _fromDate,
-                        toDate: _toDate,
-                        onPick: _pickDateRange,
-                        onClear: _clearDateRange,
-                      ),
                     ],
                   ),
                   DataExportButtons(onExport: _export),
@@ -190,7 +198,10 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
 /// own styling, reused here rather than imported since this one lives
 /// entirely outside `GlobalFilters`) once one is. Deliberately its own small
 /// widget rather than inlined — both `onPick`/`onClear` are plain callbacks,
-/// so this has no state of its own to manage.
+/// so this has no state of its own to manage. Rendered inside the shared
+/// GlobalFilterBar strip via AppShell's `extraFilterBarChip` (2026-09-22),
+/// not inline in this screen's own body — see SalesAnalysisScreen.build's
+/// own comment on that.
 class _DateRangeControl extends StatelessWidget {
   const _DateRangeControl({required this.fromDate, required this.toDate, required this.onPick, required this.onClear});
 
@@ -208,7 +219,11 @@ class _DateRangeControl extends StatelessWidget {
         label: const Text('Date Range'),
       );
     }
-    final format = DateFormat('d MMM yyyy');
+    // dd/mm/yyyy — 2026-09-22, Craig: "Format must be dd/mm/yyyy" (the app
+    // sets no `locale` on MaterialApp.router, so DateFormat's own implicit
+    // default would otherwise follow whatever `Intl.systemLocale` resolves
+    // to in the browser, not necessarily this).
+    final format = DateFormat('dd/MM/yyyy');
     return InputChip(
       label: Text('${format.format(fromDate!)} – ${format.format(toDate!)}', style: const TextStyle(fontSize: 12)),
       avatar: const Icon(Icons.date_range, size: 16),

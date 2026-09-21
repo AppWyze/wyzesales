@@ -39,11 +39,19 @@ class AppShell extends ConsumerWidget {
     this.actions,
     this.currentRoute,
     this.showGlobalFilters = true,
+    this.extraFilterBarChip,
   });
 
   final String title;
   final Widget body;
   final List<Widget>? actions;
+
+  /// Passed straight through to GlobalFilterBar's own `extraChip` — lets a
+  /// single screen (Sales Analysis' date-range filter, 2026-09-22) add one
+  /// control to the shared filter strip without that control's state
+  /// joining `globalFiltersProvider`, which every other screen also reads.
+  /// AppShell doesn't know or care what this widget is; it's just a slot.
+  final Widget? extraFilterBarChip;
 
   /// Hides the global filter strip (2026-08-26, Craig: "Selection filters
   /// need to be iterative throughout the application") on screens that
@@ -84,7 +92,7 @@ class AppShell extends ConsumerWidget {
                   _TopBar(title: title, actions: actions, showMenuButton: !isWide, themeMode: themeMode),
                   const Divider(height: 1),
                   if (showGlobalFilters) ...[
-                    const GlobalFilterBar(),
+                    GlobalFilterBar(extraChip: extraFilterBarChip),
                     const Divider(height: 1),
                   ],
                   Expanded(child: body),

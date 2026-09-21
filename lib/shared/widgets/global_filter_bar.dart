@@ -24,7 +24,17 @@ import 'entity_search_field.dart';
 /// select a sales person on any screen and I navigate to another screen
 /// that filtered salesperson must stay filtered").
 class GlobalFilterBar extends ConsumerWidget {
-  const GlobalFilterBar({super.key});
+  const GlobalFilterBar({super.key, this.extraChip});
+
+  /// A screen-local filter control to render inline with the shared
+  /// Year/Month/Quarter/dimension chips, without that control's own state
+  /// joining `globalFiltersProvider` — 2026-09-22, Craig (re: Sales
+  /// Analysis' date-range filter): "put the date range selection with the
+  /// other filters." Threaded down from AppShell's own `extraFilterBarChip`
+  /// (see that class's doc comment for why this stays a plain passthrough
+  /// rather than GlobalFilterBar reaching into a specific screen's state).
+  /// Null on every screen except the one that opts in.
+  final Widget? extraChip;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -62,6 +72,7 @@ class GlobalFilterBar extends ConsumerWidget {
         ),
       if (filters.document != null)
         _RemovableChip(label: 'Document: ${filters.document}', onDeleted: () => notifier.setDocument(null)),
+      if (extraChip != null) extraChip!,
     ];
 
     return Container(
