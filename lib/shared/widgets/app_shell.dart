@@ -42,6 +42,7 @@ class AppShell extends ConsumerWidget {
     this.extraFilterBarChip,
     this.extraFilterLabel,
     this.onExtraFilterSelected,
+    this.onExtraFilterCleared,
   });
 
   final String title;
@@ -67,6 +68,10 @@ class AppShell extends ConsumerWidget {
 
   /// Passed straight through to GlobalFilterBar's own `onExtraFilterSelected`.
   final VoidCallback? onExtraFilterSelected;
+
+  /// Passed straight through to GlobalFilterBar's own `onExtraFilterCleared`
+  /// — 2026-09-24, Craig: "Clear all needs to work for date range as well."
+  final VoidCallback? onExtraFilterCleared;
 
   /// Hides the global filter strip (2026-08-26, Craig: "Selection filters
   /// need to be iterative throughout the application") on screens that
@@ -111,6 +116,7 @@ class AppShell extends ConsumerWidget {
                       extraChip: extraFilterBarChip,
                       extraFilterLabel: extraFilterLabel,
                       onExtraFilterSelected: onExtraFilterSelected,
+                      onExtraFilterCleared: onExtraFilterCleared,
                     ),
                     const Divider(height: 1),
                   ],

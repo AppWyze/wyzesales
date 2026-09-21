@@ -133,6 +133,12 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
           : null,
       extraFilterLabel: 'Date range',
       onExtraFilterSelected: _pickDateRange,
+      // 2026-09-24, Craig: "Clear all needs to work for date range as well"
+      // — GlobalFilterBar's "Clear all" button has no way to reach this
+      // screen-local state on its own (see `_fromDate`/`_toDate`'s own doc
+      // comment for why it deliberately isn't part of globalFiltersProvider)
+      // without this passthrough.
+      onExtraFilterCleared: _clearDateRange,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -313,7 +319,37 @@ class _DateRangeGraphData {
   final List<String> categories;
   final List<num?> values;
   final List<num?> profits;
-  const _DateRangeGraphData({required this.categories, required this.values, required this.profits});
+
+  /// 2026-09-24, Craig: "When selecting a date range and there is a
+  /// forecast (i.e. current year) then please show the forecast bars as
+  /// well. If it is a potion for the month then divide the forecast by the
+  /// days and multiply out. i.e. apportion." One entry per `categories`
+  /// index, same alignment as `values`/`profits`. Sourced from the exact
+  /// same `_loadTargetBars` call the non-range chart's own overlay reads
+  /// (Budgets/Forecast, current fiscal year only — see `_GraphData
+  /// .targetBars`' own doc comment for why it's current-year-only), not a
+  /// separate fetch. Null wherever the calendar month falls outside the
+  /// CURRENT fiscal year (a target never exists for any other one in this
+  /// app) or wherever that fiscal month's own target/forecast is itself
+  /// null. A category only partially covered by the picked range (the
+  /// first or last month, when the range doesn't start/end on a calendar-
+  /// month boundary) has its whole month's figure scaled down to just the
+  /// days actually inside the range — see `_loadRangeData` for the exact
+  /// apportionment.
+  final List<num?> targetBars;
+  final List<double?> targetShareBars;
+  final List<String?> targetBasisBars;
+  final bool targetIsEstimated;
+
+  const _DateRangeGraphData({
+    required this.categories,
+    required this.values,
+    required this.profits,
+    required this.targetBars,
+    required this.targetShareBars,
+    required this.targetBasisBars,
+    required this.targetIsEstimated,
+  });
 }
 
 class _GraphTab extends ConsumerStatefulWidget {
@@ -688,10 +724,20 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   /// would even be compared?) — with ONE line, bucketed by calendar month,
   /// sourced from the same per-line document data the Table tab reads
   /// (`fn_sales_documents_monthly_totals`, schema/055) rather than the
-  /// fiscal-month-keyed monthly rollup `fetchConsolidatedSales` uses. No
-  /// Target overlay in this mode: Budgets/Forecast are entered per FISCAL
-  /// month, which has no clean correspondence to a boundary month that's
-  /// only partially inside the picked range.
+  /// fiscal-month-keyed monthly rollup `fetchConsolidatedSales` uses.
+  ///
+  /// 2026-09-24, Craig: "When selecting a date range and there is a
+  /// forecast (i.e. current year) then please show the forecast bars as
+  /// well." Budgets/Forecast are entered per FISCAL month, which has no
+  /// clean correspondence to a boundary calendar month that's only
+  /// partially inside the picked range — resolved per Craig's own
+  /// instruction ("divide the forecast by the days and multiply out") by
+  /// scaling that one fiscal month's whole-month figure down to the
+  /// fraction of it actually covered by the range. A calendar month is
+  /// never split across two fiscal months in this app (fiscal months are
+  /// just calendar months relabelled — see fiscal.dart's own doc comments),
+  /// so there's never more than one fiscal month's figure to apportion for
+  /// any given category here.
   ///
   /// Both `value` and `profit` are computed here regardless of the CURRENT
   /// `_measure` (same reasoning as `_GraphData.rows` in the normal path) —
@@ -713,9 +759,19 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       filters: filters.toFilterParams(),
     );
     final byMonth = {for (final t in totals) DateTime(t.monthStart.year, t.monthStart.month): t};
+
+    // 2026-09-24 — see _DateRangeGraphData.targetBars' own doc comment.
+    // Fetched once up front (same source as the non-range path's own
+    // `_load`), then sliced/apportioned per calendar month below.
+    final target = await _loadTargetBars(filters: filters);
+    final currentFy = _fiscalYears.last;
+
     final categories = <String>[];
     final values = <num?>[];
     final profits = <num?>[];
+    final targetBars = <num?>[];
+    final targetShareBars = <double?>[];
+    final targetBasisBars = <String?>[];
     final labelFormat = DateFormat('MMM yyyy');
     var cursor = DateTime(fromDate.year, fromDate.month);
     final end = DateTime(toDate.year, toDate.month);
@@ -724,24 +780,51 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       final row = byMonth[cursor];
       values.add(row?.value ?? 0);
       profits.add(row?.profit ?? 0);
+
+      // Apportionment — Craig: "if it is a potion for the month then divide
+      // the forecast by the days and multiply out." Only the first and last
+      // categories can ever be partial (every month strictly between them is
+      // fully inside the picked range either way); a single-calendar-month
+      // range is both at once.
+      final daysInMonth = DateTime(cursor.year, cursor.month + 1, 0).day;
+      final isFirstMonth = cursor.year == fromDate.year && cursor.month == fromDate.month;
+      final isLastMonth = cursor.year == toDate.year && cursor.month == toDate.month;
+      final daysIncluded = isFirstMonth && isLastMonth
+          ? toDate.day - fromDate.day + 1
+          : isFirstMonth
+              ? daysInMonth - fromDate.day + 1
+              : isLastMonth
+                  ? toDate.day
+                  : daysInMonth;
+      final fraction = daysIncluded / daysInMonth;
+
+      // A target only ever exists for the CURRENT fiscal year (see
+      // _GraphData.targetBars' own doc comment) — a category landing in any
+      // other fiscal year gets no bar, same as the non-range chart never
+      // draws one for a prior year's line.
+      final fiscalYear = fiscalYearFor(cursor, startMonth: _startMonth);
+      if (fiscalYear == currentFy) {
+        final monthIndex = _months.indexOf(fiscalMonthLabelFor(cursor));
+        final fullValue = target.bars[monthIndex];
+        targetBars.add(fullValue == null ? null : fullValue * fraction);
+        targetShareBars.add(target.shares[monthIndex]);
+        targetBasisBars.add(target.basisLabels[monthIndex]);
+      } else {
+        targetBars.add(null);
+        targetShareBars.add(null);
+        targetBasisBars.add(null);
+      }
+
       cursor = DateTime(cursor.year, cursor.month + 1);
     }
-    return _DateRangeGraphData(categories: categories, values: values, profits: profits);
-  }
-
-  Widget _buildRangeChart(_DateRangeGraphData data) {
-    final series = [
-      TrendSeries(
-        label: _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit',
-        color: AppColors.teal,
-        values: _measure == ValueMeasure.rValue ? data.values : data.profits,
-      ),
-    ];
-    return TrendLineChart(
-      categories: data.categories,
-      series: series,
-      axisValueFormatter: _compactRand,
-      detailValueFormatter: (v) => formatRand(v),
+    return _DateRangeGraphData(
+      categories: categories,
+      values: values,
+      profits: profits,
+      targetBars: targetBars,
+      targetShareBars: targetShareBars,
+      targetBasisBars: targetBasisBars,
+      targetIsEstimated: target.isEstimated,
     );
   }
 
@@ -751,11 +834,30 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final dateFormat = DateFormat('yyyy-MM-dd');
     final fromLabel = dateFormat.format(widget.fromDate!);
     final toLabel = dateFormat.format(widget.toDate!);
+    // Same target-column treatment as `_buildExportData` (2026-09-24, Craig
+    // — see `_DateRangeGraphData.targetBars`' own doc comment) so an
+    // exported date-range chart carries the same forecast figures the
+    // on-screen overlay shows, apportionment included.
+    final includeTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
+    final targetHeader = includeTarget ? (data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})') : null;
+    final includeTargetBasis = includeTarget && data.targetIsEstimated;
     return ExportData(
-      headers: ['Month', measureLabel],
+      headers: [
+        'Month',
+        measureLabel,
+        if (targetHeader != null) targetHeader,
+        if (includeTargetBasis) 'Target Basis',
+        if (includeTargetBasis) 'Target Share %',
+      ],
       rows: [
         for (var i = 0; i < data.categories.length; i++)
-          [data.categories[i], _formatOrDash(_measure == ValueMeasure.rValue ? data.values[i] : data.profits[i])],
+          [
+            data.categories[i],
+            _formatOrDash(_measure == ValueMeasure.rValue ? data.values[i] : data.profits[i]),
+            if (includeTarget) _formatOrDash(data.targetBars[i]),
+            if (includeTargetBasis) data.targetBasisBars[i] ?? '—',
+            if (includeTargetBasis) _formatShareOrDash(data.targetShareBars[i]),
+          ],
       ],
       fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
       title: 'WyzeSales — Sales Analysis ($measureLabel, $fromLabel to $toLabel)',
@@ -1000,18 +1102,6 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final showTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
     final targetColor = AppColors.info.withValues(alpha: data.targetIsEstimated ? 0.30 : 0.45);
     final targetLabel = data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})';
-    // 2026-09-04, reworded alongside the trailing-window + hierarchical-
-    // basis rework (target_overlay.dart) — the exact per-month percentage
-    // and which basis produced it now show directly in the hover/tap detail
-    // row (targetShareBars/targetBasisBars below), so this static blurb only
-    // needs to explain the MECHANISM once, not repeat numbers that are
-    // already on screen per month.
-    const targetTooltip =
-        'No target is entered for this exact combination of filters. One is derived instead: the most specific of the '
-        'currently-filtered dimensions that has its own real entered target (falling back to the whole company if none '
-        'does) is scaled by this combination\'s trailing-3-month share of that basis\'s own actual revenue. Hover a point '
-        'to see the exact share and basis used for that month.';
-
     return TrendLineChart(
       categories: _months,
       series: series,
@@ -1022,7 +1112,58 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       targetBasisBars: showTarget ? data.targetBasisBars : null,
       targetLabel: showTarget ? targetLabel : null,
       targetColor: showTarget ? targetColor : null,
-      targetTooltip: showTarget && data.targetIsEstimated ? targetTooltip : null,
+      targetTooltip: showTarget && data.targetIsEstimated ? _targetTooltip : null,
+    );
+  }
+
+  // 2026-09-04, reworded alongside the trailing-window + hierarchical-basis
+  // rework (target_overlay.dart) — the exact per-month percentage and which
+  // basis produced it now show directly in the hover/tap detail row
+  // (targetShareBars/targetBasisBars), so this static blurb only needs to
+  // explain the MECHANISM once, not repeat numbers that are already on
+  // screen per month. Pulled out to a class-level constant (2026-09-24) so
+  // both `_buildChart` and the date-range mode's `_buildRangeChart` share
+  // the exact same wording rather than two copies drifting apart.
+  static const String _targetTooltip =
+      'No target is entered for this exact combination of filters. One is derived instead: the most specific of the '
+      'currently-filtered dimensions that has its own real entered target (falling back to the whole company if none '
+      'does) is scaled by this combination\'s trailing-3-month share of that basis\'s own actual revenue. Hover a point '
+      'to see the exact share and basis used for that month.';
+
+  /// Same target-overlay treatment as `_buildChart`, for the date-range
+  /// mode's single line (2026-09-24, Craig — see `_DateRangeGraphData
+  /// .targetBars`' own doc comment). Deliberately mirrors `_buildChart`'s
+  /// colour/label logic exactly rather than factoring it out into one
+  /// shared helper — the two callers read slightly different fields
+  /// (`_fiscalYears.last` is still the right "current fiscal year" label in
+  /// both cases, but one reads `data.rows`-derived series, the other
+  /// `data.values`/`data.profits`), and the duplication here is small
+  /// enough that a shared helper would need almost as many parameters as it
+  /// saved lines.
+  Widget _buildRangeChart(_DateRangeGraphData data) {
+    final series = [
+      TrendSeries(
+        label: _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit',
+        color: AppColors.teal,
+        values: _measure == ValueMeasure.rValue ? data.values : data.profits,
+      ),
+    ];
+
+    final showTarget = _measure == ValueMeasure.rValue && data.targetBars.any((v) => v != null);
+    final targetColor = AppColors.info.withValues(alpha: data.targetIsEstimated ? 0.30 : 0.45);
+    final targetLabel = data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})';
+
+    return TrendLineChart(
+      categories: data.categories,
+      series: series,
+      axisValueFormatter: _compactRand,
+      detailValueFormatter: (v) => formatRand(v),
+      targetBars: showTarget ? data.targetBars : null,
+      targetShareBars: showTarget ? data.targetShareBars : null,
+      targetBasisBars: showTarget ? data.targetBasisBars : null,
+      targetLabel: showTarget ? targetLabel : null,
+      targetColor: showTarget ? targetColor : null,
+      targetTooltip: showTarget && data.targetIsEstimated ? _targetTooltip : null,
     );
   }
 }

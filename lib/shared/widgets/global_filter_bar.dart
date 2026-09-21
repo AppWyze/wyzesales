@@ -24,7 +24,7 @@ import 'entity_search_field.dart';
 /// select a sales person on any screen and I navigate to another screen
 /// that filtered salesperson must stay filtered").
 class GlobalFilterBar extends ConsumerWidget {
-  const GlobalFilterBar({super.key, this.extraChip, this.extraFilterLabel, this.onExtraFilterSelected});
+  const GlobalFilterBar({super.key, this.extraChip, this.extraFilterLabel, this.onExtraFilterSelected, this.onExtraFilterCleared});
 
   /// A screen-local filter control to render inline with the shared
   /// Year/Month/Quarter/dimension chips, without that control's own state
@@ -58,6 +58,16 @@ class GlobalFilterBar extends ConsumerWidget {
   /// not enforced as a pair here since AppShell already threads both through
   /// from the exact same screen-local callback.
   final VoidCallback? onExtraFilterSelected;
+
+  /// 2026-09-24, Craig: "Clear all needs to work for date range as well."
+  /// `notifier.clearAll()` below only ever knew about `globalFiltersProvider`
+  /// state — it has no way to reach into a screen-local control like Sales
+  /// Analysis' date range (see `extraChip`'s own doc comment for why that
+  /// state deliberately stays outside `globalFiltersProvider`). Called
+  /// alongside `notifier.clearAll()` from the "Clear all" button below, same
+  /// "plain passthrough, GlobalFilterBar doesn't know what it clears" shape
+  /// as `onExtraFilterSelected` — left null has no effect, same as that one.
+  final VoidCallback? onExtraFilterCleared;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -176,10 +186,19 @@ class GlobalFilterBar extends ConsumerWidget {
             icon: const Icon(Icons.bookmark_outline, size: 16),
             label: const Text('Presets'),
           ),
-          if (filters.activeCount > 0)
+          // 2026-09-24, Craig: "Clear all needs to work for date range as
+          // well" — `extraChip != null` added to this condition so the
+          // button still shows when the ONLY active filter is a screen-local
+          // one like Sales Analysis' date range (which `filters.activeCount`
+          // never counts, since it isn't part of `globalFiltersProvider` —
+          // see `extraChip`'s own doc comment).
+          if (filters.activeCount > 0 || extraChip != null)
             TextButton(
               style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 32)),
-              onPressed: notifier.clearAll,
+              onPressed: () {
+                notifier.clearAll();
+                onExtraFilterCleared?.call();
+              },
               child: const Text('Clear all'),
             ),
         ],
