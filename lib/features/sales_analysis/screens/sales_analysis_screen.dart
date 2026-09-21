@@ -271,6 +271,21 @@ class _DateRangeControl extends StatelessWidget {
 class _GraphData {
   final List<ConsolidatedSales> rows;
 
+  /// 2026-09-27, Craig: "Default to all years but if a year is selected then
+  /// show only that year." The fiscal years this batch was actually fetched
+  /// (and should be plotted) for — the full trailing window
+  /// (`_GraphTabState._fiscalYears`) by default, or just the one year picked
+  /// in the global Year filter when it's set (see `_load`, which resolves
+  /// this once at fetch time — same "carry the resolved value alongside the
+  /// data" reasoning as `_CompareGraphData.year`, so a fetch already in
+  /// flight can't render against a different selection than the one it
+  /// actually queried for). Deliberately its own field rather than reusing
+  /// `_fiscalYears` directly in `_buildChart`/`_buildExportData` — those
+  /// still need the REAL trailing window too, for the Target overlay's
+  /// "current fiscal year" (`_fiscalYears.last`), which stays the actual
+  /// current year regardless of which year is selected here.
+  final List<int> years;
+
   /// One entry per fiscal month (`_months` order), for the CURRENT fiscal
   /// year only — Craig, 2026-09-03: "we are only doing this for the
   /// current fiscal year. No point in doing this for prior years agreed?"
@@ -306,6 +321,7 @@ class _GraphData {
   final bool targetIsEstimated;
 
   const _GraphData({
+    required this.years,
     required this.rows,
     required this.targetBars,
     required this.targetShareBars,
@@ -462,14 +478,13 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
 
   /// 2026-09-26, Craig: "I don't see the need to include the year selection
   /// as we can already select this from the main filter" — replaces this
-  /// mode's original own year dropdown. Unlike the normal trailing-years
-  /// chart (`_load`/`_graphFilters`), which deliberately EXCLUDES the global
-  /// Year filter because showing several years side by side is that view's
-  /// whole point, Compare mode only ever shows ONE year at a time regardless
-  /// — there's no "several years" behaviour for the global Year filter to
-  /// collide with here, so reading it directly is the natural fit, not a
-  /// special case. See `_loadCompareData` for where `filters.fiscalYear` is
-  /// actually read (falling back to the current fiscal year when unset).
+  /// mode's original own year dropdown. The normal trailing-years chart
+  /// (`_load`/`_displayYears`) shows every trailing year UNLESS the global
+  /// Year filter narrows it to one; Compare mode has no "every trailing
+  /// year" state to begin with (2026-09-25, Craig: "for the selected year"
+  /// — it was always single-year), so it just always reads the global Year
+  /// filter directly, falling back to the current fiscal year when unset.
+  /// See `_loadCompareData` for where `filters.fiscalYear` is actually read.
   Future<_CompareGraphData>? _compareFuture;
 
   // Only meaningful outside date-range mode (see `_ChartGranularity`'s own
@@ -502,10 +517,28 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
 
   // 2026-08-26 (Craig's global cross-dimension filters): same treatment as
   // ytd_comparative_screen.dart, which reads the exact same view — the 5
-  // dimension filters and the global Month filter apply, Year does not
-  // (this chart's whole point is a fixed trailing-3-fiscal-year trend).
-
+  // dimension filters and the global Month filter apply here exactly as
+  // `filters.toFilterParams()` sends them. Year is handled separately
+  // (`_displayYears` below), never through this map — see that method's own
+  // doc comment for why.
   GlobalFilters _graphFilters(GlobalFilters filters) => filters.copyWith(fiscalYear: null);
+
+  /// 2026-09-27, Craig: "Default to all years but if a year is selected then
+  /// show only that year." The trailing window (`_fiscalYears`) stays the
+  /// default, but a picked global Year filter narrows the chart to just that
+  /// one year — the Year dropdown's own options (global_filter_bar.dart) are
+  /// always drawn from this exact same `_fiscalYears` window, so a selected
+  /// year is always one already in it; there's no "selected a year outside
+  /// the window" case to handle.
+  ///
+  /// Still passed as its own `fiscalYears:` fetch param rather than left in
+  /// `filters.fiscalYear` for `_graphFilters`'s filter map to carry — the
+  /// backend ANDs `p_fiscal_years` and `p_filters.fiscal_year` together when
+  /// both are present, and leaving the single selected year in BOTH places
+  /// would work by coincidence but only because they'd happen to agree;
+  /// `_graphFilters` stripping it and this method being the one place that
+  /// decides which years to fetch keeps that unambiguous.
+  List<int> _displayYears(GlobalFilters filters) => filters.fiscalYear != null ? [filters.fiscalYear!] : _fiscalYears;
 
   @override
   void initState() {
@@ -575,9 +608,11 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
 
   Future<_GraphData> _load(GlobalFilters filters) async {
     final repo = ref.read(salesRepositoryProvider);
-    final rows = await repo.fetchConsolidatedSales(fiscalYears: _fiscalYears, filters: _graphFilters(filters));
+    final years = _displayYears(filters);
+    final rows = await repo.fetchConsolidatedSales(fiscalYears: years, filters: _graphFilters(filters));
     final target = await _loadTargetBars(filters: filters);
     return _GraphData(
+      years: years,
       rows: rows,
       targetBars: target.bars,
       targetShareBars: target.shares,
@@ -1204,13 +1239,19 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       }
     });
 
+    // The global Year filter's raw value — null means "no year picked",
+    // which is what tells the normal chart to default back to every
+    // trailing year (`_displayYears`) and its header label below. Watched,
+    // not read, so picking or clearing a Year updates this label the
+    // instant it changes rather than lagging behind the refetch it also
+    // triggers (`ref.listen<GlobalFilters>` above).
+    final selectedYear = ref.watch(globalFiltersProvider).fiscalYear;
     // Compare mode's effective year — same fallback `_loadCompareData` uses
-    // (`filters.fiscalYear ?? _fiscalYears.last`), computed again here so the
+    // (`filters.fiscalYear ?? _fiscalYears.last`) — computed here too so the
     // header can show it immediately rather than waiting on `_compareFuture`
-    // to resolve. Watched, not read, so picking a Year in the global filter
-    // updates this label the instant it changes rather than lagging behind
-    // the refetch it also triggers (`ref.listen<GlobalFilters>` above).
-    final compareYear = ref.watch(globalFiltersProvider).fiscalYear ?? _fiscalYears.last;
+    // to resolve. Unlike the normal chart, Compare mode is never "every
+    // year," so it always has SOME year to show, hence the fallback.
+    final compareYear = selectedYear ?? _fiscalYears.last;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -1239,7 +1280,13 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
                       : _isComparing
                           ? 'Comparing ${_compareEntities.length} of ${_compareDimension!.displayLabel}, FY$compareYear, '
                               '${_granularity == _ChartGranularity.quarters ? 'quarterly' : 'monthly'}.'
-                          : 'Trailing ${_fiscalYears.length} fiscal years, ${_granularity == _ChartGranularity.quarters ? 'quarterly' : 'monthly'}.',
+                          // 2026-09-27, Craig: "Default to all years but if
+                          // a year is selected then show only that year." —
+                          // mirrors `_displayYears`, which this label just
+                          // describes rather than drives (the fetch itself
+                          // already switched by the time this rebuilds).
+                          : '${selectedYear != null ? 'FY$selectedYear' : 'Trailing ${_fiscalYears.length} fiscal years'}, '
+                              '${_granularity == _ChartGranularity.quarters ? 'quarterly' : 'monthly'}.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 Wrap(
@@ -1444,7 +1491,10 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // below uses to decide whether to pass targetBars to the chart at all.
     // Also skipped when every entry is null (a failed fetch, or genuinely
     // nothing entered) — same as the chart, no point in an all-dash column.
-    final includeTarget = _measure == ValueMeasure.rValue && targetBars.any((v) => v != null);
+    // Same "current fiscal year only" suppression as `_buildChart`'s own
+    // `showTarget` — see that comment for the reasoning.
+    final includeTarget =
+        _measure == ValueMeasure.rValue && data.years.contains(_fiscalYears.last) && targetBars.any((v) => v != null);
     final targetHeader = includeTarget ? (data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})') : null;
     // 2026-09-04, Craig — same "surface the actual percentage" request that
     // added it to the chart's own hover row: only meaningful for a derived
@@ -1455,10 +1505,14 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // quarterly granularity (2026-09-25) — see `_buildChart`'s own comment
     // on why a quarter's target has no single share/basis to report.
     final includeTargetBasis = includeTarget && data.targetIsEstimated && !isQuarterly;
+    // 2026-09-27, Craig: "Default to all years but if a year is selected
+    // then show only that year." — mirrors `_buildChart`'s own switch from
+    // `_fiscalYears` to `data.years`; see `_displayYears`'s doc comment.
+    final yearsLabel = data.years.length == 1 ? 'FY${data.years.single}' : 'trailing ${data.years.length} fiscal years';
     return ExportData(
       headers: [
         isQuarterly ? 'Quarter' : 'Month',
-        for (final fy in _fiscalYears) 'FY$fy',
+        for (final fy in data.years) 'FY$fy',
         if (targetHeader != null) targetHeader,
         if (includeTargetBasis) 'Target Basis',
         if (includeTargetBasis) 'Target Share %',
@@ -1467,7 +1521,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         for (var i = 0; i < categories.length; i++)
           [
             categories[i],
-            for (final fy in _fiscalYears)
+            for (final fy in data.years)
               _formatOrDash(isQuarterly ? _quarterlyValueFor(byMonth, categories[i], fy) : _valueFor(byMonth, categories[i], fy)),
             if (includeTarget) _formatOrDash(targetBars[i]),
             if (includeTargetBasis) data.targetBasisBars[i] ?? '—',
@@ -1475,7 +1529,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
           ],
       ],
       fileNameBase: 'wyzesales_sales_analysis_chart_${DateTime.now().millisecondsSinceEpoch}',
-      title: 'WyzeSales — Sales Analysis ($measureLabel, trailing ${_fiscalYears.length} fiscal years${isQuarterly ? ', quarterly' : ''})',
+      title: 'WyzeSales — Sales Analysis ($measureLabel, $yearsLabel${isQuarterly ? ', quarterly' : ''})',
     );
   }
 
@@ -1504,17 +1558,27 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // used there, and 5 is exactly the largest history window this app
     // offers (Settings > Company, "Data history window"), so it never has to
     // repeat a colour.
+    // 2026-09-27, Craig: "Default to all years but if a year is selected
+    // then show only that year." `data.years` is `_fiscalYears` itself by
+    // default, or just the one picked year — see `_displayYears`'s own doc
+    // comment. Colours still index off the full 5-colour palette rather than
+    // being recomputed for a 1-entry list, so a single selected year keeps
+    // whichever colour it already has in the unfiltered view (e.g. FY2025
+    // reads the same amber whether it's showing alongside FY2026 or alone).
     const seriesPalette = [AppColors.info, AppColors.positive, AppColors.teal, AppColors.accentPurple, AppColors.caution];
-    final seriesColors = List<Color>.generate(_fiscalYears.length, (i) => seriesPalette[i % seriesPalette.length]);
+    final seriesColors = List<Color>.generate(
+      data.years.length,
+      (i) => seriesPalette[_fiscalYears.indexOf(data.years[i]) % seriesPalette.length],
+    );
 
     final series = [
-      for (var i = 0; i < _fiscalYears.length; i++)
+      for (var i = 0; i < data.years.length; i++)
         TrendSeries(
-          label: 'FY${_fiscalYears[i]}',
+          label: 'FY${data.years[i]}',
           color: seriesColors[i],
           values: [
             for (final category in categories)
-              isQuarterly ? _quarterlyValueFor(byMonth, category, _fiscalYears[i]) : valueFor(category, _fiscalYears[i]),
+              isQuarterly ? _quarterlyValueFor(byMonth, category, data.years[i]) : valueFor(category, data.years[i]),
           ],
         ),
     ];
@@ -1550,7 +1614,16 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final targetBars = isQuarterly ? [for (final q in fiscalQuarterLabels) _quarterlyTargetFor(data.targetBars, q)] : data.targetBars;
     final targetShareBars = isQuarterly ? List<double?>.filled(categories.length, null) : data.targetShareBars;
     final targetBasisBars = isQuarterly ? List<String?>.filled(categories.length, null) : data.targetBasisBars;
-    final showTarget = _measure == ValueMeasure.rValue && targetBars.any((v) => v != null);
+    // Target is always the CURRENT fiscal year's own budget (`_GraphData
+    // .targetBars`'s own doc comment) — showing it overlaid on a single
+    // PAST year's actuals (Year filter set to something other than the
+    // current fiscal year) would be comparing that old year's real revenue
+    // against this year's target, which isn't a comparison anyone asked
+    // for. Suppressed whenever the current fiscal year isn't among the
+    // years actually being plotted; unaffected the rest of the time, same
+    // as before this mode existed.
+    final showTarget =
+        _measure == ValueMeasure.rValue && data.years.contains(_fiscalYears.last) && targetBars.any((v) => v != null);
     final targetColor = AppColors.info.withValues(alpha: data.targetIsEstimated ? 0.30 : 0.45);
     final targetLabel = data.targetIsEstimated ? 'Estimated Target (FY${_fiscalYears.last})' : 'Target (FY${_fiscalYears.last})';
     return TrendLineChart(
