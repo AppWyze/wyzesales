@@ -188,6 +188,29 @@ class _TrendLineChartState extends State<TrendLineChart> {
     return sum;
   }
 
+  /// 2026-09-28, Craig: "I would like to know the % contribution i.e. sep
+  /// contributes 38% of the year total or Q4 contributes 27% of the year
+  /// total... Maybe in braces after each total?" — appended after a
+  /// hovered/tapped period's own value, same bracket-suffix convention
+  /// `_targetDetailText` already uses for the Target overlay's own share
+  /// (e.g. "(42.2% of Item: Multistage Vertical Pump)"). Divides by
+  /// `_seriesTotal` — the exact figure this series' own line already shows
+  /// in the default "Total" row (`_buildTotalsRow`) — so the percentage
+  /// always reads as "share of the total you'd see if you moved the cursor
+  /// away," current partial year included: a still-in-progress year's total
+  /// is itself a year-to-date figure, so "Sep 38%" means 38% of what's been
+  /// achieved so far, not of a full year that hasn't happened yet. Omitted
+  /// entirely when the series' total is exactly zero — nothing meaningful
+  /// to divide by.
+  String _periodDetailText(TrendSeries s, int index) {
+    final value = s.values[index]!;
+    final base = '${s.label}  ${widget.detailValueFormatter(value)}';
+    final total = _seriesTotal(s);
+    if (total == 0) return base;
+    final share = value / total;
+    return '$base  (${(share * 100).toStringAsFixed(1)}%)';
+  }
+
   /// 2026-09-27, Craig: "should we rather default to the sum total... as it
   /// currently does [for hover]?" — the default (unhovered) row's per-series
   /// text. Flags a series as partial whenever its own last data point isn't
@@ -242,9 +265,10 @@ class _TrendLineChartState extends State<TrendLineChart> {
     return '$label$suffix  ${widget.detailValueFormatter(sum)}';
   }
 
-  /// The detail row for one specific hovered/tapped category — unchanged
-  /// behaviour from before 2026-09-27, just pulled out to its own method so
-  /// `build()` can switch between this and `_buildTotalsRow` below.
+  /// The detail row for one specific hovered/tapped category — pulled out
+  /// to its own method (2026-09-27) so `build()` can switch between this and
+  /// `_buildTotalsRow` below; each series' value now also carries its
+  /// %-of-total suffix (2026-09-28, see `_periodDetailText`).
   Widget _buildPeriodRow(int index, TextTheme textTheme) {
     return Row(
       children: [
@@ -256,7 +280,7 @@ class _TrendLineChartState extends State<TrendLineChart> {
               for (final s in widget.series)
                 if (index < s.values.length && s.values[index] != null)
                   Text(
-                    '${s.label}  ${widget.detailValueFormatter(s.values[index]!)}',
+                    _periodDetailText(s, index),
                     style: textTheme.bodyMedium?.copyWith(color: s.color, fontWeight: FontWeight.w600),
                   ),
               // Target overlay's own value alongside the series values at
