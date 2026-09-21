@@ -220,3 +220,168 @@ class _EntitySearchDialogState extends ConsumerState<_EntitySearchDialog> {
     );
   }
 }
+
+/// Multi-select variant of `showEntitySearchDialog` above — 2026-09-25,
+/// Craig, Sales Analysis Chart tab's dimension-comparison feature: "we
+/// should have a tick box next to each one and then we select as many as we
+/// want and they will then chart." Same server-backed, debounced search as
+/// the single-select dialog (`entitiesForConfig`), so it works for a
+/// small dimension (Revenue Split's 2 entities) and a large one (Customer,
+/// Item) exactly the same way — but ticking a row doesn't close the dialog;
+/// selections accumulate in a running set, shown as removable chips above
+/// the search box so a tick made under one search term stays visible (and
+/// un-tickable) after typing a different one, until "Done" is pressed.
+///
+/// Deliberately NOT the same dialog with a `multiSelect` flag bolted on —
+/// this one has no "All" row (a multi-select returning an empty list already
+/// means "nothing to compare" to its caller, unlike the single-select
+/// dialog's "All" meaning "clear this global filter") and no "no data under
+/// other active filters" greying (that feature reads `globalFiltersProvider`
+/// directly, which has nothing to do with a chart-local comparison set —
+/// see this dialog's caller for how it scopes the actual data fetch
+/// instead). Keeping the two dialogs separate keeps both of their doc
+/// comments honest about what they actually do.
+Future<List<CodeName>?> showEntityMultiSelectDialog(
+  BuildContext context, {
+  required ClientDimensionConfig dimension,
+  required String title,
+  List<CodeName> initiallySelected = const [],
+}) {
+  return showDialog<List<CodeName>>(
+    context: context,
+    builder: (context) => _EntityMultiSelectDialog(dimension: dimension, title: title, initiallySelected: initiallySelected),
+  );
+}
+
+class _EntityMultiSelectDialog extends ConsumerStatefulWidget {
+  const _EntityMultiSelectDialog({required this.dimension, required this.title, required this.initiallySelected});
+
+  final ClientDimensionConfig dimension;
+  final String title;
+  final List<CodeName> initiallySelected;
+
+  @override
+  ConsumerState<_EntityMultiSelectDialog> createState() => _EntityMultiSelectDialogState();
+}
+
+class _EntityMultiSelectDialogState extends ConsumerState<_EntityMultiSelectDialog> {
+  final _controller = TextEditingController();
+  Timer? _debounce;
+  List<CodeName> _results = [];
+  bool _loading = true;
+
+  // Keyed by code, not a plain List — re-ticking the same entity under a
+  // different search term must not duplicate it, and a prior tick has to
+  // survive even once that entity scrolls out of the CURRENT search's
+  // results (the chips row below reads straight off this map's values, not
+  // off `_results`, which is why a selection stays visible after the search
+  // term changes).
+  late final Map<String, CodeName> _selected = {for (final e in widget.initiallySelected) e.code: e};
+
+  @override
+  void initState() {
+    super.initState();
+    _search(''); // initial browse list — same "first N, unfiltered" default the single-select dialog opens to.
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () => _search(value));
+  }
+
+  Future<void> _search(String value) async {
+    setState(() => _loading = true);
+    final trimmed = value.trim();
+    final results =
+        await ref.read(referenceDataRepositoryProvider).entitiesForConfig(widget.dimension, search: trimmed.isEmpty ? null : trimmed);
+    if (!mounted) return;
+    setState(() {
+      _results = results;
+      _loading = false;
+    });
+  }
+
+  void _toggle(CodeName entity, bool? ticked) {
+    setState(() {
+      if (ticked == true) {
+        _selected[entity.code] = entity;
+      } else {
+        _selected.remove(entity.code);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      insetPadding: dialogInsetPadding,
+      title: Text(widget.title),
+      content: SizedBox(
+        width: dialogMaxWidth(context, 360),
+        height: dialogMaxHeight(context, 480),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.search), hintText: 'Search…'),
+              onChanged: _onChanged,
+            ),
+            if (_selected.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final entity in _selected.values)
+                    Chip(
+                      label: Text(entity.displayLabel, style: const TextStyle(fontSize: 12)),
+                      onDeleted: () => _toggle(entity, false),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 4),
+            const Divider(height: 1),
+            Expanded(
+              child: _loading
+                  ? const Center(child: RepaintBoundary(child: CircularProgressIndicator()))
+                  : _results.isEmpty
+                      ? const Center(child: Text('No matches.'))
+                      : ListView.builder(
+                          itemCount: _results.length,
+                          itemBuilder: (context, index) {
+                            final entity = _results[index];
+                            return CheckboxListTile(
+                              dense: true,
+                              value: _selected.containsKey(entity.code),
+                              onChanged: (ticked) => _toggle(entity, ticked),
+                              controlAffinity: ListTileControlAffinity.leading,
+                              title: Text(entity.displayLabel, overflow: TextOverflow.ellipsis),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_selected.values.toList()),
+          child: Text('Done (${_selected.length})'),
+        ),
+      ],
+    );
+  }
+}
