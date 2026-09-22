@@ -199,7 +199,12 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
                   onExportReady: (fn) => _chartExporter = fn,
                 ),
                 DocumentAnalysisView(
-                  documentKinds: const ['invoice', 'credit_note'],
+                  // 2026-09-22: includes 'journal'/'adjustment' alongside the
+                  // original two kinds - Edgetec's GL-sourced extract posts
+                  // real revenue-bearing lines under those kinds (journal
+                  // entries and rare adjustments), not just invoice/credit
+                  // note. Harmless for WCSA, which never produces either.
+                  documentKinds: const ['invoice', 'credit_note', 'journal', 'adjustment'],
                   showExportButtons: false,
                   fromDate: _fromDate,
                   toDate: _toDate,
@@ -887,7 +892,10 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final repo = ref.read(salesRepositoryProvider);
     final filters = ref.read(globalFiltersProvider);
     final totals = await repo.fetchSalesDocumentsMonthlyTotals(
-      documentKinds: const ['invoice', 'credit_note'],
+      // See the other documentKinds list above (Table tab) for why 'journal'
+      // and 'adjustment' are included here too - keeps this range graph's
+      // totals consistent with what the Table tab shows for the same range.
+      documentKinds: const ['invoice', 'credit_note', 'journal', 'adjustment'],
       fromDate: fromDate,
       toDate: toDate,
       filters: filters.toFilterParams(),
