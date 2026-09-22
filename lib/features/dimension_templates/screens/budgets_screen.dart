@@ -927,6 +927,17 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   /// jargon. If `compute-forecast`'s thresholds or safeguards ever change,
   /// this text needs updating alongside it — it's describing that specific
   /// function, not general forecasting theory.
+  ///
+  /// 2026-09-22, Craig: "The Sales Budget overrides the Seasonal Forecast.
+  /// If you can put this into the explanation in the right words as well
+  /// please." The closing paragraph now says so — grounded in
+  /// `core/utils/target_overlay.dart`'s `resolveTarget`, which mirrors
+  /// schema/021's own `coalesce(nullif(budget_value, 0), forecast_value)`:
+  /// everywhere else this app shows a "Target" (Dashboard, Sales Analysis,
+  /// Performance), a month with a real entered Sales Budget uses that
+  /// figure; the Seasonal Forecast is only ever the fallback for a month
+  /// left blank (or 0, which `resolveTarget` treats as "not entered" too —
+  /// same reasoning as `budget_value`'s own `not null default 0`).
   void _showForecastExplanation() {
     final theme = Theme.of(context);
     Widget paragraph(String text) => Padding(
@@ -1037,7 +1048,11 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
                 paragraph(
                   'This is separate from the Sales Budget column alongside it, '
                   'which is a target entered manually — the Seasonal Forecast '
-                  'is calculated, not typed in.',
+                  'is calculated, not typed in. But the two aren\'t independent: '
+                  'wherever this app shows a "Target" elsewhere — the Dashboard, '
+                  'Sales Analysis, Performance — it uses the Sales Budget for any '
+                  'month that has one entered. The Seasonal Forecast only steps '
+                  'in to fill a month that\'s been left blank.',
                 ),
               ],
             ),
