@@ -509,10 +509,20 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   static const double _budgetColumnWidth = 260;
 
   late final Map<String, TextEditingController> _controllers;
+
+  /// A mutable working copy of `widget.data.budget` (`_BudgetMonthData` is
+  /// itself immutable — `widget.data` never changes after this table's
+  /// entity is picked, since nothing refetches it until the admin leaves
+  /// and re-selects) — see `_saveMonth`'s own comment for why this exists:
+  /// it's what every total/% figure below is actually computed FROM now,
+  /// specifically so those figures can be updated the moment a save
+  /// succeeds rather than only after a full reload.
+  late Map<String, num> _budgetValues;
+
   // Computed once at mount, same as ytd_comparative_screen.dart's
   // _fiscalYears — this table's row/column ORDER is display-only (every
   // lookup below is keyed by the calendar month label itself, e.g.
-  // widget.data.budget[month], so a different rotation never changes which
+  // _budgetValues[month], so a different rotation never changes which
   // value a row shows, only which row it shows first).
   late final List<String> _months;
   bool _saving = false;
@@ -521,12 +531,13 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   void initState() {
     super.initState();
     _months = fiscalMonthOrderFor(startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+    _budgetValues = Map.of(widget.data.budget);
     _controllers = {
       for (final month in _months)
         // Comma-grouped from the start (e.g. "591,080") to match what
         // _ThousandsInputFormatter keeps it as on every subsequent keystroke
         // — see that class's own doc comment.
-        month: TextEditingController(text: _ThousandsInputFormatter._format.format(widget.data.budget[month] ?? 0)),
+        month: TextEditingController(text: _ThousandsInputFormatter._format.format(_budgetValues[month] ?? 0)),
     };
   }
 
@@ -557,6 +568,21 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   /// never lets a "." into this field's text in the first place (see its
   /// own doc comment) — fixed properly here anyway rather than left as a
   /// latent trap for the next thing that touches this method.
+  ///
+  /// 2026-09-22, Craig: "when you insert a Sales Budget it does not sum and
+  /// update. You have to go out of the screen and then when you go back in
+  /// it displays." Root cause: every total/% figure in this table is
+  /// computed from `_budgetValues` (previously read straight from
+  /// `widget.data.budget`, the snapshot fetched once when the entity was
+  /// selected — see that field's own doc comment), and nothing ever wrote
+  /// this month's freshly-saved value back into it after a successful save;
+  /// only leaving and re-selecting the entity re-fetched a fresh snapshot
+  /// and so happened to pick the new value up. Updating `_budgetValues`
+  /// here, right after the write actually succeeds (not optimistically
+  /// before it), means `_saveAll`'s own `setState` at the end of the batch
+  /// (see its doc comment) now rebuilds with figures that already reflect
+  /// every month just saved, with no extra round-trip back to Supabase to
+  /// re-fetch numbers this screen already has.
   Future<void> _saveMonth(String month, String clientId) async {
     final text = _controllers[month]!.text.replaceAll(',', '');
     final parsed = text.isEmpty ? 0 : num.tryParse(text);
@@ -568,6 +594,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
           fiscalMonth: month,
           budgetValue: parsed,
         );
+    _budgetValues[month] = parsed;
   }
 
   /// 2026-09-01, Craig: "you have to input a budget number then enter for
@@ -718,7 +745,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     for (var i = 0; i < _months.length; i++) {
       final month = _months[i];
       final quarterIndex = i ~/ 3;
-      final budgetSuffix = _pctSuffix(widget.data.budget[month] ?? 0, budgetTotal);
+      final budgetSuffix = _pctSuffix(_budgetValues[month] ?? 0, budgetTotal);
       final forecastSuffix = _pctSuffix(widget.data.forecast[month] ?? 0, forecastTotal);
       rows.add(DataRow(cells: [
         DataCell(Text(month)),
@@ -793,7 +820,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
               : Align(
                   alignment: Alignment.centerRight,
                   child: Text(
-                    '${formatRand(widget.data.budget[month])}  $budgetSuffix',
+                    '${formatRand(_budgetValues[month])}  $budgetSuffix',
                     overflow: TextOverflow.ellipsis,
                     maxLines: 1,
                   ),
@@ -905,9 +932,9 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
     // Budget/Seasonal Forecast figures themselves) none of this depends on
     // anything that changes mid-edit, so there's no reason to recompute it
     // 12 times over.
-    final budgetTotal = _annualTotal(widget.data.budget);
+    final budgetTotal = _annualTotal(_budgetValues);
     final forecastTotal = _annualTotal(widget.data.forecast);
-    final budgetQuarterTotals = [for (var q = 0; q < 4; q++) _quarterTotal(widget.data.budget, q)];
+    final budgetQuarterTotals = [for (var q = 0; q < 4; q++) _quarterTotal(_budgetValues, q)];
     final forecastQuarterTotals = [for (var q = 0; q < 4; q++) _quarterTotal(widget.data.forecast, q)];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -987,18 +1014,21 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
 
   /// Bold annual total — Craig, 2026-08-26: "Can we have total for each
   /// column in each table." Sums the saved Sales Budget figures
-  /// (widget.data.budget), same source the read-only display already uses,
-  /// not each field's live unsaved text — this table doesn't currently
-  /// rebuild on every keystroke (only on save), so a total sourced from the
-  /// text controllers would just as often show a stale figure as a current
-  /// one; summing the saved values is the one source that's always accurate
-  /// for what's actually been recorded. The annual % contribution figures
+  /// (`_budgetValues`, updated as each month is saved — see that field's
+  /// and `_saveMonth`'s own doc comments; NOT `widget.data.budget`, the
+  /// original fetched snapshot, which is why this used to go stale until
+  /// the admin left and re-entered the screen), not each field's live
+  /// unsaved text — this table doesn't rebuild on every keystroke (only on
+  /// save), so a total sourced from the text controllers directly would
+  /// just as often show a half-typed figure as a genuinely saved one;
+  /// summing the saved values is the one source that's always accurate for
+  /// what's actually been recorded. The annual % contribution figures
   /// (folded into the Sales Budget/Seasonal Forecast cells themselves —
   /// see `_pctSuffix`) have no meaningful value for the Total row itself,
   /// so this row's own two cells stay plain totals with no trailing
   /// suffix.
   DataRow _totalsRow() {
-    final totalBudget = _months.fold<num>(0, (sum, month) => sum + (widget.data.budget[month] ?? 0));
+    final totalBudget = _months.fold<num>(0, (sum, month) => sum + (_budgetValues[month] ?? 0));
     final totalForecast = _months.fold<num>(0, (sum, month) => sum + (widget.data.forecast[month] ?? 0));
     const style = TextStyle(fontWeight: FontWeight.bold);
     return DataRow(cells: [
