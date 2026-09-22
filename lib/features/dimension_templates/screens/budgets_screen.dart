@@ -14,6 +14,7 @@ import '../../../data/models/budget_figure.dart';
 import '../../../data/models/client_dimension_config.dart';
 import '../../../data/models/profile.dart';
 import '../../../data/models/reference_data.dart';
+import '../../../data/models/sales_forecast_figure.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
@@ -75,6 +76,49 @@ class _BudgetMonthData {
   final Map<String, String> confidence;
   const _BudgetMonthData({required this.budget, required this.forecast, required this.confidence});
 }
+
+/// One entity's annual Sales Budget/Seasonal Forecast totals, as shown on
+/// the landing-pane summary before any entity is selected — see
+/// `_BudgetsScreenState._loadContribution` and `_DimensionContributionData`
+/// below. Deliberately just the two annual totals, not a full
+/// `_BudgetMonthData`'s worth of per-month detail — the summary only ever
+/// needs a % of each entity's yearly figure, never a monthly breakdown.
+class _EntityContribution {
+  final String code;
+  final String label;
+  final num budgetTotal;
+  final num forecastTotal;
+  const _EntityContribution({
+    required this.code,
+    required this.label,
+    required this.budgetTotal,
+    required this.forecastTotal,
+  });
+}
+
+/// The landing-pane summary data: every entity in the current dimension
+/// (2026-09-22, Craig: "list the entities for the dimension and what their
+/// contribution is ... for both Sales Budgets and Seasonal Forecast"),
+/// pre-sorted by Sales Budget contribution descending, plus the two
+/// dimension-wide totals each entity's own % is computed against.
+class _DimensionContributionData {
+  final List<_EntityContribution> entities;
+  final num budgetGrandTotal;
+  final num forecastGrandTotal;
+  const _DimensionContributionData({
+    required this.entities,
+    required this.budgetGrandTotal,
+    required this.forecastGrandTotal,
+  });
+}
+
+/// Same "value / total, '—' when total is 0" one-line rule as
+/// `_MonthTableState._pctOf` below — kept as its own top-level copy rather
+/// than shared, since that one is a month's share of ONE entity's own
+/// annual total, and this one is an entity's share of the WHOLE
+/// dimension's total across every entity — different axes that just
+/// happen to reduce to the identical formula.
+String _formatContributionPct(num value, num total) => total == 0 ? '—' : '${(value / total * 100).round()}%';
 
 /// Entity picker on the left, two 12-month fiscal columns on the right — an
 /// editable Sales Budget and a read-only Seasonal Forecast
@@ -154,11 +198,13 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   String? _selectedEntityCode;
   String? _selectedEntityName;
   Future<_BudgetMonthData>? _monthDataFuture;
+  late Future<_DimensionContributionData> _contributionFuture;
 
   @override
   void initState() {
     super.initState();
     _entitiesFuture = _loadEntities();
+    _contributionFuture = _loadContribution();
   }
 
   @override
@@ -168,6 +214,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
       _selectedEntityCode = null;
       _monthDataFuture = null;
       _entitiesFuture = _loadEntities();
+      _contributionFuture = _loadContribution();
     }
   }
 
@@ -202,6 +249,66 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     final data = _BudgetEntityData(list);
     _applyGlobalFilterSelection(data);
     return data;
+  }
+
+  /// The landing-pane summary shown before any entity is selected
+  /// (2026-09-22, Craig: "list the entities for the dimension and what
+  /// their contribution is ... for both Sales Budgets and Seasonal
+  /// Forecast") — each entity's own annual Sales Budget/Seasonal Forecast
+  /// total as a % of the whole dimension's total, the same "% of total"
+  /// idea `_MonthTableState` already uses per-entity across months
+  /// (`_pctOf`), just summed across entities instead of across months.
+  ///
+  /// Awaits `_entitiesFuture` itself rather than re-deriving the entity
+  /// list a second way, so this always reflects the exact same
+  /// level-filtered/RLS-visible entities the picker on the left shows — an
+  /// entity a User isn't allowed to see there never appears in this
+  /// summary either. `BudgetRepository.fetchBudget`/`fetchForecast` already
+  /// support "every entity in this dimension" by simply omitting
+  /// `entityCode` (added 2026-09-03 for the Dashboard's Rep Target
+  /// Attainment — see that method's own doc comment), so this needs no new
+  /// repository method, just the two existing ones called without an
+  /// entity filter and summed client-side.
+  Future<_DimensionContributionData> _loadContribution() async {
+    final entities = (await _entitiesFuture).entities;
+    final budgetRepo = ref.read(budgetRepositoryProvider);
+    final results = await Future.wait([
+      budgetRepo.fetchBudget(dimension: widget.dimension),
+      budgetRepo.fetchForecast(dimension: widget.dimension),
+    ]);
+    final budgetRows = results[0] as List<BudgetFigure>;
+    final forecastRows = results[1] as List<SalesForecastFigure>;
+
+    final budgetByEntity = <String, num>{};
+    for (final b in budgetRows) {
+      budgetByEntity[b.entityCode] = (budgetByEntity[b.entityCode] ?? 0) + b.budgetValue;
+    }
+    final forecastByEntity = <String, num>{};
+    for (final f in forecastRows) {
+      forecastByEntity[f.entityCode] = (forecastByEntity[f.entityCode] ?? 0) + f.forecastValue;
+    }
+
+    final rows = [
+      for (final e in entities)
+        _EntityContribution(
+          code: e.code,
+          label: e.displayLabel,
+          budgetTotal: budgetByEntity[e.code] ?? 0,
+          forecastTotal: forecastByEntity[e.code] ?? 0,
+        ),
+    ];
+    // Highest Sales Budget contribution first, so the summary reads as a
+    // ranking — matching how Sales By already ranks entities by their own
+    // primary metric. A static sort, not user-resortable: Craig, when
+    // confirming this feature, opted for a plain read-only summary rather
+    // than an interactive table here.
+    rows.sort((a, b) => b.budgetTotal.compareTo(a.budgetTotal));
+
+    return _DimensionContributionData(
+      entities: rows,
+      budgetGrandTotal: rows.fold<num>(0, (sum, r) => sum + r.budgetTotal),
+      forecastGrandTotal: rows.fold<num>(0, (sum, r) => sum + r.forecastTotal),
+    );
   }
 
   /// Budgets/forecast (budget_figures/sales_forecast, schema/001 Section 4/
@@ -380,7 +487,12 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
       ],
     );
     final detail = _selectedEntityCode == null
-        ? const Center(child: Text('Select an entity from the list.'))
+        ? AsyncSection<_DimensionContributionData>(
+            future: _contributionFuture,
+            isEmpty: (d) => d.entities.isEmpty,
+            emptyMessage: 'No entities to show for this dimension yet.',
+            builder: (context, data) => _buildContributionSummary(context, data),
+          )
         : Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -455,6 +567,53 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// The landing-pane summary itself — a plain, read-only table (Craig,
+  /// confirming this feature: not clickable, percentage only, no dollar
+  /// values) ranking every entity in the current dimension by its share of
+  /// the dimension's total Sales Budget and Seasonal Forecast. Sits where
+  /// "Select an entity from the list." used to be the only thing shown.
+  Widget _buildContributionSummary(BuildContext context, _DimensionContributionData data) {
+    // isDark/lightTextSecondary-darkTextSecondary — the app's own
+    // established muted-text pattern (e.g. settings_screen.dart), since
+    // AppColors has no single theme-agnostic "secondary text" constant.
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Contribution by entity', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(
+            "Each entity's share of this dimension's total Sales Budget and Seasonal Forecast. "
+            'Select an entity from the list to view or edit its own figures.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                ),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: ResponsiveDataTable(
+              columns: const [
+                DataColumn(label: Text('Entity')),
+                DataColumn(label: Text('Sales Budget'), numeric: true),
+                DataColumn(label: Text('Seasonal Forecast'), numeric: true),
+              ],
+              rows: [
+                for (final e in data.entities)
+                  DataRow(cells: [
+                    DataCell(Text(e.label, overflow: TextOverflow.ellipsis)),
+                    DataCell(Text(_formatContributionPct(e.budgetTotal, data.budgetGrandTotal))),
+                    DataCell(Text(_formatContributionPct(e.forecastTotal, data.forecastGrandTotal))),
+                  ]),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
