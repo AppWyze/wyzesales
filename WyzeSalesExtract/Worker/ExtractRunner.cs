@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
-using WyzeSalesExtract.Builders;
 using WyzeSalesExtract.Config;
 using WyzeSalesExtract.Data;
 using WyzeSalesExtract.Domain;
+using WyzeSalesExtract.Extraction;
 using WyzeSalesExtract.Logging;
 
 namespace WyzeSalesExtract.Worker;
@@ -15,9 +15,15 @@ namespace WyzeSalesExtract.Worker;
 ///
 /// Much shorter than the version that wrote pipe-delimited files and uploaded them via SFTP:
 /// no Builders left that resolve category/rep-name/branch or apply business-rule config - this
-/// program now pulls raw facts and reference data from WCSA and writes them straight into
-/// Supabase, where the aggregation, resolution, and business rules live instead. See
-/// Wyzesales_Rebuild_Decisions.md Section 1.
+/// program now pulls raw facts and reference data from the client's own source system (via
+/// whichever ISourceExtractor Source.Type selects - see WyzeSalesExtract.Extraction) and
+/// writes them straight into Supabase, where the aggregation, resolution, and business rules
+/// live instead. See Wyzesales_Rebuild_Decisions.md Section 1.
+///
+/// 2026-09-22: this class used to call WCSA's Db/Lookups/Facts/Builders classes directly - the
+/// only client that existed. It now only knows about ISourceExtractor and the shared
+/// ExtractedData shape, so a second client's extractor plugs in without this class changing -
+/// see README "Adding a new client".
 ///
 /// Exit codes: 0 success, 1 failed (see log for where, and data_load_runs in Supabase), 3
 /// could not even open a Supabase connection to report anything (see run-tracking note below).
@@ -39,7 +45,7 @@ public static class ExtractRunner
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var today = DateTime.Now.Date;
 
-        log.Info("WyzeSales extract (WCSA) starting.");
+        log.Info($"WyzeSales extract ({settings.Source.Type}) starting.");
         log.Info($"Run date: {today:yyyy-MM-dd}. Fiscal year in use: {settings.FiscalYear.OverrideYear?.ToString() ?? FiscalDate.CurrentFiscalYear(today) + " (auto-computed)"}");
 
         SupabaseWriter supa;
@@ -63,9 +69,6 @@ public static class ExtractRunner
         {
             try
             {
-                log.Info("Connecting to WCSA database...");
-                using var db = new Db(settings);
-
                 log.Info("Loading exclusion list from Supabase (excluded_customer_accounts)...");
                 var excludedAccounts = await supa.LoadExcludedAccountsAsync(clientId);
                 log.Info($"  {excludedAccounts.Count} account(s) excluded.");
@@ -74,42 +77,24 @@ public static class ExtractRunner
                 var historyYears = await supa.LoadDataHistoryYearsAsync(clientId);
                 log.Info($"  {historyYears}-year history window.");
 
-                log.Info("Loading reference/mapping data (customers, reps, categories, suppliers, stock counts, lead times)...");
-                var lookups = Lookups.Load(db, settings);
-
-                log.Info("Loading invoice line facts...");
-                var invoiceFacts = Facts.LoadInvoiceItemFacts(db, excludedAccounts);
-                log.Info($"  {invoiceFacts.Count} invoice/credit-note lines loaded (before date filtering).");
-
+                // NOTE: this Mar-1 fiscal-year-boundary calculation is WCSA's own convention
+                // (see FiscalDate.FiscalYearWindowStart's remarks) - not yet generalised for a
+                // client with a different fiscal year (Edgetec's design notes describe Oct-Sep).
+                // Deliberately left as-is rather than guessed at ahead of that client's actual
+                // design doc; revisit when Edgetec's extractor is built.
                 var salesWindowStart = settings.FiscalYear.OverrideYear is int overrideYear
                     ? new DateTime(overrideYear - historyYears, 3, 1)
                     : FiscalDate.FiscalYearWindowStart(today, historyYears);
 
-                log.Info("Building invoice/credit-note facts...");
-                var salesFacts = SalesDocumentFactsBuilder.BuildInvoicesAndCreditNotes(invoiceFacts, lookups, salesWindowStart);
-                log.Info($"  {salesFacts.Count} rows.");
+                log.Info($"Extracting from source (Source.Type: {settings.Source.Type})...");
+                var extractor = SourceExtractorFactory.Create(settings.Source.Type);
+                var extracted = await extractor.ExtractAsync(new SourceExtractionContext(
+                    settings, excludedAccounts, historyYears, today, salesWindowStart, log));
 
-                log.Info("Building quote facts...");
-                var quoteFacts = SalesDocumentFactsBuilder.BuildQuotesOrOrders(db, lookups, salesWindowStart, "QUOTES", "QTEItems", "quote");
-                salesFacts.AddRange(quoteFacts);
-                log.Info($"  {quoteFacts.Count} rows.");
-
-                log.Info("Building sales order facts...");
-                var orderFacts = SalesDocumentFactsBuilder.BuildQuotesOrOrders(db, lookups, salesWindowStart, "SOrders", "SOrdItem", "sales_order");
-                salesFacts.AddRange(orderFacts);
-                log.Info($"  {orderFacts.Count} rows.");
-
-                var historyMonths = historyYears * 12;
-                log.Info($"Building {historyMonths}-month stock movement facts...");
-                var (movementFacts, itemDates) = StockMovementFactsBuilder.Build(invoiceFacts, lookups, today, historyMonths);
-                log.Info($"  {movementFacts.Count} rows.");
-
-                log.Info("Building item stock snapshot...");
-                var snapshotFacts = ItemStockSnapshotBuilder.Build(lookups, itemDates, today);
-                log.Info($"  {snapshotFacts.Count} rows.");
-
-                log.Info("Assembling reference data (branches, reps, customers, categories, suppliers, items)...");
-                var refData = ReferenceDataBuilder.Build(lookups, salesFacts, movementFacts);
+                var refData = extracted.ReferenceData;
+                var salesFacts = extracted.SalesDocumentFacts;
+                var movementFacts = extracted.StockMovementFacts;
+                var snapshotFacts = extracted.ItemStockSnapshotFacts;
 
                 log.Info("Writing reference data to Supabase...");
                 await supa.UpsertBranchesAsync(clientId, refData.BranchCodes);

@@ -98,25 +98,81 @@ testing via `appsettings.json` -> `FiscalYear.OverrideYear`.
 ## Project layout
 
 ```
-Config/AppSettings.cs         appsettings.json -> strongly-typed settings (Database, Supabase, FiscalYear, Schedule, Logging)
-Data/Db.cs                    WCSA ODBC connection + query helper + the exact text-cleaning rules
-Data/Lookups.cs               All ~20 raw dimension pulls (customers, reps, categories, suppliers, stock counts, lead times)
-Data/Facts.cs                 The raw invoice/credit-note line facts
-Data/SupabaseWriter.cs        Everything written to Supabase - upserts for reference data, full replace for raw facts
-Domain/FiscalDate.cs          Date-window math + the CheckYear assumption
+Config/AppSettings.cs         appsettings.json -> strongly-typed settings (Source, Database, Supabase, FiscalYear, Schedule, Logging)
+Extraction/ISourceExtractor.cs        The per-client plug-in point - see "Adding a new client" below
+Extraction/SourceExtractorFactory.cs  Picks which client's extractor to run, from Source.Type
+Extraction/WcsaSourceExtractor.cs     WCSA/IQRetail's extractor - wraps Data/Db+Lookups+Facts and Builders/* below, unchanged
+Data/Db.cs                    WCSA-SPECIFIC: IQRetail ODBC connection + query helper + the exact text-cleaning rules
+Data/Lookups.cs                WCSA-SPECIFIC: all ~20 raw dimension pulls (customers, reps, categories, suppliers, stock counts, lead times)
+Data/Facts.cs                  WCSA-SPECIFIC: the raw invoice/credit-note line facts
+Data/SupabaseWriter.cs        SHARED by every client: everything written to Supabase - upserts for reference data, full replace for raw facts
+Domain/FiscalDate.cs          Date-window math + the CheckYear assumption (WCSA's Mar-Feb fiscal year - see "Adding a new client")
 Domain/SelfTest.cs            Proves FiscalDate matches the original logic - run with --selftest
 Domain/Keys.cs                Composite dictionary keys
-Domain/RawFacts.cs            The raw row shapes this program produces (SalesDocumentFact, StockMovementFact, ItemStockSnapshotFact)
-Builders/SalesDocumentFactsBuilder.cs   Invoices/credit notes/quotes/sales orders -> sales_document_facts rows
-Builders/StockMovementFactsBuilder.cs   36-month item+location net movement -> stock_movement_facts rows
-Builders/ItemStockSnapshotBuilder.cs    Point-in-time stock/pricing/lead-time -> item_stock_snapshot rows
-Builders/ReferenceDataBuilder.cs        Assembles branches/reps/customers/categories/suppliers/items for upsert
-Logging/Log.cs                Minimal file+console logger, safe with or without an attached console
-Worker/ExtractRunner.cs       One full extract-and-write run - the pipeline itself
-Worker/ExtractWorker.cs       The background scheduler loop - waits for Schedule.RunTimes, then calls ExtractRunner
-ServiceInstall/ServiceInstaller.cs   install/uninstall - registers this exe as a Windows Service via sc.exe
-Program.cs                    Dispatches to the above based on command-line args (see "Command-line options")
+Domain/RawFacts.cs            SHARED: the raw row shapes every client's extractor must produce (SalesDocumentFact, StockMovementFact, ItemStockSnapshotFact) - see ExtractedData in Extraction/ISourceExtractor.cs
+Builders/SalesDocumentFactsBuilder.cs   WCSA-SPECIFIC: invoices/credit notes/quotes/sales orders -> sales_document_facts rows
+Builders/StockMovementFactsBuilder.cs   WCSA-SPECIFIC: 36/60-month item+location net movement -> stock_movement_facts rows
+Builders/ItemStockSnapshotBuilder.cs    WCSA-SPECIFIC: point-in-time stock/pricing/lead-time -> item_stock_snapshot rows
+Builders/ReferenceDataBuilder.cs        WCSA-SPECIFIC: assembles branches/reps/customers/categories/suppliers/items for upsert (produces the shared ReferenceData shape)
+Logging/Log.cs                SHARED: minimal file+console logger, safe with or without an attached console
+Worker/ExtractRunner.cs       SHARED: one full extract-and-write run - calls whichever ISourceExtractor Source.Type selects, then writes to Supabase
+Worker/ExtractWorker.cs       SHARED: the background scheduler loop - waits for Schedule.RunTimes, then calls ExtractRunner
+ServiceInstall/ServiceInstaller.cs   SHARED: install/uninstall - registers this exe as a Windows Service via sc.exe
+Program.cs                    SHARED: dispatches to the above based on command-line args (see "Command-line options")
 ```
+
+"SHARED" means every client uses this file unchanged. "WCSA-SPECIFIC" means it only exists to serve WcsaSourceExtractor - a new client gets its own equivalent files under `Extraction/`, not edits to these.
+
+## Adding a new client
+
+Added 2026-09-22 alongside the `Extraction/ISourceExtractor.cs` refactor - Edgetec is the
+first client built this way; WCSA was retrofitted onto it, unchanged in behaviour.
+
+The program is split into two halves. Everything under **SHARED** in "Project layout" above
+(SupabaseWriter, the scheduler, run tracking, the Windows Service host, the raw row shapes in
+`Domain/RawFacts.cs` and `Builders/ReferenceDataBuilder.cs`'s `ReferenceData`) is already
+client-agnostic and needs zero changes for a new client. Everything marked **WCSA-SPECIFIC** is
+one client's particular way of populating that shared shape from IQRetail, and is not a
+template to copy-paste - it's an example of the *kind* of code a new client's extractor
+contains, not its content.
+
+Building a new client means:
+
+1. **A design doc**, written before any code - source ERP/database, connection mechanism (ODBC
+   DSN vs. file-based vs. something else), the exact tables/fields needed for each part of
+   `ExtractedData` (reference data, sales/quote/order facts, stock movement, stock snapshot),
+   business rules (exclusions, rep-code overrides, account/category classification), the
+   client's own fiscal year definition, and any file-based fallback sources. `docs/WyzeSalesExtract_Edgetec_DesignNotes.md`
+   is the working example of this for Edgetec - expect a first pass to leave some of this open
+   (it did for Edgetec) and get resolved through a couple of follow-up rounds, not all at once.
+
+2. **One new class implementing `ISourceExtractor`** (e.g. `Extraction/EdgetecSourceExtractor.cs`),
+   built from that design doc, returning the same `ExtractedData` shape WCSA's extractor
+   returns - see `Extraction/WcsaSourceExtractor.cs` for the shape of what one of these looks
+   like, not for logic to reuse. It's free to use whatever mechanism its source system needs
+   internally (a different ODBC dialect, flat-file parsing, an API) - `ExtractRunner` never
+   sees that difference.
+
+3. **A settings section of its own** in `Config/AppSettings.cs` for whatever that client's
+   extractor needs to connect (WCSA's is `DatabaseSettings` - Dsn/ConnectionString/BasePath; a
+   new client is not obligated to reuse that shape, since it's IQRetail's own connection
+   details, not a generic contract) - plus a new `case` in `Extraction/SourceExtractorFactory.cs`
+   and a new value for `Source.Type` in that client's `appsettings.json`.
+
+4. **A check of the fiscal-year window-start calculation** in `Worker/ExtractRunner.cs` and
+   `Domain/FiscalDate.cs` - both currently assume WCSA's Mar-Feb fiscal year (see
+   `FiscalDate.FiscalYearWindowStart`'s own remarks). A client with a different fiscal year
+   needs this generalised, deliberately left undone until a real client needs it rather than
+   guessed at speculatively.
+
+5. **A `--run-once` test run** against real data before that client goes onto a schedule - the
+   design doc and the code built from it are both unproven until data has actually come back
+   from the real source system once. Check `data_load_runs` in Supabase for the result.
+
+What deliberately does NOT change for a new client: `Data/SupabaseWriter.cs`, the Supabase
+schema, the scheduler, the Windows Service install/uninstall, or anything in the Flutter app
+that reads this data - all of it already only knows about the shared `ExtractedData` shape,
+never about any one client's source system.
 
 ## Setup
 

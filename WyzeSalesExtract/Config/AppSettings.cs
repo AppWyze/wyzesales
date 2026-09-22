@@ -18,6 +18,10 @@ namespace WyzeSalesExtract.Config;
 
 public sealed class AppSettings
 {
+    // Which client's ISourceExtractor to run (see WyzeSalesExtract.Extraction). Defaults to
+    // "WCSA" so an appsettings.json written before this setting existed - every config in
+    // production today - keeps loading and behaving exactly as before with no edits needed.
+    public SourceSettings Source { get; set; } = new();
     public DatabaseSettings Database { get; set; } = new();
     public SupabaseSettings Supabase { get; set; } = new();
     public FiscalYearSettings FiscalYear { get; set; } = new();
@@ -47,10 +51,17 @@ public sealed class AppSettings
     {
         var problems = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(Database.Dsn) && string.IsNullOrWhiteSpace(Database.ConnectionString))
-            problems.Add("Database.Dsn or Database.ConnectionString must be set.");
-        if (string.IsNullOrWhiteSpace(Database.BasePath))
-            problems.Add("Database.BasePath must be set (the quoted path IQRetail uses in FROM clauses).");
+        // Database.* is only WCSA/IQRetail-shaped - a future client (Edgetec, etc.) will
+        // validate its own settings section from inside its own extractor / a case added here,
+        // not by reusing WCSA's Dsn/ConnectionString/BasePath fields.
+        if (Source.Type == "WCSA")
+        {
+            if (string.IsNullOrWhiteSpace(Database.Dsn) && string.IsNullOrWhiteSpace(Database.ConnectionString))
+                problems.Add("Database.Dsn or Database.ConnectionString must be set.");
+            if (string.IsNullOrWhiteSpace(Database.BasePath))
+                problems.Add("Database.BasePath must be set (the quoted path IQRetail uses in FROM clauses).");
+        }
+
         if (string.IsNullOrWhiteSpace(Supabase.ConnectionString))
             problems.Add("Supabase.ConnectionString must be set - see README \"Supabase connection\".");
         if (string.IsNullOrWhiteSpace(Supabase.ClientCode))
@@ -66,6 +77,13 @@ public sealed class AppSettings
             return Database.ConnectionString;
         return $"DSN={Database.Dsn};";
     }
+}
+
+public sealed class SourceSettings
+{
+    // "WCSA" today; add a new value here (and a matching case in SourceExtractorFactory) as
+    // each new client's extractor is built - see README "Adding a new client".
+    public string Type { get; set; } = "WCSA";
 }
 
 public sealed class DatabaseSettings
