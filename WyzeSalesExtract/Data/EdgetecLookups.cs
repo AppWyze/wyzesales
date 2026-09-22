@@ -122,7 +122,8 @@ public sealed class EdgetecLookups
         using (var wb = new XLWorkbook(formatsPath))
         {
             var ws = wb.Worksheet("Stock");
-            var headerRow = ws.FirstRowUsed();
+            var headerRow = ws.FirstRowUsed()
+                ?? throw new InvalidOperationException($"\"{formatsPath}\" sheet \"Stock\" has no rows - expected a header row (LEDGER_NO, CATEGORY, CATEGORY_TYPE, SALES_SERVICE).");
             var colByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var cell in headerRow.CellsUsed())
                 colByName[cell.GetString().Trim()] = cell.Address.ColumnNumber;
