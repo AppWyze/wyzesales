@@ -502,9 +502,10 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   // the columns" — folded back into the Sales Budget/Seasonal Forecast
   // cells themselves as trailing text on the SAME line, rather than as
   // separate columns. Widened from 150 to fit that: "591,080" alone needed
-  // ~150px, but "R 591,080  (38%, Q4 27%)" needs more room alongside it,
-  // still comfortably inside one line — see `_contributionSuffix` below for
-  // why a single line was possible here after all.
+  // ~150px, but "R 591,080  (38%)" needs a bit more room alongside it —
+  // still comfortably inside one line (see `_pctSuffix`; the quarter %
+  // that used to also live here moved to its own `_quarterDividerRow`,
+  // 2026-09-22).
   static const double _budgetColumnWidth = 260;
 
   late final Map<String, TextEditingController> _controllers;
@@ -629,29 +630,11 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   /// whole year yet.
   String _pctOf(num value, num total) => total == 0 ? '—' : '${(value / total * 100).round()}%';
 
-  /// "(38%, Q4 27%)" — the annual %, then the quarter's own %, exactly the
-  /// left-to-right order Craig asked for ("on the right of each number...
-  /// and on the right of that the contribution per quarter"), as one
-  /// trailing fragment appended after a Sales Budget/Seasonal Forecast
-  /// figure on the SAME line.
-  ///
-  /// 2026-09-28, Craig, after first seeing this as 4 separate extra
-  /// columns (Budget %/Budget Qtr %/Forecast %/Forecast Qtr %, one per
-  /// figure): "I meant go with your suggestion to reduce the columns" — the
-  /// other option floated alongside the column-count question. That option
-  /// had originally been framed as "2-line cells" and set aside because the
-  /// app's fixed 36px row height (`dataTableTheme.dataRowMaxHeight`,
-  /// app_theme.dart) can't fit two lines — but folding annual % and quarter
-  /// % into ONE trailing fragment, on the SAME line as the figure itself
-  /// (rather than a line below it), needed reducing to n place at all: it's
-  /// still exactly one line, so the row-height constraint that ruled out
-  /// the 2-line version never actually applies here.
-  String _contributionSuffix(num value, num total, num quarterTotal, int quarterIndex) {
-    final quarterLabel = quarterIndex >= 0 && quarterIndex < fiscalQuarterLabels.length
-        ? fiscalQuarterLabels[quarterIndex]
-        : '';
-    return '(${_pctOf(value, total)}, $quarterLabel ${_pctOf(quarterTotal, total)})';
-  }
+  /// "(38%)" — a month's own share of its column's annual total, appended
+  /// after a Sales Budget/Seasonal Forecast figure on the SAME line (Craig,
+  /// 2026-09-28: "on the right of each number can you show the % of
+  /// contribution").
+  String _pctSuffix(num value, num total) => '(${_pctOf(value, total)})';
 
   /// Text colour for a Seasonal Forecast figure, by its own month's
   /// confidence tier — 2026-09-28, Craig: "remove this column and rather
@@ -675,6 +658,173 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
       default:
         return null;
     }
+  }
+
+  /// One divider row per quarter, inserted right after that quarter's 3rd
+  /// month — Craig, 2026-09-22 (screenshot of the previous "Q1 14%" repeated
+  /// on all 3 of Q1's months): "remove the Quarter numbers from where they
+  /// are now and insert horizontal lines dividing the quarters and then
+  /// insert the quarter % between each line in the middle." `data_table_2`
+  /// has no cell-merging/rowspan (confirmed against its own README's "Known
+  /// issues/limitations" list), so this is a real, ordinary `DataRow` of its
+  /// own rather than a literal spanning cell — each of its 3 cells draws a
+  /// thin top+bottom border (`Theme.dividerColor`, the same colour Flutter's
+  /// own stock row dividers already use elsewhere in this table, just drawn
+  /// deliberately here rather than left to chance) that lines up across the
+  /// row width into what reads as one line above and one line below,
+  /// exactly the "between each line" Craig described — with the quarter's
+  /// own % centred in the Sales Budget/Seasonal Forecast cells, and just the
+  /// quarter's label (e.g. "Q1") centred under Month, so the label isn't
+  /// needlessly repeated across all 3 cells of this one row.
+  DataRow _quarterDividerRow({
+    required int quarterIndex,
+    required num budgetTotal,
+    required num budgetQuarterTotal,
+    required num forecastTotal,
+    required num forecastQuarterTotal,
+  }) {
+    final quarterLabel =
+        quarterIndex >= 0 && quarterIndex < fiscalQuarterLabels.length ? fiscalQuarterLabels[quarterIndex] : '';
+    final borderStyle = BorderSide(color: Theme.of(context).dividerColor);
+    final textStyle = Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic);
+    Widget cell(String text) => Container(
+          width: double.infinity,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(border: Border.symmetric(horizontal: borderStyle)),
+          child: Text(text, style: textStyle),
+        );
+    return DataRow(cells: [
+      DataCell(cell(quarterLabel)),
+      DataCell(cell(_pctOf(budgetQuarterTotal, budgetTotal))),
+      DataCell(cell(_pctOf(forecastQuarterTotal, forecastTotal))),
+    ]);
+  }
+
+  /// The 12 month rows, with a `_quarterDividerRow` inserted after every
+  /// 3rd one — an ordinary imperative loop rather than `_months.map(...)`
+  /// (what this used to be) specifically so a row can be ADDED in between,
+  /// which a 1:1 `.map` over months can't do. Factored out of `build()`
+  /// itself once the divider row made it a genuinely separate concern from
+  /// laying out the table shell around it (columns, Totals row, legend,
+  /// Save button) — same reasoning as `_totalsRow`/`_legend` already being
+  /// their own methods rather than inlined into `build()`.
+  List<DataRow> _monthRows({
+    required num budgetTotal,
+    required num forecastTotal,
+    required List<num> budgetQuarterTotals,
+    required List<num> forecastQuarterTotals,
+  }) {
+    final rows = <DataRow>[];
+    for (var i = 0; i < _months.length; i++) {
+      final month = _months[i];
+      final quarterIndex = i ~/ 3;
+      final budgetSuffix = _pctSuffix(widget.data.budget[month] ?? 0, budgetTotal);
+      final forecastSuffix = _pctSuffix(widget.data.forecast[month] ?? 0, forecastTotal);
+      rows.add(DataRow(cells: [
+        DataCell(Text(month)),
+        DataCell(
+          widget.canEdit
+              ? SizedBox(
+                  width: _budgetColumnWidth,
+                  // The % suffix sits to the right of the editable field
+                  // itself, inside this same cell — Row +
+                  // mainAxisAlignment.end rather than a bare
+                  // `Align(centerRight)` wrapper, since there's now a
+                  // second, non-editable widget sharing the cell with the
+                  // TextField. The TextField keeps its own `textAlign:
+                  // TextAlign.right` and zero horizontal content padding
+                  // from before (see its own comment, below) — those
+                  // digits' alignment with the Total row is unaffected;
+                  // what changed is only that the Total row's own cell
+                  // (see `_totalsRow`) sits at the right edge of the same
+                  // `_budgetColumnWidth`-wide box, not that its digits
+                  // align with the TextField's digits specifically
+                  // anymore, now that the field no longer stretches to
+                  // fill the whole cell.
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      SizedBox(
+                        width: 130,
+                        child: TextField(
+                          controller: _controllers[month],
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.right,
+                          inputFormatters: [_ThousandsInputFormatter()],
+                          // 2026-09-01, Craig: "The Total is still not
+                          // aligned" even after the fixedWidth column
+                          // (attempt #3). The width WAS already identical
+                          // between this cell and the Total cell below by
+                          // that point — what wasn't identical is that a
+                          // bare `TextField` doesn't shrink to its text
+                          // like a `Text` widget does: it fills the whole
+                          // box it's given, and then draws its digits
+                          // inset from that box's right edge by
+                          // `InputDecoration.contentPadding` (Material's
+                          // default is non-zero even with `isDense: true`
+                          // — it only shrinks the vertical padding, not
+                          // the horizontal). Zeroing the horizontal
+                          // content padding here removes that inset.
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(vertical: 8),
+                            prefixText: 'R ',
+                          ),
+                          // No longer saves on its own — see _saveAll's
+                          // doc comment. Enter now just moves to the next
+                          // field, so typing Enter->Enter->Enter tabs
+                          // straight down the column while filling
+                          // several months in before pressing Save.
+                          onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          budgetSuffix,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${formatRand(widget.data.budget[month])}  $budgetSuffix',
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+        ),
+        DataCell(
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              '${formatRand(widget.data.forecast[month])}  $forecastSuffix',
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+              style: TextStyle(color: _confidenceColor(widget.data.confidence[month])),
+            ),
+          ),
+        ),
+      ]));
+      // Divider row after the 3rd month of every quarter (i % 3 == 2) —
+      // see `_quarterDividerRow`'s own doc comment for why this replaces
+      // repeating the quarter % on all 3 months.
+      if (i % 3 == 2) {
+        rows.add(_quarterDividerRow(
+          quarterIndex: quarterIndex,
+          budgetTotal: budgetTotal,
+          budgetQuarterTotal: budgetQuarterTotals[quarterIndex],
+          forecastTotal: forecastTotal,
+          forecastQuarterTotal: forecastQuarterTotals[quarterIndex],
+        ));
+      }
+    }
+    return rows;
   }
 
   /// 2026-09-28, Craig: "Include a legend at the bottom explaining this."
@@ -798,113 +948,12 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
               DataColumn2(label: Text('Seasonal Forecast'), numeric: true, fixedWidth: _budgetColumnWidth),
             ],
             rows: [
-              ..._months.map((month) {
-                final quarterIndex = _months.indexOf(month) ~/ 3;
-                return DataRow(cells: [
-                  DataCell(Text(month)),
-                  DataCell(
-                    widget.canEdit
-                        ? SizedBox(
-                            width: _budgetColumnWidth,
-                            // 2026-09-28: the % contribution text
-                            // (`_contributionSuffix`) sits to the right of
-                            // the editable field itself, inside this same
-                            // cell — Row + mainAxisAlignment.end rather than
-                            // the old bare `Align(centerRight)` wrapper,
-                            // since there's now a second, non-editable
-                            // widget sharing the cell with the TextField.
-                            // The TextField keeps its own `textAlign:
-                            // TextAlign.right` and zero horizontal content
-                            // padding from before (see its own comment,
-                            // below) — those digits' alignment with the
-                            // Total row is unaffected; what changed is only
-                            // that the Total row's own cell (see
-                            // `_totalsRow`) sits at the right edge of the
-                            // same `_budgetColumnWidth`-wide box, not that
-                            // its digits align with the TextField's digits
-                            // specifically anymore, now that the field no
-                            // longer stretches to fill the whole cell.
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                SizedBox(
-                                  width: 130,
-                                  child: TextField(
-                                    controller: _controllers[month],
-                                    keyboardType: TextInputType.number,
-                                    textAlign: TextAlign.right,
-                                    inputFormatters: [_ThousandsInputFormatter()],
-                                    // 2026-09-01, Craig: "The Total is still
-                                    // not aligned" even after the fixedWidth
-                                    // column (attempt #3). The width WAS
-                                    // already identical between this cell
-                                    // and the Total cell below by that
-                                    // point — what wasn't identical is that
-                                    // a bare `TextField` doesn't shrink to
-                                    // its text like a `Text` widget does: it
-                                    // fills the whole box it's given, and
-                                    // then draws its digits inset from that
-                                    // box's right edge by
-                                    // `InputDecoration.contentPadding`
-                                    // (Material's default is non-zero even
-                                    // with `isDense: true` — it only shrinks
-                                    // the vertical padding, not the
-                                    // horizontal). Zeroing the horizontal
-                                    // content padding here removes that
-                                    // inset.
-                                    decoration: const InputDecoration(
-                                      isDense: true,
-                                      contentPadding: EdgeInsets.symmetric(vertical: 8),
-                                      prefixText: 'R ',
-                                    ),
-                                    // No longer saves on its own — see
-                                    // _saveAll's doc comment. Enter now just
-                                    // moves to the next field, so typing
-                                    // Enter->Enter->Enter tabs straight down
-                                    // the column while filling several
-                                    // months in before pressing Save.
-                                    onSubmitted: (_) => FocusScope.of(context).nextFocus(),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    _contributionSuffix(
-                                      widget.data.budget[month] ?? 0,
-                                      budgetTotal,
-                                      budgetQuarterTotals[quarterIndex],
-                                      quarterIndex,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                    maxLines: 1,
-                                    style: Theme.of(context).textTheme.bodySmall,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : Align(
-                            alignment: Alignment.centerRight,
-                            child: Text(
-                              '${formatRand(widget.data.budget[month])}  ${_contributionSuffix(widget.data.budget[month] ?? 0, budgetTotal, budgetQuarterTotals[quarterIndex], quarterIndex)}',
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 1,
-                            ),
-                          ),
-                  ),
-                  DataCell(
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        '${formatRand(widget.data.forecast[month])}  ${_contributionSuffix(widget.data.forecast[month] ?? 0, forecastTotal, forecastQuarterTotals[quarterIndex], quarterIndex)}',
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                        style: TextStyle(color: _confidenceColor(widget.data.confidence[month])),
-                      ),
-                    ),
-                  ),
-                ]);
-              }),
+              ..._monthRows(
+                budgetTotal: budgetTotal,
+                forecastTotal: forecastTotal,
+                budgetQuarterTotals: budgetQuarterTotals,
+                forecastQuarterTotals: forecastQuarterTotals,
+              ),
               _totalsRow(),
             ],
           ),
@@ -943,11 +992,11 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   /// rebuild on every keystroke (only on save), so a total sourced from the
   /// text controllers would just as often show a stale figure as a current
   /// one; summing the saved values is the one source that's always accurate
-  /// for what's actually been recorded. The % contribution figures
-  /// (2026-09-28, folded into the Sales Budget/Seasonal Forecast cells
-  /// themselves — see `_contributionSuffix`) have no meaningful value for
-  /// the Total row itself, so this row's own two cells stay plain totals
-  /// with no trailing suffix.
+  /// for what's actually been recorded. The annual % contribution figures
+  /// (folded into the Sales Budget/Seasonal Forecast cells themselves —
+  /// see `_pctSuffix`) have no meaningful value for the Total row itself,
+  /// so this row's own two cells stay plain totals with no trailing
+  /// suffix.
   DataRow _totalsRow() {
     final totalBudget = _months.fold<num>(0, (sum, month) => sum + (widget.data.budget[month] ?? 0));
     final totalForecast = _months.fold<num>(0, (sum, month) => sum + (widget.data.forecast[month] ?? 0));
