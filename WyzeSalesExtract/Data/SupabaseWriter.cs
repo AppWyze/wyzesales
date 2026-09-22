@@ -245,21 +245,39 @@ public sealed class SupabaseWriter : IDisposable
     // Raw fact tables - fully derived, wiped and reloaded every run
     // ------------------------------------------------------------------
 
-    /// <summary>Deletes every existing sales_document_facts row for this client, then inserts
-    /// the freshly pulled fiscal-year window (3 or 5 years, per LoadDataHistoryYearsAsync). A
-    /// full per-client wipe (not just "delete rows
-    /// in today's window") because the window itself shifts by a day on every run - the
+    /// <summary>Deletes existing sales_document_facts rows for this client, then inserts the
+    /// freshly pulled window. By default (<paramref name="sinceDate"/> left null) that's a full
+    /// per-client wipe - not just "delete rows in today's window" - because the window itself
+    /// shifts by a day on every run for a client like WCSA that has no fixed floor: the
     /// simplest way to guarantee a row that's aged out is actually gone. Runs inside a
-    /// transaction so a failure partway through never leaves the table half-empty.</summary>
-    public async Task ReplaceSalesDocumentFactsAsync(Guid clientId, List<SalesDocumentFact> facts)
+    /// transaction so a failure partway through never leaves the table half-empty.
+    ///
+    /// <paramref name="sinceDate"/> (Edgetec, 2026-09-22 - see DataWindowSettings.EarliestLoadDate)
+    /// narrows the wipe to only doc_date &gt;= that date, so a client onboarded with
+    /// already-verified prior history can never have that history deleted by this program, no
+    /// matter what a future run's extractor happens to pull.</summary>
+    public async Task ReplaceSalesDocumentFactsAsync(Guid clientId, List<SalesDocumentFact> facts, DateTime? sinceDate = null)
     {
         await using var tx = await _conn.BeginTransactionAsync();
 
-        await using (var del = new NpgsqlCommand("delete from sales_document_facts where client_id = @client_id", _conn, tx))
+        var deleteSql = sinceDate.HasValue
+            ? "delete from sales_document_facts where client_id = @client_id and doc_date >= @since_date"
+            : "delete from sales_document_facts where client_id = @client_id";
+        await using (var del = new NpgsqlCommand(deleteSql, _conn, tx))
         {
             del.Parameters.AddWithValue("client_id", clientId);
+            if (sinceDate.HasValue)
+                del.Parameters.AddWithValue("since_date", DateOnly.FromDateTime(sinceDate.Value));
             await del.ExecuteNonQueryAsync();
         }
+
+        // Belt-and-braces on top of the narrowed delete above: if sinceDate is set and an
+        // extractor's own window logic ever had a bug and handed back a row earlier than it,
+        // silently drop it here rather than inserting a row that could duplicate or conflict
+        // with the untouched, already-verified history before sinceDate. Never fires for a
+        // client with no sinceDate (WCSA) - facts is used as-is, exactly as before.
+        if (sinceDate.HasValue)
+            facts = facts.Where(f => f.DocDate >= sinceDate.Value).ToList();
 
         if (facts.Count > 0)
         {
@@ -293,18 +311,33 @@ public sealed class SupabaseWriter : IDisposable
         await tx.CommitAsync();
     }
 
-    /// <summary>Same full-per-client-wipe reasoning as sales_document_facts - the trailing
-    /// N-month window (36 or 60, matching the same 3/5-year history setting) also shifts by
-    /// a day on every run.</summary>
-    public async Task ReplaceStockMovementFactsAsync(Guid clientId, List<StockMovementFact> facts)
+    /// <summary>Same wipe reasoning as ReplaceSalesDocumentFactsAsync, including the same
+    /// optional <paramref name="sinceDate"/> floor - see that method's remarks. Without it, the
+    /// trailing N-month window (36 or 60, matching the same 3/5-year history setting) also
+    /// shifts by a day on every run for a client with no fixed floor.</summary>
+    public async Task ReplaceStockMovementFactsAsync(Guid clientId, List<StockMovementFact> facts, DateTime? sinceDate = null)
     {
         await using var tx = await _conn.BeginTransactionAsync();
 
-        await using (var del = new NpgsqlCommand("delete from stock_movement_facts where client_id = @client_id", _conn, tx))
+        var deleteSql = sinceDate.HasValue
+            ? "delete from stock_movement_facts where client_id = @client_id and month >= @since_date"
+            : "delete from stock_movement_facts where client_id = @client_id";
+        await using (var del = new NpgsqlCommand(deleteSql, _conn, tx))
         {
             del.Parameters.AddWithValue("client_id", clientId);
+            if (sinceDate.HasValue)
+                del.Parameters.AddWithValue("since_date", DateOnly.FromDateTime(sinceDate.Value));
             await del.ExecuteNonQueryAsync();
         }
+
+        // Same belt-and-braces as ReplaceSalesDocumentFactsAsync. NOTE: month buckets are
+        // always the 1st of the month, so a sinceDate mid-month (e.g. 7 September) means the
+        // September bucket itself (month = 1 September, before sinceDate) is left untouched by
+        // both this filter and the delete above - worth a second look when an extractor that
+        // actually populates stock_movement_facts against a sinceDate floor is built, to decide
+        // whether that partial month should still refresh.
+        if (sinceDate.HasValue)
+            facts = facts.Where(f => f.Month >= sinceDate.Value).ToList();
 
         if (facts.Count > 0)
         {

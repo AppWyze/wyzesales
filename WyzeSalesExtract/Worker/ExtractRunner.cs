@@ -77,14 +77,22 @@ public static class ExtractRunner
                 var historyYears = await supa.LoadDataHistoryYearsAsync(clientId);
                 log.Info($"  {historyYears}-year history window.");
 
-                // NOTE: this Mar-1 fiscal-year-boundary calculation is WCSA's own convention
-                // (see FiscalDate.FiscalYearWindowStart's remarks) - not yet generalised for a
-                // client with a different fiscal year (Edgetec's design notes describe Oct-Sep).
-                // Deliberately left as-is rather than guessed at ahead of that client's actual
-                // design doc; revisit when Edgetec's extractor is built.
-                var salesWindowStart = settings.FiscalYear.OverrideYear is int overrideYear
-                    ? new DateTime(overrideYear - historyYears, 3, 1)
-                    : FiscalDate.FiscalYearWindowStart(today, historyYears);
+                // DataWindow.EarliestLoadDate (see AppSettings.cs's DataWindowSettings) is a
+                // fixed per-client floor - set for a client onboarded with an already-verified
+                // prior extract (Edgetec: "We already have a full set of data up until 7
+                // September 2026... build from there without duplicating"). When set, it
+                // overrides the fiscal-year rolling calculation entirely: this client's
+                // extractor only ever needs to get "from here forward" right, and the matching
+                // sinceDate passed to the two Replace calls below makes it structurally
+                // impossible for any run to delete or touch anything before it.
+                //
+                // NOTE: the fiscal-year fallback below (used only when EarliestLoadDate is NOT
+                // set) is WCSA's own Mar-1 convention (see FiscalDate.FiscalYearWindowStart's
+                // remarks) - not a source-agnostic default.
+                var salesWindowStart = settings.DataWindow.EarliestLoadDate ??
+                    (settings.FiscalYear.OverrideYear is int overrideYear
+                        ? new DateTime(overrideYear - historyYears, 3, 1)
+                        : FiscalDate.FiscalYearWindowStart(today, historyYears));
 
                 log.Info($"Extracting from source (Source.Type: {settings.Source.Type})...");
                 var extractor = SourceExtractorFactory.Create(settings.Source.Type);
@@ -104,11 +112,16 @@ public static class ExtractRunner
                 await supa.UpsertSuppliersAsync(clientId, refData.Suppliers);
                 await supa.UpsertItemsAsync(clientId, refData.Items);
 
-                log.Info("Writing sales document facts to Supabase (full replace)...");
-                await supa.ReplaceSalesDocumentFactsAsync(clientId, salesFacts);
+                var sinceDate = settings.DataWindow.EarliestLoadDate;
+                var replaceScopeDescription = sinceDate.HasValue
+                    ? $"replacing {sinceDate:yyyy-MM-dd} onward only - never touches anything earlier"
+                    : "full replace";
 
-                log.Info("Writing stock movement facts to Supabase (full replace)...");
-                await supa.ReplaceStockMovementFactsAsync(clientId, movementFacts);
+                log.Info($"Writing sales document facts to Supabase ({replaceScopeDescription})...");
+                await supa.ReplaceSalesDocumentFactsAsync(clientId, salesFacts, sinceDate);
+
+                log.Info($"Writing stock movement facts to Supabase ({replaceScopeDescription})...");
+                await supa.ReplaceStockMovementFactsAsync(clientId, movementFacts, sinceDate);
 
                 log.Info("Writing item stock snapshot to Supabase (today's snapshot replaced)...");
                 await supa.ReplaceTodaysItemStockSnapshotAsync(clientId, snapshotFacts, today);

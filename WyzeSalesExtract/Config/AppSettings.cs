@@ -25,6 +25,7 @@ public sealed class AppSettings
     public DatabaseSettings Database { get; set; } = new();
     public SupabaseSettings Supabase { get; set; } = new();
     public FiscalYearSettings FiscalYear { get; set; } = new();
+    public DataWindowSettings DataWindow { get; set; } = new();
     public LoggingSettings Logging { get; set; } = new();
     public ScheduleSettings Schedule { get; set; } = new();
 
@@ -111,6 +112,28 @@ public sealed class SupabaseSettings
 public sealed class FiscalYearSettings
 {
     public int? OverrideYear { get; set; }
+}
+
+public sealed class DataWindowSettings
+{
+    // Craig, 2026-09-22 (Edgetec): "We already have a full set of data up until 7 September
+    // 2026 which we confirmed balances to the old (current) version of wyzesales. So we just
+    // need to build from there without duplicating." Confirmed the boundary itself is exact:
+    // the already-verified data was extracted at 06:00 on the 7th, so it covers up to and
+    // including 6 September - the 7th itself is NOT yet in it.
+    //
+    // When set, this is a hard floor a client is onboarded with: no run ever deletes, replaces,
+    // or queries the source system for a date earlier than this - only ever adds
+    // sales_document_facts / stock_movement_facts from this date forward (see
+    // SupabaseWriter's sinceDate parameter and ExtractRunner). This protects an already-
+    // verified prior extract's history from ever being touched again by this program, and
+    // lets a new client (like Edgetec) skip needing its OWN rolling historyYears/fiscal-year
+    // window logic sorted out before it can go live - it only ever has to get "from here
+    // forward" right.
+    //
+    // Leave null (the default) for a client like WCSA that has always used this program's own
+    // rolling historyYears window, with no separate prior extract to protect.
+    public DateTime? EarliestLoadDate { get; set; }
 }
 
 public sealed class LoggingSettings

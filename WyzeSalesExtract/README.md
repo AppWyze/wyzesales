@@ -162,17 +162,30 @@ Building a new client means:
 4. **A check of the fiscal-year window-start calculation** in `Worker/ExtractRunner.cs` and
    `Domain/FiscalDate.cs` - both currently assume WCSA's Mar-Feb fiscal year (see
    `FiscalDate.FiscalYearWindowStart`'s own remarks). A client with a different fiscal year
-   needs this generalised, deliberately left undone until a real client needs it rather than
-   guessed at speculatively.
+   needs this generalised - unless `DataWindow.EarliestLoadDate` (below) applies, in which case
+   this step can be skipped entirely for now.
 
-5. **A `--run-once` test run** against real data before that client goes onto a schedule - the
+5. **`DataWindow.EarliestLoadDate` (`Config/AppSettings.cs`) - set this when a client is being
+   onboarded with an already-verified prior extract**, e.g. Edgetec: "We already have a full set
+   of data up until 7 September 2026 which we confirmed balances to the old (current) version of
+   wyzesales. So we just need to build from there without duplicating." When set, it's a hard
+   floor: `ExtractRunner` uses it as the sales window's start date instead of computing one from
+   `FiscalYear`/`historyYears` (so step 4 above can wait), and passes it through to
+   `SupabaseWriter.ReplaceSalesDocumentFactsAsync`/`ReplaceStockMovementFactsAsync` as
+   `sinceDate`, which narrows their delete-and-replace to that date forward - structurally
+   impossible for a run to touch anything earlier. Leave it unset (the default) for a client
+   with no separate prior extract to protect, like WCSA - both methods keep their original
+   full-per-client-wipe behaviour when `sinceDate` isn't passed.
+
+6. **A `--run-once` test run** against real data before that client goes onto a schedule - the
    design doc and the code built from it are both unproven until data has actually come back
    from the real source system once. Check `data_load_runs` in Supabase for the result.
 
-What deliberately does NOT change for a new client: `Data/SupabaseWriter.cs`, the Supabase
-schema, the scheduler, the Windows Service install/uninstall, or anything in the Flutter app
-that reads this data - all of it already only knows about the shared `ExtractedData` shape,
-never about any one client's source system.
+What deliberately does NOT change for a new client: the Supabase schema, the scheduler, the
+Windows Service install/uninstall, or anything in the Flutter app that reads this data - all of
+it already only knows about the shared `ExtractedData` shape, never about any one client's
+source system. `Data/SupabaseWriter.cs`'s row-writing logic doesn't change either, though its
+two window-replace methods do take the optional `sinceDate` described in step 5 above.
 
 ## Setup
 
