@@ -281,16 +281,25 @@ public sealed class SupabaseWriter : IDisposable
 
         if (facts.Count > 0)
         {
+            // dim_1_code..dim_12_code: see RawFacts.cs's SalesDocumentFact.DimCodes remarks.
+            // Built as twelve separate arrays (rather than one jsonb/array column) so the same
+            // unnest-several-equal-length-arrays idiom this whole method already uses keeps
+            // working unchanged - null in every slot for a fact that never sets DimCodes (WCSA).
             const string sql = """
                 insert into sales_document_facts
                   (client_id, document_kind, document, account_code, doc_date, invoice_rep_code,
-                   item_code, warehouse_code, quantity, value, cost, discount_amount)
+                   item_code, warehouse_code, quantity, value, cost, discount_amount,
+                   dim_1_code, dim_2_code, dim_3_code, dim_4_code, dim_5_code, dim_6_code,
+                   dim_7_code, dim_8_code, dim_9_code, dim_10_code, dim_11_code, dim_12_code)
                 select @client_id,
                        unnest(@document_kind::text[])::document_kind,
                        unnest(@document::text[]), unnest(@account_code::text[]), unnest(@doc_date::date[]),
                        unnest(@invoice_rep_code::text[]), unnest(@item_code::text[]), unnest(@warehouse_code::text[]),
                        unnest(@quantity::numeric[]), unnest(@value::numeric[]), unnest(@cost::numeric[]),
-                       unnest(@discount_amount::numeric[])
+                       unnest(@discount_amount::numeric[]),
+                       unnest(@dim_1::text[]), unnest(@dim_2::text[]), unnest(@dim_3::text[]), unnest(@dim_4::text[]),
+                       unnest(@dim_5::text[]), unnest(@dim_6::text[]), unnest(@dim_7::text[]), unnest(@dim_8::text[]),
+                       unnest(@dim_9::text[]), unnest(@dim_10::text[]), unnest(@dim_11::text[]), unnest(@dim_12::text[])
                 """;
             await using var cmd = new NpgsqlCommand(sql, _conn, tx) { CommandTimeout = 600 };
             cmd.Parameters.AddWithValue("client_id", clientId);
@@ -305,11 +314,22 @@ public sealed class SupabaseWriter : IDisposable
             cmd.Parameters.AddWithValue("value", facts.Select(f => f.Value).ToArray());
             cmd.Parameters.AddWithValue("cost", facts.Select(f => f.Cost).ToArray());
             cmd.Parameters.AddWithValue("discount_amount", facts.Select(f => f.DiscountAmount).ToArray());
+            for (var i = 0; i < 12; i++)
+                cmd.Parameters.AddWithValue($"dim_{i + 1}", facts.Select(f => DimCode(f, i)).ToArray());
             await cmd.ExecuteNonQueryAsync();
         }
 
         await tx.CommitAsync();
     }
+
+    /// <summary>f.DimCodes[index] - null when this fact never set DimCodes at all, or didn't
+    /// set this particular slot. A plain C# null (not DBNull) inside the string?[] array this
+    /// feeds into Parameters.AddWithValue is what Npgsql maps to a NULL array element for a
+    /// text[]-typed parameter - same convention every other nullable-array column in this file
+    /// (e.g. UpsertCustomersAsync's assigned_rep_code) already relies on. Index 0 = dim_1_code,
+    /// matching the same convention lib/data/models/sales_document.dart uses on the read side.</summary>
+    private static string? DimCode(SalesDocumentFact f, int index) =>
+        f.DimCodes != null && index < f.DimCodes.Length ? f.DimCodes[index] : null;
 
     /// <summary>Same wipe reasoning as ReplaceSalesDocumentFactsAsync, including the same
     /// optional <paramref name="sinceDate"/> floor - see that method's remarks. Without it, the

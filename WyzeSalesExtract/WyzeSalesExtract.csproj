@@ -22,10 +22,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- All four are pulled in at build time only - nothing extra needed at runtime on the
+    <!-- All five are pulled in at build time only - nothing extra needed at runtime on the
          server, since everything is bundled into the single published exe.
          - System.Data.Odbc: Microsoft's own ODBC provider for .NET - still needed for the
-           WCSA/IQRetail side, which hasn't changed.
+           WCSA/IQRetail side, which hasn't changed, and now also for Edgetec's own ODBC driver
+           (GLTRANS/STTRANS/REPS/STOCKCAT - see Data/EdgetecDb.cs).
          - Npgsql: pure C# Postgres client - what this program now uses to write straight into
            Supabase. Replaces SSH.NET; there's no SFTP upload step any more, so no SFTP client
            is needed either.
@@ -33,11 +34,16 @@
            Host" / Worker Service framework - what lets this one exe run either as a normal
            console app (run-once mode, self-test mode) or as a real Windows Service with an
            internal scheduler (the default mode, see Worker/ExtractWorker.cs), replacing the
-           need for Windows Task Scheduler entirely. -->
+           need for Windows Task Scheduler entirely.
+         - ClosedXML: reads "Edgetec Formats.xlsx" at runtime (Data/EdgetecLookups.cs) - chosen
+           over EPPlus specifically because EPPlus's licence forbids commercial use without a
+           paid licence, which would be inappropriate for Craig's commercial product; ClosedXML
+           is MIT licensed. -->
     <PackageReference Include="System.Data.Odbc" Version="8.0.1" />
     <PackageReference Include="Npgsql" Version="8.0.5" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
   </ItemGroup>
 
   <ItemGroup>

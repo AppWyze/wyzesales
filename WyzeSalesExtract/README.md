@@ -102,9 +102,14 @@ Config/AppSettings.cs         appsettings.json -> strongly-typed settings (Sourc
 Extraction/ISourceExtractor.cs        The per-client plug-in point - see "Adding a new client" below
 Extraction/SourceExtractorFactory.cs  Picks which client's extractor to run, from Source.Type
 Extraction/WcsaSourceExtractor.cs     WCSA/IQRetail's extractor - wraps Data/Db+Lookups+Facts and Builders/* below, unchanged
+Extraction/EdgetecSourceExtractor.cs  EDGETEC-SPECIFIC: wraps Data/EdgetecDb+EdgetecLookups+EdgetecFacts below - see "Adding a new client"
 Data/Db.cs                    WCSA-SPECIFIC: IQRetail ODBC connection + query helper + the exact text-cleaning rules
 Data/Lookups.cs                WCSA-SPECIFIC: all ~20 raw dimension pulls (customers, reps, categories, suppliers, stock counts, lead times)
 Data/Facts.cs                  WCSA-SPECIFIC: the raw invoice/credit-note line facts
+Data/EdgetecDb.cs             EDGETEC-SPECIFIC: Edgetec's own ODBC connection + query helper (unquoted FROM path - a different dialect from Data/Db.cs)
+Data/EdgetecLookups.cs        EDGETEC-SPECIFIC: static reference data - REPS/STOCKCAT (ODBC), STOCK.TXT/ACCOUNTS.TXT (flat files), "Edgetec Formats.xlsx" (ClosedXML)
+Data/EdgetecFacts.cs          EDGETEC-SPECIFIC: the raw GLTRANS/STTRANS-derived facts (DOCNO- and DOCNO&amp;ACCNO-keyed lookups, GL lines)
+Data/DelimitedFile.cs         EDGETEC-SPECIFIC: small RFC4180-ish CSV reader for STOCK.TXT/ACCOUNTS.TXT (no NuGet dependency for two small files)
 Data/SupabaseWriter.cs        SHARED by every client: everything written to Supabase - upserts for reference data, full replace for raw facts
 Domain/FiscalDate.cs          Date-window math + the CheckYear assumption (WCSA's Mar-Feb fiscal year - see "Adding a new client")
 Domain/SelfTest.cs            Proves FiscalDate matches the original logic - run with --selftest
@@ -121,20 +126,27 @@ ServiceInstall/ServiceInstaller.cs   SHARED: install/uninstall - registers this 
 Program.cs                    SHARED: dispatches to the above based on command-line args (see "Command-line options")
 ```
 
-"SHARED" means every client uses this file unchanged. "WCSA-SPECIFIC" means it only exists to serve WcsaSourceExtractor - a new client gets its own equivalent files under `Extraction/`, not edits to these.
+"SHARED" means every client uses this file unchanged. "WCSA-SPECIFIC"/"EDGETEC-SPECIFIC" means the file only exists to serve that one client's extractor - a new client gets its own equivalent files under `Extraction/`/`Data/`, not edits to these. Note Edgetec has no `Builders/*` files of its own: its dimension model (`client_dimensions`/`dim_N_code`) is simple enough that `EdgetecSourceExtractor.cs` builds `SalesDocumentFact` rows directly, without a separate Builders class the way WCSA's `Builders/SalesDocumentFactsBuilder.cs` does - and it writes no stock-movement or stock-snapshot facts at all (Edgetec's `ExtractedData` carries empty lists for both, since the original QlikView script never produced them).
 
 ## Adding a new client
 
 Added 2026-09-22 alongside the `Extraction/ISourceExtractor.cs` refactor - Edgetec is the
-first client built this way; WCSA was retrofitted onto it, unchanged in behaviour.
+first client built this way, and its extractor (`Extraction/EdgetecSourceExtractor.cs` and
+`Data/EdgetecDb.cs`/`EdgetecLookups.cs`/`EdgetecFacts.cs`/`DelimitedFile.cs`) is now a complete,
+real second example alongside WCSA, not just a forward reference to one - built from
+`docs/WyzeSalesExtract_Edgetec_DesignNotes.md` and verified field-by-field against the original
+QlikView "Edgetec Extract" script and Edgetec's live Supabase `client_dimensions` configuration.
+WCSA was retrofitted onto the `ISourceExtractor` shape unchanged in behaviour.
 
 The program is split into two halves. Everything under **SHARED** in "Project layout" above
 (SupabaseWriter, the scheduler, run tracking, the Windows Service host, the raw row shapes in
 `Domain/RawFacts.cs` and `Builders/ReferenceDataBuilder.cs`'s `ReferenceData`) is already
-client-agnostic and needs zero changes for a new client. Everything marked **WCSA-SPECIFIC** is
-one client's particular way of populating that shared shape from IQRetail, and is not a
-template to copy-paste - it's an example of the *kind* of code a new client's extractor
-contains, not its content.
+client-agnostic and needs zero changes for a new client. Everything marked **WCSA-SPECIFIC** or
+**EDGETEC-SPECIFIC** is that one client's particular way of populating the shared shape from its
+own source system, and neither is a template to copy-paste - each is an example of the *kind* of
+code a new client's extractor contains, not content to reuse. In particular, don't reach for
+Edgetec's flat-file (`DelimitedFile.cs`) or spreadsheet (ClosedXML) reading just because it's
+there - use it only if the new client's own source data genuinely comes that way.
 
 Building a new client means:
 
@@ -146,18 +158,25 @@ Building a new client means:
    is the working example of this for Edgetec - expect a first pass to leave some of this open
    (it did for Edgetec) and get resolved through a couple of follow-up rounds, not all at once.
 
-2. **One new class implementing `ISourceExtractor`** (e.g. `Extraction/EdgetecSourceExtractor.cs`),
-   built from that design doc, returning the same `ExtractedData` shape WCSA's extractor
-   returns - see `Extraction/WcsaSourceExtractor.cs` for the shape of what one of these looks
-   like, not for logic to reuse. It's free to use whatever mechanism its source system needs
-   internally (a different ODBC dialect, flat-file parsing, an API) - `ExtractRunner` never
-   sees that difference.
+2. **One new class implementing `ISourceExtractor`** (`Extraction/EdgetecSourceExtractor.cs` is
+   the real example), built from that design doc, returning the same `ExtractedData` shape
+   WCSA's extractor returns - see `Extraction/WcsaSourceExtractor.cs` and
+   `Extraction/EdgetecSourceExtractor.cs` side by side for the shape of what one of these looks
+   like, not for logic to reuse: the two are deliberately different internally (WCSA groups
+   already-shaped invoice/credit-note lines via `Builders/SalesDocumentFactsBuilder.cs`; Edgetec
+   groups raw GLTRANS lines into `SalesDocumentFact` rows directly - see `EdgetecFacts.cs`'s own
+   remarks on why it needs no separate Builders class). It's free to use whatever mechanism its
+   source system needs internally (a different ODBC dialect, flat-file parsing, a spreadsheet, an
+   API) - `ExtractRunner` never sees that difference.
 
 3. **A settings section of its own** in `Config/AppSettings.cs` for whatever that client's
-   extractor needs to connect (WCSA's is `DatabaseSettings` - Dsn/ConnectionString/BasePath; a
-   new client is not obligated to reuse that shape, since it's IQRetail's own connection
+   extractor needs to connect (WCSA's is `DatabaseSettings` - Dsn/ConnectionString/BasePath;
+   Edgetec's is `EdgetecSettings` - Dsn/ConnectionString/BasePath/FilesPath, the last one because
+   Edgetec also reads flat files and a spreadsheet straight off disk, not just ODBC. A new client
+   is not obligated to reuse either shape, since each is that source system's own connection
    details, not a generic contract) - plus a new `case` in `Extraction/SourceExtractorFactory.cs`
-   and a new value for `Source.Type` in that client's `appsettings.json`.
+   and a new value for `Source.Type` in that client's `appsettings.json` (see
+   `appsettings.example.json`'s `Edgetec` section for a worked example of this pattern).
 
 4. **A check of the fiscal-year window-start calculation** in `Worker/ExtractRunner.cs` and
    `Domain/FiscalDate.cs` - both currently assume WCSA's Mar-Feb fiscal year (see
@@ -179,7 +198,13 @@ Building a new client means:
 
 6. **A `--run-once` test run** against real data before that client goes onto a schedule - the
    design doc and the code built from it are both unproven until data has actually come back
-   from the real source system once. Check `data_load_runs` in Supabase for the result.
+   from the real source system once. Check `data_load_runs` in Supabase for the result. Edgetec's
+   extractor has been built and its field-by-field logic verified against the original QlikView
+   script and real historical data, but as of this writing it still needs its actual ODBC
+   DSN/connection string and `FilesPath` filled into `appsettings.json`'s `Edgetec` section before
+   a real `--run-once` against Edgetec's live server is possible - that first real run is the
+   only true proof this extractor is correct, design review and code reading aren't a substitute
+   for it.
 
 What deliberately does NOT change for a new client: the Supabase schema, the scheduler, the
 Windows Service install/uninstall, or anything in the Flutter app that reads this data - all of

@@ -23,6 +23,7 @@ public sealed class AppSettings
     // production today - keeps loading and behaving exactly as before with no edits needed.
     public SourceSettings Source { get; set; } = new();
     public DatabaseSettings Database { get; set; } = new();
+    public EdgetecSettings Edgetec { get; set; } = new();
     public SupabaseSettings Supabase { get; set; } = new();
     public FiscalYearSettings FiscalYear { get; set; } = new();
     public DataWindowSettings DataWindow { get; set; } = new();
@@ -52,15 +53,24 @@ public sealed class AppSettings
     {
         var problems = new List<string>();
 
-        // Database.* is only WCSA/IQRetail-shaped - a future client (Edgetec, etc.) will
-        // validate its own settings section from inside its own extractor / a case added here,
-        // not by reusing WCSA's Dsn/ConnectionString/BasePath fields.
+        // Database.* is only WCSA/IQRetail-shaped - each client validates its own settings
+        // section, not WCSA's Dsn/ConnectionString/BasePath fields.
         if (Source.Type == "WCSA")
         {
             if (string.IsNullOrWhiteSpace(Database.Dsn) && string.IsNullOrWhiteSpace(Database.ConnectionString))
                 problems.Add("Database.Dsn or Database.ConnectionString must be set.");
             if (string.IsNullOrWhiteSpace(Database.BasePath))
                 problems.Add("Database.BasePath must be set (the quoted path IQRetail uses in FROM clauses).");
+        }
+
+        if (Source.Type == "EDGETEC")
+        {
+            if (string.IsNullOrWhiteSpace(Edgetec.Dsn) && string.IsNullOrWhiteSpace(Edgetec.ConnectionString))
+                problems.Add("Edgetec.Dsn or Edgetec.ConnectionString must be set.");
+            if (string.IsNullOrWhiteSpace(Edgetec.BasePath))
+                problems.Add("Edgetec.BasePath must be set (the unquoted path Edgetec's ODBC driver uses in FROM clauses, e.g. \"Z:\").");
+            if (string.IsNullOrWhiteSpace(Edgetec.FilesPath))
+                problems.Add("Edgetec.FilesPath must be set (the folder holding STOCK.TXT, ACCOUNTS.TXT, and \"Edgetec Formats.xlsx\").");
         }
 
         if (string.IsNullOrWhiteSpace(Supabase.ConnectionString))
@@ -82,8 +92,9 @@ public sealed class AppSettings
 
 public sealed class SourceSettings
 {
-    // "WCSA" today; add a new value here (and a matching case in SourceExtractorFactory) as
-    // each new client's extractor is built - see README "Adding a new client".
+    // "WCSA" or "EDGETEC" today; add a new value here (and a matching case in
+    // SourceExtractorFactory) as each new client's extractor is built - see README "Adding a
+    // new client".
     public string Type { get; set; } = "WCSA";
 }
 
@@ -94,6 +105,36 @@ public sealed class DatabaseSettings
     // The quoted path IQRetail's ODBC driver expects before the table name, e.g.
     // FROM "C:\IQRetail\IQEnterprise\002"\Invoices
     public string BasePath { get; set; } = "C:\\IQRetail\\IQEnterprise\\002";
+}
+
+public sealed class EdgetecSettings
+{
+    // Matches the QlikView script's own "ODBC CONNECT TO Edgetec64" - the DSN configured on
+    // whichever Windows server this program runs on (same idea as Database.Dsn for WCSA, kept
+    // as a separate section rather than reused because a second client sharing this exact
+    // settings shape would be a coincidence, not a guarantee - see README "Adding a new
+    // client").
+    public string? Dsn { get; set; }
+    public string? ConnectionString { get; set; }
+
+    // The QlikView script's vFINPath ("Z:" in production) - the live company-data path used,
+    // WITHOUT quotes, as the FROM-clause prefix for STOCKCAT/STTRANS/GLTRANS/REPS (e.g.
+    // "FROM Z:\GLTRANS"). Deliberately a different quoting convention to WCSA's
+    // Database.BasePath (which WCSA's ODBC driver requires quoted) - see Data/EdgetecDb.cs.
+    public string BasePath { get; set; } = "Z:";
+
+    // The QlikView script's vQVDPath ("Z:\QlikView" in production) - the folder holding the
+    // three file-based sources the script reads directly rather than via ODBC: STOCK.TXT,
+    // ACCOUNTS.TXT, and "Edgetec Formats.xlsx" (the ledger-account-to-dimension mapping Craig
+    // uploaded 2026-09-22 and confirmed against the real Sales Analysis screen).
+    public string FilesPath { get; set; } = "Z:\\QlikView";
+
+    public string GetConnectionString()
+    {
+        if (!string.IsNullOrWhiteSpace(ConnectionString))
+            return ConnectionString;
+        return $"DSN={Dsn};";
+    }
 }
 
 public sealed class SupabaseSettings
