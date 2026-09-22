@@ -1,0 +1,69 @@
+name: Build WyzeSalesExtract
+
+# Two jobs this serves at once:
+#
+# 1. A safety net that didn't exist before: every push that touches WyzeSalesExtract now
+#    actually gets compiled and self-tested on a real machine. No tool available to build this
+#    program (this cloud sandbox, the bridge into Craig's Mac) has ever had the .NET SDK or
+#    been able to reach nuget.org (both confirmed directly, 2026-09-22) - so until now, nothing
+#    had ever actually compiled a single line of C# written for this project. This workflow is
+#    the first thing that does.
+#
+# 2. The "press a button" build step for the WyzeSalesExtract-per-client workflow (Craig,
+#    2026-09-22): trigger this manually (or, later, from Platform Admin via GitHub's API) and
+#    download WyzeSalesExtract.exe from the finished run's artifacts - no local dotnet install
+#    needed anywhere.
+#
+# Deliberately does NOT take any client-specific input or produce a client-specific exe: the
+# same single-file exe already supports every client whose ISourceExtractor is compiled in -
+# Source.Type in THAT SERVER's own appsettings.json is what picks which one actually runs (see
+# WyzeSalesExtract/README.md "Adding a new client"). One build serves every client at once;
+# only the config differs between them, and that config - especially the Supabase connection
+# string - deliberately never passes through this workflow or gets baked into the exe, so it
+# never ends up in an Actions log or a downloadable artifact.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "WyzeSalesExtract/**"
+      - ".github/workflows/build-wyzesalesextract.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    # Matches the actual target OS (win-x64, self-contained, Windows Service APIs) rather than
+    # cross-compiling from Linux - this workflow can't be test-run before Craig sees the
+    # result, so the safest choice was taken over the faster one.
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: WyzeSalesExtract
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Publish (win-x64, self-contained, single file)
+        run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+
+      # Runs the exe's own --selftest (Domain/SelfTest.cs) on the built artifact itself, not
+      # just the source - proves the date-math and scheduler logic actually work on a real
+      # machine before anyone downloads this build. Needs no database connection. A failure
+      # here fails the whole workflow run, on purpose - nothing gets published as an artifact
+      # from a build that fails its own self-test.
+      - name: Run built-in self-test
+        shell: pwsh
+        run: .\publish\WyzeSalesExtract.exe --selftest
+
+      - name: Upload WyzeSalesExtract.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: WyzeSalesExtract-${{ github.sha }}
+          path: WyzeSalesExtract/publish/WyzeSalesExtract.exe
+          retention-days: 90
