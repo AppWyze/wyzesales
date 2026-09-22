@@ -768,6 +768,29 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
                   // align with the TextField's digits specifically
                   // anymore, now that the field no longer stretches to
                   // fill the whole cell.
+                  //
+                  // 2026-09-22, Craig, screenshot with the "Sales Budget"
+                  // header and the Totals row's "R 0" both arrowed: the
+                  // whole TextField+suffix group was landing hard against
+                  // the LEFT of this cell, while the header ("Sales
+                  // Budget", right-aligned — `numeric: true` on its
+                  // `DataColumn2`) and the Totals row's own total (its own
+                  // `Align(centerRight)`, see `_totalsRow`) both sit at the
+                  // RIGHT edge — three different alignments in one column.
+                  // Root cause: `Expanded` always claims every pixel of
+                  // free space in a `Row` regardless of
+                  // `mainAxisAlignment`, so the suffix `Text` was filling
+                  // the whole space left over after the TextField rather
+                  // than sizing to its own text — which left `end`
+                  // nothing to actually push against, so the TextField+
+                  // suffix pair stayed pinned to the left. `Flexible`
+                  // (its default, loose fit) below sizes to the suffix
+                  // text's own width instead of forcing it to fill,
+                  // `overflow`/`maxLines` on the `Text` still protect
+                  // against a suffix too long to fit — so now
+                  // `mainAxisAlignment: MainAxisAlignment.end` has real
+                  // slack to push the whole group flush right, lining up
+                  // with the header and the Total exactly as intended.
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
@@ -806,7 +829,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
                         ),
                       ),
                       const SizedBox(width: 6),
-                      Expanded(
+                      Flexible(
                         child: Text(
                           budgetSuffix,
                           overflow: TextOverflow.ellipsis,
