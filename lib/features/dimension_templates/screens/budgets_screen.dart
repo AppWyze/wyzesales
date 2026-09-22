@@ -860,6 +860,18 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
   /// same order/wording as `compute-forecast`'s own three-tier scheme
   /// (schema/041, <12 months history = low, 12-23 = partial, 24+ = full)
   /// rather than re-deriving the thresholds here.
+  ///
+  /// 2026-09-22, Craig: "I know that each person is going to ask me how the
+  /// Seasonal Forecast Numbers are calculated. As such I would like a
+  /// Button / Hover... that explains in layman terms exactly how Holt
+  /// Winters Forecasts are calculated." The `_helpButton` added to this
+  /// same row is both: a `Tooltip` (shows on hover on desktop/web, and on
+  /// long-press on touch — no separate "hover" mechanism needed) carrying a
+  /// one-line teaser, wrapping a small tappable button that opens the full
+  /// explanation via `_showForecastExplanation` — same `showDialog`/
+  /// `AlertDialog` pattern already used elsewhere in this app (e.g.
+  /// `global_filter_bar.dart`'s "Presets" button) rather than a new
+  /// mechanism.
   Widget _legend() {
     final textStyle = Theme.of(context).textTheme.bodySmall;
     return Wrap(
@@ -871,6 +883,7 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
         _legendEntry(AppColors.negative, 'Low', textStyle),
         _legendEntry(AppColors.caution, 'Partial', textStyle),
         _legendEntry(AppColors.positive, 'Full', textStyle),
+        _helpButton(),
       ],
     );
   }
@@ -883,6 +896,157 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
         const SizedBox(width: 6),
         Text(label, style: textStyle),
       ],
+    );
+  }
+
+  Widget _helpButton() {
+    return Tooltip(
+      message: 'How the Seasonal Forecast numbers are calculated',
+      child: TextButton.icon(
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          minimumSize: const Size(0, 24),
+          visualDensity: VisualDensity.compact,
+        ),
+        onPressed: _showForecastExplanation,
+        icon: const Icon(Icons.help_outline, size: 14),
+        label: const Text('How is this calculated?'),
+      ),
+    );
+  }
+
+  /// The actual layman's-terms explanation — written from, and meant to
+  /// stay in sync with, `supabase/functions/compute-forecast/index.ts`'s
+  /// real logic (not a generic description of Holt-Winters off the shelf):
+  /// the 3 confidence thresholds (`partial_history_months`/
+  /// `full_history_months`, defaults 12/24 — `DEFAULT_SETTINGS`), the Tier
+  /// 3 "not enough history" flat-average fallback for Low, and the
+  /// 2026-09-21 robustness fixes (median year-seeding, the symmetric
+  /// deseasonalized cap/floor) described here in plain terms as "protection
+  /// against one freak month" without the underlying algorithm's own
+  /// jargon. If `compute-forecast`'s thresholds or safeguards ever change,
+  /// this text needs updating alongside it — it's describing that specific
+  /// function, not general forecasting theory.
+  void _showForecastExplanation() {
+    final theme = Theme.of(context);
+    Widget paragraph(String text) => Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(text),
+        );
+    Widget tier(Color color, String label, String detail) => Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: RichText(
+                  text: TextSpan(
+                    style: theme.textTheme.bodyMedium,
+                    children: [
+                      TextSpan(text: '$label — ', style: const TextStyle(fontWeight: FontWeight.w600)),
+                      TextSpan(text: detail),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('How the Seasonal Forecast is calculated'),
+        // ConstrainedBox with a maxWidth, not a fixed-width SizedBox — a
+        // literal `SizedBox(width: 480)` would force that width even on a
+        // phone screen narrower than 480px plus the dialog's own insets,
+        // which is exactly the RenderFlex-overflow bug class already fixed
+        // elsewhere this engagement (platform_admin_screen.dart's
+        // _dialogHeader). maxWidth is a ceiling, not a floor — it only caps
+        // how wide this gets on a large screen, and lets it shrink freely
+        // below that on a narrow one.
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                paragraph(
+                  'The Seasonal Forecast isn\'t a target anyone sets — it\'s a '
+                  'prediction, worked out automatically from this entity\'s own '
+                  'real sales history using a well-established forecasting '
+                  'method called Holt-Winters.',
+                ),
+                paragraph('It blends three things:'),
+                paragraph(
+                  '• How much this entity normally sells right now — a running '
+                  'average that keeps adjusting as new sales come in.',
+                ),
+                paragraph(
+                  '• Whether sales have generally been climbing or declining '
+                  'over the past year or two.',
+                ),
+                paragraph(
+                  '• The repeating pattern of busier and quieter months through '
+                  'the year — a December spike or a January dip, for example — '
+                  'compared to what\'s typical for THIS entity, not judged '
+                  'against anyone else\'s numbers.',
+                ),
+                paragraph(
+                  'Those three are combined and rolled forward a month at a '
+                  'time to produce the next 12 months, and the whole thing '
+                  'recalculates automatically every day as new sales land — '
+                  'nobody needs to maintain or adjust it by hand.',
+                ),
+                paragraph(
+                  'It also has built-in protection against a single freak '
+                  'month — one unusually huge sale, or one large credit note '
+                  '— throwing off the rest of the year\'s forecast.',
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text('How much to trust it depends on how much sales history exists:', style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+                tier(
+                  AppColors.negative,
+                  'Low',
+                  'Under 12 months of history. Not enough to know this entity\'s '
+                  'seasonal pattern yet, so it\'s simply the recent average '
+                  'repeated across all 12 months — treat this one as a rough '
+                  'placeholder.',
+                ),
+                tier(
+                  AppColors.caution,
+                  'Partial',
+                  '12 to 23 months of history. A genuine forecast with a real '
+                  'seasonal pattern, but only one year to have learned that '
+                  'pattern from.',
+                ),
+                tier(
+                  AppColors.positive,
+                  'Full',
+                  '24 months or more. Two full years or more to work from, so '
+                  'both the seasonal pattern and the underlying trend are '
+                  'well established.',
+                ),
+                paragraph(
+                  'This is separate from the Sales Budget column alongside it, '
+                  'which is a target entered manually — the Seasonal Forecast '
+                  'is calculated, not typed in.',
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Got it')),
+        ],
+      ),
     );
   }
 
