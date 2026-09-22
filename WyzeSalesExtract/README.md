@@ -329,29 +329,38 @@ From an **elevated** (Run as administrator) Command Prompt or PowerShell:
 WyzeSalesExtract.exe install
 ```
 
-This registers the service (named `WyzeSalesExtractWCSA`, shown as "WyzeSales
-Extract (WCSA)" in services.msc), configures it to auto-start at boot, sets
-Windows' own crash-recovery policy (auto-restart up to 3 times if the
-process ever dies unexpectedly), and starts it immediately. From this point
-on, it runs continuously in the background, waking up at each time in
-`Schedule.RunTimes` to do a run, with no user needing to be logged in.
+This registers the service under a name derived from `Supabase.ClientCode` in
+`appsettings.json` (e.g. `WyzeSalesExtractEDGE`, shown as "WyzeSales Extract
+(EDGE)" in services.msc - or `WyzeSalesExtractWCSA` / "WyzeSales Extract
+(WCSA)" for WCSA), configures it to auto-start at boot, sets Windows' own
+crash-recovery policy (auto-restart up to 3 times if the process ever dies
+unexpectedly), and starts it immediately. From this point on, it runs
+continuously in the background, waking up at each time in `Schedule.RunTimes`
+to do a run, with no user needing to be logged in. **`appsettings.json` must
+already be filled in correctly before you run `install`** - the service name
+is read from it at install time (see `ServiceInstall/ServiceInstaller.cs` if
+you need the exact rule), so get step 3 (or the Edgetec equivalent) done
+first.
 
 **Before you install it, check one thing**: services registered this way run
 under the *Local System* account by default, not your own Windows login. If
-your `IQNew` ODBC DSN was set up as a **User DSN** rather than a **System
-DSN** (machine-wide), the service won't be able to see it and every run
-will fail at the "Connecting to WCSA database..." step. Open ODBC Data
-Source Administrator (`odbcad32.exe`) and check the **System DSN** tab has
-`IQNew` listed - if it's only under **User DSN**, either recreate it on the
-System DSN tab (simplest fix), or reconfigure the service to run under a
-specific account instead via `sc config WyzeSalesExtractWCSA obj=
-".\<username>" password= "..."` after installing.
+the ODBC DSN this client's extractor uses (WCSA's `IQNew`, or Edgetec's own
+DSN) was set up as a **User DSN** rather than a **System DSN** (machine-wide),
+the service won't be able to see it and every run will fail at the
+"Connecting to ... database..." step. Open ODBC Data Source Administrator
+(`odbcad32.exe`) and check the **System DSN** tab has that DSN listed - if
+it's only under **User DSN**, either recreate it on the System DSN tab
+(simplest fix), or reconfigure the service to run under a specific account
+instead via `sc config <ServiceName> obj= ".\<username>" password= "..."`
+after installing (see the service name shown when `install` ran, or
+`services.msc`).
 
-To manage it afterward:
+To manage it afterward (substitute whichever service name `install` reported
+- e.g. `WyzeSalesExtractEDGE`):
 
 - **Check status / start / stop**: open `services.msc`, find "WyzeSales
-  Extract (WCSA)", or from an elevated prompt: `net start
-  WyzeSalesExtractWCSA` / `net stop WyzeSalesExtractWCSA`.
+  Extract (...)", or from an elevated prompt: `net start <ServiceName>` /
+  `net stop <ServiceName>`.
 - **Watch what it's doing**: log files land in `Logging.LogFolder`, one per
   scheduled run, plus `WyzeSalesExtract_startup.log` next to the exe itself
   for anything that happens before a config file has loaded successfully.

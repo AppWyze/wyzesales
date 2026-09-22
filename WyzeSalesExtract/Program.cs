@@ -47,9 +47,13 @@ if (args.Contains("--run-once"))
 // Default mode: run persistently and wait for the times configured in Schedule.RunTimes.
 // UseWindowsService() makes this behave correctly either way it's launched - as a real
 // Windows Service (after `install`, started by Windows itself) or interactively (e.g. run
-// from a console while testing) - without any other code here needing to know which.
+// from a console while testing) - without any other code here needing to know which. The
+// service name matches whatever ServiceInstaller.Install() actually registered (derived from
+// appsettings.json's Supabase.ClientCode), not a hardcoded one - see ServiceInstaller's own
+// remarks.
+var (serviceName, _) = ServiceInstaller.ResolveServiceIdentity();
 var builder = Host.CreateDefaultBuilder(args)
-    .UseWindowsService(options => options.ServiceName = ServiceInstaller.ServiceName)
+    .UseWindowsService(options => options.ServiceName = serviceName)
     .ConfigureServices(services =>
     {
         services.AddSingleton(new WorkerOptions(configPath));
