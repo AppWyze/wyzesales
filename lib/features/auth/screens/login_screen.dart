@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/app_providers.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/open_in_new_tab.dart';
 import '../../../shared/widgets/app_logo.dart';
 
 /// Turns a Supabase `AuthException` into wording a non-technical user can
@@ -42,6 +43,20 @@ String _friendlySignInError(Object error) {
   }
   return 'Unable to reach the server. Please check your connection and try again.';
 }
+
+/// The three legal documents linked from the bottom of this screen, each
+/// bundled as a static PDF under `web/legal/` (see that folder's own
+/// README) rather than served from Supabase Storage — they change rarely,
+/// so shipping them with the app build (versioned in git, deployed by the
+/// same Netlify build as everything else) is simpler than standing up a
+/// separate storage bucket. 2026-09-23, Craig: these need to be reviewable
+/// and printable before login, with signing in itself constituting
+/// acceptance — no separate checkbox, per that conversation.
+const _legalDocuments = <(String label, String path)>[
+  ('Privacy Policy', '/legal/privacy-policy.pdf'),
+  ('Terms of Service', '/legal/terms-of-service.pdf'),
+  ('Cookie Policy', '/legal/cookie-policy.pdf'),
+];
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -173,7 +188,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                             : const Text('Sign in'),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 20),
+                      _LegalNotice(),
+                      const SizedBox(height: 16),
                       Text(
                         'WyzeSales v0.1 · © 2026 WyzeSales',
                         style: Theme.of(context).textTheme.bodySmall,
@@ -187,6 +204,60 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "By signing in, you agree to our Privacy Policy, Terms of Service and
+/// Cookie Policy." as one sentence with each document name a tappable link
+/// (opens the PDF in a new tab — see `openInNewTab`'s own doc comment for
+/// why `dart:html` rather than a plugin) — so a user can actually read
+/// before they sign in, not just take the notice's word for it. There is no
+/// separate acceptance checkbox: per Craig, 2026-09-23, signing in itself is
+/// what constitutes acceptance, and this sentence is what makes that true
+/// rather than implicit — the notice sits directly above the same "Sign in"
+/// button, not buried in a footer link, so it's actually seen before that
+/// action is taken.
+class _LegalNotice extends StatelessWidget {
+  const _LegalNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = Theme.of(context).textTheme.bodySmall;
+    final linkStyle = baseStyle?.copyWith(
+      color: Theme.of(context).colorScheme.primary,
+      decoration: TextDecoration.underline,
+      fontWeight: FontWeight.w600,
+    );
+
+    InlineSpan linkSpan(String label, String path) {
+      return WidgetSpan(
+        alignment: PlaceholderAlignment.baseline,
+        baseline: TextBaseline.alphabetic,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () => openInNewTab(path),
+            child: Text(label, style: linkStyle),
+          ),
+        ),
+      );
+    }
+
+    return Text.rich(
+      TextSpan(
+        style: baseStyle,
+        children: [
+          const TextSpan(text: 'By signing in, you agree to our '),
+          linkSpan(_legalDocuments[0].$1, _legalDocuments[0].$2),
+          const TextSpan(text: ', '),
+          linkSpan(_legalDocuments[1].$1, _legalDocuments[1].$2),
+          const TextSpan(text: ' and '),
+          linkSpan(_legalDocuments[2].$1, _legalDocuments[2].$2),
+          const TextSpan(text: '.'),
+        ],
+      ),
+      textAlign: TextAlign.center,
     );
   }
 }
