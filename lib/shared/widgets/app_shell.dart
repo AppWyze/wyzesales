@@ -753,8 +753,16 @@ class _BrandMark extends StatelessWidget {
     return ClientLogoMark(
       logoUrl: logoUrl,
       onDarkBackground: client.logoBackground == 'dark',
-      height: 32,
-      maxWidth: 140,
+      // 2026-09-28 — Craig: the sidebar's own brand slot (the primary place
+      // a client's logo appears) was rendering smaller than its own
+      // Settings > Company > Branding preview (40/180, settings_screen.dart)
+      // — "inconspicuous". Bumped past that preview size rather than just
+      // matching it, since this is the one spot meant to read as the
+      // client's actual brand, not a thumbnail of it. Sidebar content width
+      // is ~220px (260px sidebar minus 20px padding each side), so 190 still
+      // leaves margin.
+      height: 44,
+      maxWidth: 190,
     );
   }
 }
