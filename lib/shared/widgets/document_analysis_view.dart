@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../core/app_providers.dart';
-import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/client_dimension_config.dart';
@@ -268,26 +267,20 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
   /// bug was purely this Dart-side default defeating it before the query
   /// ever saw a null.
   ///
-  /// Fixed by only defaulting to the current fiscal year when NEITHER Year
-  /// NOR Month is set at all (a bare, no-filters landing view still shows
-  /// "this year" rather than the client's entire multi-year history by
-  /// default — nobody asked for that to change, and it's the same sane
-  /// default every one of these screens has always opened to). The moment a
-  /// Month filter is set on its own, this returns null — no year
-  /// restriction — so the query sums every fiscal year's rows for that one
-  /// calendar month, exactly as Craig described.
-  int? _effectiveFiscalYear(GlobalFilters filters, int startMonth) {
-    if (filters.fiscalYear != null) return filters.fiscalYear;
-    // 2026-09-07: Quarter joins Month here — unlike Performance Analysis
-    // (see that screen's own `_effectiveFiscalYear` doc comment for why it
-    // deliberately does NOT do this for Quarter), this screen has no
-    // per-entity merge step to worry about at all — every row here is a
-    // plain line-level document, and fn_sales_documents_page/_totals happily
-    // return/sum however many fiscal years' worth of rows match, no
-    // collapsing required. So a bare Quarter can safely get the exact same
-    // "applies across every year" treatment as a bare Month.
-    if (filters.fiscalMonth != null || filters.fiscalQuarter != null) return null;
-    return fiscalYearFor(DateTime.now(), startMonth: startMonth);
+  /// 2026-09-29, Craig: a bare landing view (no Year/Month/Quarter set at
+  /// all) was still silently narrowing to the current fiscal year here, with
+  /// no chip shown for it (`GlobalFilterBar` only ever renders a Year chip
+  /// from `GlobalFilters.fiscalYear`, which this default never wrote back
+  /// into) — so a Country-only filter, say, looked like it should show every
+  /// year's data but was actually only ever summing the current year. Craig:
+  /// "I believe it should default to all data and then allow the user to
+  /// filter as they please." Fixed by dropping the current-fiscal-year
+  /// fallback entirely — this now always mirrors `filters.fiscalYear`
+  /// exactly (null stays null, all the way down to the query), so a bare
+  /// landing view shows the client's whole multi-year history until the user
+  /// explicitly picks a Year.
+  int? _effectiveFiscalYear(GlobalFilters filters) {
+    return filters.fiscalYear;
   }
 
   Future<_PageData> _loadPage() async {
@@ -296,14 +289,13 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     // than re-querying client_dimensions/client_dimension_values.
     final dimSetup = await _dimSetupFuture;
     final filters = ref.read(globalFiltersProvider);
-    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     // A custom date range (Sales Analysis only — see `fromDate`/`toDate`'s
     // own doc comment) REPLACES Year/Month/Quarter entirely for this fetch,
     // rather than combining with them — same mutual-exclusivity Month and
     // Quarter already have with each other.
     final rows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters, startMonth),
+          fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters),
           fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
           fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
           fromDate: widget.fromDate,
@@ -320,11 +312,10 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
 
   Future<void> _loadTotals() async {
     final filters = ref.read(globalFiltersProvider);
-    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     try {
       final totals = await ref.read(salesRepositoryProvider).fetchSalesDocumentsTotals(
             documentKinds: widget.documentKinds,
-            fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters, startMonth),
+            fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters),
             fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
             fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
             fromDate: widget.fromDate,
@@ -512,10 +503,9 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     // Memoized — see `_dimSetupFuture`'s own doc comment.
     final dimSetup = await _dimSetupFuture;
     final filters = ref.read(globalFiltersProvider);
-    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final allRows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
-          fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters, startMonth),
+          fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters),
           fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
           fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
           fromDate: widget.fromDate,

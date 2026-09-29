@@ -136,13 +136,14 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   // them locally (superseding the 2026-08-26 "keep Year/Month inline, they
   // show a real default" exception — Craig decided consistency/simplicity
   // wins over that). Year/Month are still read here (via
-  // _effectiveFiscalYear/_effectiveFiscalMonth) and still default to
-  // "today"'s fiscal year/month before either is explicitly set — that part
-  // is unchanged — only the two boxes that let you set them ON THIS SCREEN
-  // are gone; setting either now happens through GlobalFilterBar's "Add
-  // filter" like every other filter. The ref.listen in build() below still
-  // covers all of them, so a filter set on a different screen (or via
-  // GlobalFilterBar right here) still triggers a refetch.
+  // _effectiveFiscalYear/_effectiveFiscalMonth), which as of 2026-09-29 no
+  // longer apply any bare-landing "today's fiscal year/month" default — see
+  // those methods' own doc comments — only the two boxes that let you set
+  // them ON THIS SCREEN are gone; setting either now happens through
+  // GlobalFilterBar's "Add filter" like every other filter. The ref.listen
+  // in build() below still covers all of them, so a filter set on a
+  // different screen (or via GlobalFilterBar right here) still triggers a
+  // refetch.
 
   @override
   void initState() {
@@ -179,34 +180,25 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   /// default straight to the current fiscal year the moment Year was unset,
   /// even with a Month filter active on its own — same class of bug as
   /// document_analysis_view.dart's `_effectiveFiscalYear` (see that file's
-  /// own doc comment on the fix), fixed the same way: only default to the
-  /// current fiscal year when NEITHER Year nor Month is set at all. A Month
-  /// filter on its own now returns null here, so `fetchDimensionPerformance`
-  /// (which already treats a null `fiscalYear` as "every fiscal year",
-  /// unlike this screen's old always-current-year default) can return one
-  /// row per entity PER FISCAL YEAR that has data for that month — `_load`
-  /// below collapses those into a single merged row per entity when that
-  /// happens (see `mergeAcrossYears`'s own doc comment, core/utils/performance_rollup.dart).
+  /// own doc comment on the fix), fixed the same way at the time: only
+  /// default to the current fiscal year when NEITHER Year nor Month/Quarter
+  /// is set at all.
+  ///
+  /// 2026-09-29, Craig: that remaining bare-landing-view default (current
+  /// fiscal year, paired below with the current fiscal month) was itself
+  /// silently narrowing the table with no chip shown for either — see
+  /// document_analysis_view.dart's `_effectiveFiscalYear` doc comment for the
+  /// full report and decision ("default to all data and then allow the user
+  /// to filter as they please"). Dropped entirely, alongside the matching
+  /// month default in `_effectiveFiscalMonth` below — this now always mirrors
+  /// `filters.fiscalYear` exactly. `fetchDimensionPerformance` already treats
+  /// a null `fiscalYear` as "every fiscal year", so a bare landing view (or a
+  /// bare Month/Quarter on its own) returns one row per entity PER FISCAL
+  /// YEAR that has data — `_load` below collapses those into a single merged
+  /// row per entity when that happens (see `mergeAcrossYears`'s own doc
+  /// comment, core/utils/performance_rollup.dart).
   int? _effectiveFiscalYear(GlobalFilters filters) {
-    if (filters.fiscalYear != null) return filters.fiscalYear;
-    if (filters.fiscalMonth != null) return null;
-    // 2026-09-07: Craig, testing Quarter for the first time — "This needs to
-    // work the same way as Month. If no year is selected then it must sum
-    // all of the filtered quarters." A bare Quarter used to default to the
-    // CURRENT fiscal year here instead of spanning every year on record, the
-    // way a bare Month already does — deliberately, at the time: `rawRows`
-    // spanning both several fiscal years AND up to 3 months at once had no
-    // existing merge path (`mergeAcrossYears`/`mergeAcrossMonths`,
-    // performance_rollup.dart, each collapse only one of those two
-    // dimensions of multiplicity on their own). `mergeAcrossQuarterMonths`
-    // (added the same day, same file) resolves that by composing the two
-    // rather than needing new formula math — see its own doc comment — so a
-    // bare Quarter now behaves exactly like a bare Month: null here means
-    // "every fiscal year on record," not just the current one.
-    if (filters.fiscalQuarter != null) return null;
-    // Fully unfiltered (neither Year, Month, nor Quarter set) still defaults
-    // to the current fiscal year — unchanged.
-    return fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+    return filters.fiscalYear;
   }
 
   /// 2026-09-02, Craig: "it does not recognise a only year filter. i.e. If I
@@ -216,22 +208,21 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   /// a Year filter WAS explicitly set on its own — so "Year 2027" silently
   /// became "Year 2027 + (today's fiscal month)," which can easily have
   /// little or no data if today's fiscal month has barely started (Craig hit
-  /// this on 2026-09-02, day 2 of September). Fixed the same way: only
-  /// default to the current fiscal month when NEITHER Year nor Month is set.
-  /// A Year-only filter now returns null here, so `fetchDimensionPerformance`
-  /// (which already treats a null `fiscalMonth` as "every fiscal month",
-  /// same as it always has for `fiscalYear`) can return one row per entity
-  /// PER FISCAL MONTH within that year — `_load` below collapses those into
-  /// a single merged row per entity via `mergeAcrossMonths`
+  /// this on 2026-09-02, day 2 of September). Fixed at the time by only
+  /// defaulting to the current fiscal month when NEITHER Year nor Month is
+  /// set.
+  ///
+  /// 2026-09-29: that remaining bare-landing-view default is gone too now —
+  /// see `_effectiveFiscalYear` above for the full reasoning (Craig: "default
+  /// to all data"). This now always mirrors `filters.fiscalMonth` exactly.
+  /// `fetchDimensionPerformance` already treats a null `fiscalMonth` as
+  /// "every fiscal month", same as it always has for `fiscalYear`, so a bare
+  /// landing view (or a Year-only filter) can return one row per entity PER
+  /// FISCAL MONTH within that year — `_load` below collapses those into a
+  /// single merged row per entity via `mergeAcrossMonths`
   /// (core/utils/performance_rollup.dart) when that happens.
   String? _effectiveFiscalMonth(GlobalFilters filters) {
-    if (filters.fiscalMonth != null) return filters.fiscalMonth;
-    // 2026-09-07: a Quarter filter takes over "which period" from the
-    // default-to-today's-month fallback, same as Year already does just
-    // below — `_effectiveFiscalQuarterMonths` carries the actual filtering
-    // in that case instead.
-    if (filters.fiscalYear != null || filters.fiscalQuarter != null) return null;
-    return _currentFiscalMonthLabel(DateTime.now());
+    return filters.fiscalMonth;
   }
 
   /// Quarter's own effective-period resolution, alongside
