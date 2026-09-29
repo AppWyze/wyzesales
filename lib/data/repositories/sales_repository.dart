@@ -6,12 +6,15 @@ import '../models/dimension_monthly_sales.dart';
 import '../models/dimension_performance.dart';
 import '../models/sales_document.dart';
 
-/// Everything Sales Analysis, YTD Comparative, Quote Analysis, Sales Order
-/// Analysis, Sales by [Dimension], and Performance read from — three views
+/// Everything Sales Analysis, YTD Comparative, Sales by [Dimension], and
+/// Performance read from — three views
 /// (v_sales_documents, v_dimension_monthly_sales, v_dimension_performance),
 /// per schema/001 Section 9 and schema/002. All reads; RLS on the underlying
 /// tables already restricts every query to the caller's own client_id (see
 /// AuthRepository's doc comment), so nothing here needs a client_id filter.
+/// (Quote Analysis and Sales Order Analysis, which used to read from here
+/// too, were removed from the app 2026-09-02, task #93, Wyzesales_Rebuild_
+/// Decisions.md Section 55.)
 ///
 /// 2026-08-26 (schema/011, global cross-dimension filters): fetchDimension
 /// MonthlySales/fetchConsolidatedSales/fetchDimensionPerformance now take an
@@ -29,9 +32,10 @@ import '../models/sales_document.dart';
 /// column. Both paths return the exact same row shape, so the existing
 /// model classes' fromMap needs no changes either way.
 class SalesRepository {
-  /// Line-level detail, ONE PAGE at a time — Sales Analysis' Table tab when
-  /// documentKinds is ['invoice','credit_note'], Quote Analysis when
-  /// ['quote'], Sales Order Analysis when ['sales_order'].
+  /// Line-level detail, ONE PAGE at a time — Sales Analysis' Table tab, whose
+  /// documentKinds is core/constants/document_kinds.dart's
+  /// kRevenueDocumentKinds (Quote Analysis/Sales Order Analysis, which used
+  /// to call this with ['quote']/['sales_order'], were removed 2026-09-02).
   ///
   /// 2026-08-27, Craig, after Sales Analysis loaded 448 lines in one shot:
   /// "What happens when there 4000 lines? What is considered the norm in
@@ -204,8 +208,8 @@ class SalesRepository {
   /// monthly_sales_filtered etc., migration 042/047), so callers just pass
   /// `filters.toFilterParams()` straight through instead of pulling five
   /// individual dimensions out by hand. This is what lets Document Analysis
-  /// (Sales/Quote/Sales Order Analysis) filter by ANY of a client's own
-  /// configured dimensions, not just WCSA's fixed five.
+  /// (Sales Analysis' Table tab) filter by ANY of a client's own configured
+  /// dimensions, not just WCSA's fixed five.
   Map<String, dynamic> _salesDocumentsFilterParams({
     required List<String> documentKinds,
     int? fiscalYear,

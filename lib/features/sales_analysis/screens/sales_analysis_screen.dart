@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/app_providers.dart';
+import '../../../core/constants/document_kinds.dart';
 import '../../../core/constants/fiscal.dart';
 import '../../../core/filters/global_filters.dart';
 import '../../../core/theme/app_theme.dart';
@@ -199,12 +200,9 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
                   onExportReady: (fn) => _chartExporter = fn,
                 ),
                 DocumentAnalysisView(
-                  // 2026-09-22: includes 'journal'/'adjustment' alongside the
-                  // original two kinds - Edgetec's GL-sourced extract posts
-                  // real revenue-bearing lines under those kinds (journal
-                  // entries and rare adjustments), not just invoice/credit
-                  // note. Harmless for WCSA, which never produces either.
-                  documentKinds: const ['invoice', 'credit_note', 'journal', 'adjustment'],
+                  // See kRevenueDocumentKinds' own doc comment (core/constants/
+                  // document_kinds.dart) for what's in this list and why.
+                  documentKinds: kRevenueDocumentKinds,
                   showExportButtons: false,
                   fromDate: _fromDate,
                   toDate: _toDate,
@@ -892,10 +890,9 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final repo = ref.read(salesRepositoryProvider);
     final filters = ref.read(globalFiltersProvider);
     final totals = await repo.fetchSalesDocumentsMonthlyTotals(
-      // See the other documentKinds list above (Table tab) for why 'journal'
-      // and 'adjustment' are included here too - keeps this range graph's
-      // totals consistent with what the Table tab shows for the same range.
-      documentKinds: const ['invoice', 'credit_note', 'journal', 'adjustment'],
+      // kRevenueDocumentKinds (core/constants/document_kinds.dart) - keeps this
+      // range graph's totals consistent with what the Table tab shows.
+      documentKinds: kRevenueDocumentKinds,
       fromDate: fromDate,
       toDate: toDate,
       filters: filters.toFilterParams(),
