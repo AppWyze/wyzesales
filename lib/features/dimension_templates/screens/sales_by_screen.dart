@@ -228,9 +228,12 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     // config rather than risk racing it on a cold load (see this class'
     // own dimension field doc comment).
     final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(widget.dimension);
-    final names = dimensionConfig == null
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes.
+    final clientId = ref.read(sessionProvider).value?.clientId;
+    final names = dimensionConfig == null || clientId == null
         ? <String, String>{}
-        : await ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig);
+        : await ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig, clientId);
 
     final months = rows.map((r) => r.month).toSet().toList()..sort((a, b) => b.compareTo(a));
     final recentMonths = months.take(3).toList();

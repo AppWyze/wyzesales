@@ -167,8 +167,32 @@ class ReferenceDataRepository {
   /// reference table of their own. WCSA's own dimensions are all 'existing',
   /// so this table stays empty and unused for WCSA today — see
   /// `entitiesForConfig`'s own doc comment.
-  Future<List<CodeName>> dimensionValues(String dimensionKey, {String? search}) async {
-    var query = supabase.from('client_dimension_values').select('code, name').eq('dimension_key', dimensionKey);
+  ///
+  /// BUG, caught 2026-09-28 (Craig, Morgenster: "it is mixing clients data
+  /// together"): this had no `client_id` filter at all, on the same wrong
+  /// assumption `clientDimensions()` was already caught making once before
+  /// (see that method's 2026-09-07 doc comment for the full story) —
+  /// `client_dimension_values_select`'s RLS is deliberately permissive for
+  /// `is_platform_admin()` accounts, so the Platform Admin Dimensions tab's
+  /// value editor can manage any client's rows (see
+  /// `PlatformAdminRepository.fetchClientDimensionValues`, a *separate,
+  /// already-client-scoped* code path). "WyzeSales Support," the account
+  /// actually used day-to-day, IS a platform admin — so this query (which
+  /// backs the ORDINARY, non-admin "Filter by <dimension>" picker used
+  /// throughout Sales Analysis/Dashboard/Budgets, via `entitiesForConfig`)
+  /// was silently returning every client's dimension values unioned
+  /// together, not just the caller's own. `clientId` is now required, not
+  /// optional, and taken from the caller (ultimately `sessionProvider`'s own
+  /// `Profile`, same source `clientDimensions()`/`clientDimensionsProvider`
+  /// already use) — required rather than defaulted specifically so a future
+  /// caller can't reintroduce this same gap by simply forgetting an optional
+  /// argument, the way this one was missed the first time.
+  Future<List<CodeName>> dimensionValues(String dimensionKey, String clientId, {String? search}) async {
+    var query = supabase
+        .from('client_dimension_values')
+        .select('code, name')
+        .eq('dimension_key', dimensionKey)
+        .eq('client_id', clientId);
     if (search != null && search.isNotEmpty) {
       query = query.ilike('name', '%$search%');
     }
@@ -188,18 +212,27 @@ class ReferenceDataRepository {
   /// has) delegates straight through `asSalesDimension` to the original,
   /// unchanged `entitiesFor`/`namesFor` — so WCSA's own behaviour here is
   /// byte-for-byte the same code path as before this existed.
-  Future<List<CodeName>> entitiesForConfig(ClientDimensionConfig dimension, {String? search, String? customerAssignedRepCode}) {
+  /// `clientId` (required 2026-09-28, same fix/reasoning as `dimensionValues`'
+  /// own doc comment) is only ever actually used on the generic-dimension
+  /// branch below — an 'existing' dimension's five underlying tables
+  /// (customers/items/branches/sales_reps/categories) are each already
+  /// correctly RLS-scoped with no `is_platform_admin()` bypass (confirmed
+  /// directly against the database), so `entitiesFor` doesn't need it. Still
+  /// required on every call here, not optional, so this can't silently start
+  /// dropping it for the one branch that does.
+  Future<List<CodeName>> entitiesForConfig(ClientDimensionConfig dimension, String clientId,
+      {String? search, String? customerAssignedRepCode}) {
     final existing = dimension.asSalesDimension;
     if (existing != null) {
       return entitiesFor(existing, search: search, customerAssignedRepCode: customerAssignedRepCode);
     }
-    return dimensionValues(dimension.dimensionKey, search: search);
+    return dimensionValues(dimension.dimensionKey, clientId, search: search);
   }
 
-  Future<Map<String, String>> namesForConfig(ClientDimensionConfig dimension) async {
+  Future<Map<String, String>> namesForConfig(ClientDimensionConfig dimension, String clientId) async {
     final existing = dimension.asSalesDimension;
     if (existing != null) return namesFor(existing);
-    final list = await entitiesForConfig(dimension);
+    final list = await entitiesForConfig(dimension, clientId);
     return {for (final c in list) c.code: c.displayLabel};
   }
 
@@ -270,10 +303,15 @@ class ReferenceDataRepository {
   /// Filtered here to `drivesCrossFilter`, exactly matching the old
   /// `SalesDimension.filterable` exclusion of `company` (schema/038's WCSA
   /// seed comment) — `company` has no meaningful entity to search for.
-  Future<List<DimensionSearchResult>> searchAllDimensions(String query, List<ClientDimensionConfig> clientDimensions) async {
+  /// `clientId` required 2026-09-28 — see `dimensionValues`'s doc comment;
+  /// this was the same leak, reachable through the top-bar search box
+  /// (typing another client's category name here would have matched it and
+  /// shown it tagged as this client's own).
+  Future<List<DimensionSearchResult>> searchAllDimensions(
+      String query, List<ClientDimensionConfig> clientDimensions, String clientId) async {
     if (query.trim().isEmpty) return [];
     final dimensions = clientDimensions.where((d) => d.drivesCrossFilter).toList();
-    final byDimension = await Future.wait(dimensions.map((d) => entitiesForConfig(d, search: query)));
+    final byDimension = await Future.wait(dimensions.map((d) => entitiesForConfig(d, clientId, search: query)));
     final results = <DimensionSearchResult>[];
     for (var i = 0; i < dimensions.length; i++) {
       for (final entity in byDimension[i].take(6)) {

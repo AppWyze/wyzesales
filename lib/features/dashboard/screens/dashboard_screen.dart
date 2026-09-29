@@ -1226,15 +1226,18 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       // raw key — same ordering PerformanceScreen's own dimension-aware
       // fetch already uses.
       final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(dimension);
+      // clientId required 2026-09-28 — see ReferenceDataRepository.
+      // dimensionValues' doc comment for the leak this closes.
+      final clientId = ref.read(sessionProvider).value?.clientId;
       final results = await Future.wait([
         ref.read(salesRepositoryProvider).fetchDimensionMonthlySales(
               dimension: dimension,
               fiscalYears: [currentFy - 1, currentFy],
               filters: filters,
             ),
-        dimensionConfig == null
+        dimensionConfig == null || clientId == null
             ? Future.value(<String, String>{})
-            : ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig),
+            : ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig, clientId),
       ]);
       if (!mounted || requestId != _dimensionRequestId) return; // a newer load (filter change, dimension pick, or refresh) already superseded this one
       setState(() {

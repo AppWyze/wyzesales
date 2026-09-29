@@ -155,7 +155,13 @@ class _TopBarSearchState extends ConsumerState<TopBarSearch> {
     // schema/038) — see `searchAllDimensions`'s own doc comment for why the
     // repository itself can't read `clientDimensionsProvider` directly.
     final clientDimensions = ref.read(clientDimensionsProvider).valueOrNull ?? const <ClientDimensionConfig>[];
-    final fetched = await Future.wait([refRepo.searchAllDimensions(value, clientDimensions), refRepo.searchDocuments(value)]);
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes.
+    final clientId = ref.read(sessionProvider).value?.clientId;
+    final fetched = await Future.wait([
+      clientId == null ? Future.value(<DimensionSearchResult>[]) : refRepo.searchAllDimensions(value, clientDimensions, clientId),
+      refRepo.searchDocuments(value),
+    ]);
     if (!mounted) return;
     final dimensionResults = fetched[0] as List<DimensionSearchResult>;
     final documentResults = fetched[1] as List<DocumentSearchResult>;

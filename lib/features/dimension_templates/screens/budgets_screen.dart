@@ -240,11 +240,12 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     // .future, not .valueOrNull — see SalesByScreen._load()'s identical
     // comment for why this is safe/correct inside an already-async load.
     final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(widget.dimension);
-    final list = dimensionConfig == null
+    final list = dimensionConfig == null || profile?.clientId == null
         ? <CodeName>[]
         : await ref.read(referenceDataRepositoryProvider).entitiesForConfig(
             dimensionConfig,
-            customerAssignedRepCode: restrictToOwnCustomers ? profile?.repCode : null,
+            profile!.clientId,
+            customerAssignedRepCode: restrictToOwnCustomers ? profile.repCode : null,
           );
     final data = _BudgetEntityData(list);
     _applyGlobalFilterSelection(data);

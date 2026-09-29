@@ -286,6 +286,9 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // .future, not .valueOrNull — see SalesByScreen._load()'s identical
     // comment for why this is safe/correct inside an already-async load.
     final dimensionConfig = (await ref.read(clientDimensionsProvider.future)).forKey(widget.dimension);
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes.
+    final clientId = ref.read(sessionProvider).value?.clientId;
     final results = await Future.wait([
       ref.read(salesRepositoryProvider).fetchDimensionPerformance(
             dimension: widget.dimension,
@@ -294,9 +297,9 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             fiscalQuarterMonths: effectiveQuarterMonths,
             filters: filters,
           ),
-      dimensionConfig == null
+      dimensionConfig == null || clientId == null
           ? Future.value(<String, String>{})
-          : ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig),
+          : ref.read(referenceDataRepositoryProvider).namesForConfig(dimensionConfig, clientId),
       ref.read(salesRepositoryProvider).fetchSalesHistory(dimension: widget.dimension, fiscalYears: historyWindow),
       ref.read(salesRepositoryProvider).fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
     ]);

@@ -140,8 +140,15 @@ class _EntitySearchDialogState extends ConsumerState<_EntitySearchDialog> {
   Future<void> _search(String value) async {
     setState(() => _loading = true);
     final trimmed = value.trim();
-    final results =
-        await ref.read(referenceDataRepositoryProvider).entitiesForConfig(widget.dimension, search: trimmed.isEmpty ? null : trimmed);
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes; sourced the
+    // same way clientDimensionsProvider/currentClientProvider already do.
+    final clientId = ref.read(sessionProvider).value?.clientId;
+    final results = clientId == null
+        ? <CodeName>[]
+        : await ref
+            .read(referenceDataRepositoryProvider)
+            .entitiesForConfig(widget.dimension, clientId, search: trimmed.isEmpty ? null : trimmed);
     if (!mounted) return;
     setState(() {
       _results = results;
@@ -300,8 +307,15 @@ class _EntityMultiSelectDialogState extends ConsumerState<_EntityMultiSelectDial
   Future<void> _search(String value) async {
     setState(() => _loading = true);
     final trimmed = value.trim();
-    final results =
-        await ref.read(referenceDataRepositoryProvider).entitiesForConfig(widget.dimension, search: trimmed.isEmpty ? null : trimmed);
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes; sourced the
+    // same way clientDimensionsProvider/currentClientProvider already do.
+    final clientId = ref.read(sessionProvider).value?.clientId;
+    final results = clientId == null
+        ? <CodeName>[]
+        : await ref
+            .read(referenceDataRepositoryProvider)
+            .entitiesForConfig(widget.dimension, clientId, search: trimmed.isEmpty ? null : trimmed);
     if (!mounted) return;
     setState(() {
       _results = results;

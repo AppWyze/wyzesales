@@ -244,7 +244,12 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
       ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
     final repo = ref.read(referenceDataRepositoryProvider);
     final generic = dimensions.where((d) => d.resolutionKind != 'existing').toList();
-    final nameLists = await Future.wait(generic.map((d) => repo.namesForConfig(d)));
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes.
+    final clientId = ref.read(sessionProvider).value?.clientId;
+    final nameLists = clientId == null
+        ? <Map<String, String>>[for (final _ in generic) <String, String>{}]
+        : await Future.wait(generic.map((d) => repo.namesForConfig(d, clientId)));
     return _DimensionSetup(
       dimensions: dimensions,
       names: {for (var i = 0; i < generic.length; i++) generic[i].dimensionKey: nameLists[i]},

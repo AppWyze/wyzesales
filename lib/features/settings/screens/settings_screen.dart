@@ -1697,9 +1697,14 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
     final repo = ref.read(referenceDataRepositoryProvider);
     final dimensions = await ref.read(clientDimensionsProvider.future);
     final scopeDimension = _findScopeDimension(dimensions);
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes.
+    final clientId = ref.read(sessionProvider).value?.clientId;
     final results = await Future.wait([
       repo.salesReps(),
-      scopeDimension == null || scopeDimension.dimensionKey == 'branch' ? repo.branches() : repo.entitiesForConfig(scopeDimension),
+      scopeDimension == null || scopeDimension.dimensionKey == 'branch'
+          ? repo.branches()
+          : (clientId == null ? Future.value(<CodeName>[]) : repo.entitiesForConfig(scopeDimension, clientId)),
     ]);
     if (!mounted) return;
     setState(() {
@@ -1955,9 +1960,14 @@ class _EditUserDialogState extends ConsumerState<_EditUserDialog> {
     final repo = ref.read(referenceDataRepositoryProvider);
     final dimensions = await ref.read(clientDimensionsProvider.future);
     final scopeDimension = _findScopeDimension(dimensions);
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes.
+    final clientId = ref.read(sessionProvider).value?.clientId;
     final results = await Future.wait([
       repo.salesReps(),
-      scopeDimension == null || scopeDimension.dimensionKey == 'branch' ? repo.branches() : repo.entitiesForConfig(scopeDimension),
+      scopeDimension == null || scopeDimension.dimensionKey == 'branch'
+          ? repo.branches()
+          : (clientId == null ? Future.value(<CodeName>[]) : repo.entitiesForConfig(scopeDimension, clientId)),
     ]);
     if (!mounted) return;
     setState(() {

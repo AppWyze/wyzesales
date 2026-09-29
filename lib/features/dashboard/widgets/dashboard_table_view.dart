@@ -264,11 +264,14 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
 
     final salesRepo = ref.read(salesRepositoryProvider);
     final referenceRepo = ref.read(referenceDataRepositoryProvider);
+    // clientId required 2026-09-28 — see ReferenceDataRepository.
+    // dimensionValues' doc comment for the leak this closes.
+    final clientId = ref.read(sessionProvider).value?.clientId;
 
     return Future.wait(dimensions.map((dimension) async {
       final results = await Future.wait([
         salesRepo.fetchDimensionMonthlySales(dimension: dimension.dimensionKey, fiscalYears: [year], filters: effectiveFilters),
-        referenceRepo.namesForConfig(dimension),
+        clientId == null ? Future.value(<String, String>{}) : referenceRepo.namesForConfig(dimension, clientId),
       ]);
       final rows = results[0] as List<DimensionMonthlySales>;
       final names = results[1] as Map<String, String>;
