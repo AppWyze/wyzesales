@@ -284,6 +284,17 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
       ref.read(salesRepositoryProvider).fetchDimensionPerformance(
             dimension: widget.dimension,
             fiscalYear: effectiveYear,
+            // 2026-09-29 (schema/wyzesales_dimension_performance_fiscal_years_window)
+            // — no explicit Year picked (bare landing, or a Month/Quarter-only
+            // filter) now caps to the same trailing history window
+            // `historyWindow` already computes for the coverage-history
+            // baseline just above, rather than truly every year on record —
+            // see `_effectiveFiscalYear`'s own doc comment for why (Craig,
+            // comparing this screen's totals against Sales Analysis' Chart
+            // tab, asked for the same boundary everywhere). Null (ignored)
+            // whenever an explicit Year IS picked, since `fiscalYear` alone
+            // already scopes the query correctly in that case.
+            fiscalYears: effectiveYear == null ? historyWindow : null,
             fiscalMonth: effectiveMonth,
             fiscalQuarterMonths: effectiveQuarterMonths,
             filters: filters,

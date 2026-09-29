@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../core/app_providers.dart';
+import '../../core/constants/fiscal.dart';
 import '../../core/filters/global_filters.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/client_dimension_config.dart';
@@ -283,22 +284,58 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     return filters.fiscalYear;
   }
 
+  /// 2026-09-29, Craig, comparing this screen's Total against its Chart tab
+  /// (which has always been a fixed trailing window — see
+  /// sales_analysis_screen.dart's `_GraphTab._graphFilters` doc comment):
+  /// once `_effectiveFiscalYear` above stopped silently narrowing to the
+  /// current fiscal year, a bare landing view's Total could include fiscal
+  /// years further back than the Chart's own window, since the Chart is
+  /// always capped to the client's configured Data History Window (Settings
+  /// > Company, `fiscalYearHistoryYearsProvider`) while the Table had become
+  /// truly unbounded. Verified against Morgenster's real data: 6 fiscal years
+  /// on record (2021-2026) against a 5-year window meant the Table's total
+  /// included all of FY2021 that the Chart never could. Craig: "cap the
+  /// Table to the history window too" — same boundary the Chart, Sales By,
+  /// and the Year-filter picker's own data-availability check already share.
+  ///
+  /// Implemented as a lower bound on `doc_date` rather than a change to
+  /// `fn_sales_documents_page`/`_totals` themselves — both already accept an
+  /// optional `p_from_date`/`p_to_date` (wired for Sales Analysis' own
+  /// custom date-range picker, see `fromDate`/`toDate`'s doc comment) that
+  /// ANDs with `p_fiscal_year` rather than replacing it, so leaving
+  /// `p_fiscal_year` null and passing the oldest in-window fiscal year's
+  /// start date here gets the exact same effect with no migration needed.
+  /// Returns null (no lower bound at all) whenever an explicit Year IS
+  /// picked — same case `_effectiveFiscalYear` already passes straight
+  /// through — since an explicit Year is never itself outside the window
+  /// (the Year picker only ever offers years the window's own data-
+  /// availability check lists).
+  DateTime? _effectiveFromDate(GlobalFilters filters, int startMonth, int historyYears) {
+    if (filters.fiscalYear != null) return null;
+    final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
+    final oldestFy = fiscalYearWindow(currentFy, historyYears).first;
+    return fiscalYearStart(oldestFy, startMonth: startMonth);
+  }
+
   Future<_PageData> _loadPage() async {
     // Memoized (see `_dimSetupFuture`'s own doc comment) — awaiting it again
     // on every page turn/sort/filter change replays the cached result rather
     // than re-querying client_dimensions/client_dimension_values.
     final dimSetup = await _dimSetupFuture;
     final filters = ref.read(globalFiltersProvider);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     // A custom date range (Sales Analysis only — see `fromDate`/`toDate`'s
-    // own doc comment) REPLACES Year/Month/Quarter entirely for this fetch,
-    // rather than combining with them — same mutual-exclusivity Month and
-    // Quarter already have with each other.
+    // own doc comment) REPLACES Year/Month/Quarter (and the history-window
+    // lower bound below) entirely for this fetch, rather than combining with
+    // them — same mutual-exclusivity Month and Quarter already have with
+    // each other.
     final rows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
           fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters),
           fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
           fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
-          fromDate: widget.fromDate,
+          fromDate: _hasDateRange ? widget.fromDate : _effectiveFromDate(filters, startMonth, historyYears),
           toDate: widget.toDate,
           filters: filters.toFilterParams(),
           document: filters.document,
@@ -312,13 +349,15 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
 
   Future<void> _loadTotals() async {
     final filters = ref.read(globalFiltersProvider);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     try {
       final totals = await ref.read(salesRepositoryProvider).fetchSalesDocumentsTotals(
             documentKinds: widget.documentKinds,
             fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters),
             fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
             fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
-            fromDate: widget.fromDate,
+            fromDate: _hasDateRange ? widget.fromDate : _effectiveFromDate(filters, startMonth, historyYears),
             toDate: widget.toDate,
             filters: filters.toFilterParams(),
             document: filters.document,
@@ -503,12 +542,14 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
     // Memoized — see `_dimSetupFuture`'s own doc comment.
     final dimSetup = await _dimSetupFuture;
     final filters = ref.read(globalFiltersProvider);
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final historyYears = ref.read(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
     final allRows = await ref.read(salesRepositoryProvider).fetchSalesDocumentsPage(
           documentKinds: widget.documentKinds,
           fiscalYear: _hasDateRange ? null : _effectiveFiscalYear(filters),
           fiscalMonth: _hasDateRange ? null : filters.fiscalMonth,
           fiscalQuarterMonths: _hasDateRange ? null : filters.fiscalQuarterMonths,
-          fromDate: widget.fromDate,
+          fromDate: _hasDateRange ? widget.fromDate : _effectiveFromDate(filters, startMonth, historyYears),
           toDate: widget.toDate,
           filters: filters.toFilterParams(),
           document: filters.document,

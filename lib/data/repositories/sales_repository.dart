@@ -327,10 +327,20 @@ class SalesRepository {
   ///
   /// `dimension` is a plain dimension_key string — see
   /// fetchDimensionMonthlySales' own doc comment (2026-09-06, Step 4) for why.
+  ///
+  /// 2026-09-29 (schema/wyzesales_dimension_performance_fiscal_years_window):
+  /// `fiscalYears`, alongside the pre-existing single `fiscalYear` — lets
+  /// performance_screen.dart cap its own "no Year filter" default to the
+  /// client's configured Data History Window (fiscalYearWindow(...)) rather
+  /// than truly every year on record, same boundary Sales By/the Sales
+  /// Analysis Chart tab already use. Takes priority over `fiscalYear` when
+  /// both are given (callers should only ever set one); omitted entirely,
+  /// behavior is identical to before this field existed.
   Future<List<DimensionPerformance>> fetchDimensionPerformance({
     required String dimension,
     String? entityCode,
     int? fiscalYear,
+    List<int>? fiscalYears,
     String? fiscalMonth,
     // 2026-09-07 (schema/047) — Quarter, resolved to its 3 fiscal months.
     // Explicit param, not read off `filters`, same reasoning as `fiscalMonth`
@@ -353,7 +363,11 @@ class SalesRepository {
       final rows = await _fetchAllRows(() {
         var query = supabase.from('v_dimension_performance').select().eq('dimension', dimension);
         if (entityCode != null) query = query.eq('entity_code', entityCode);
-        if (fiscalYear != null) query = query.eq('fiscal_year', fiscalYear);
+        if (fiscalYears != null) {
+          query = query.inFilter('fiscal_year', fiscalYears);
+        } else if (fiscalYear != null) {
+          query = query.eq('fiscal_year', fiscalYear);
+        }
         if (fiscalMonth != null) query = query.eq('fiscal_month', fiscalMonth);
         if (fiscalQuarterMonths != null) query = query.inFilter('fiscal_month', fiscalQuarterMonths);
         return query.order('fiscal_year').order('fiscal_month');
@@ -368,6 +382,7 @@ class SalesRepository {
           'p_fiscal_month': fiscalMonth,
           'p_filters': filters.toFilterParams(),
           'p_fiscal_quarter_months': fiscalQuarterMonths,
+          'p_fiscal_years': fiscalYears,
         }));
     return rows.map<DimensionPerformance>((r) => DimensionPerformance.fromMap(r)).toList();
   }
