@@ -310,8 +310,24 @@ class _DocumentAnalysisViewState extends ConsumerState<DocumentAnalysisView> {
   /// through — since an explicit Year is never itself outside the window
   /// (the Year picker only ever offers years the window's own data-
   /// availability check lists).
+  ///
+  /// 2026-09-29 (later the same day), Craig: searching Document
+  /// "IN202342" (a real Morgenster invoice, dated 2021-11-23) returned
+  /// "No data for the current filters" even though the document
+  /// genuinely exists — because this guard only ever checked
+  /// `filters.fiscalYear`, so an explicit Document search (or any other
+  /// explicit filter — Customer, Item, Sales Person, Branch, Category,
+  /// Month, Quarter) sailed straight past it and still got silently
+  /// floored to the history window, with no chip or any other UI
+  /// indication that anything had been excluded. Same bug class, same
+  /// root cause, as `_effectiveFiscalYear`'s own fix above — an implicit
+  /// default silently overriding what should be a "show everything
+  /// unless told otherwise" search. Craig confirmed the fix should cover
+  /// ANY explicit filter, not just Document, so the guard now checks
+  /// `filters.isEmpty` (true only when nothing at all is set) instead of
+  /// `filters.fiscalYear != null` alone.
   DateTime? _effectiveFromDate(GlobalFilters filters, int startMonth, int historyYears) {
-    if (filters.fiscalYear != null) return null;
+    if (!filters.isEmpty) return null;
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: startMonth);
     final oldestFy = fiscalYearWindow(currentFy, historyYears).first;
     return fiscalYearStart(oldestFy, startMonth: startMonth);

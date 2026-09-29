@@ -294,7 +294,21 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             // tab, asked for the same boundary everywhere). Null (ignored)
             // whenever an explicit Year IS picked, since `fiscalYear` alone
             // already scopes the query correctly in that case.
-            fiscalYears: effectiveYear == null ? historyWindow : null,
+            //
+            // 2026-09-29 (later the same day), Craig found the same bug
+            // shape as document_analysis_view.dart's `_effectiveFromDate`
+            // (see that file's doc comment for the full report — Document
+            // "IN202342" silently excluded by the history window with no
+            // explicit Year set): this guard only ever checked
+            // `effectiveYear`, so an explicit Month/Quarter, or an explicit
+            // dimension filter (Customer, Item, Sales Person, Branch,
+            // Category — passed below as `filters`), still got silently
+            // floored to the history window even though the user had
+            // clearly asked for something specific. Craig confirmed the fix
+            // should cover ANY explicit filter, not just Year, so this now
+            // gates on `filters.isEmpty` (true only when nothing at all is
+            // set) instead of `effectiveYear == null` alone.
+            fiscalYears: filters.isEmpty ? historyWindow : null,
             fiscalMonth: effectiveMonth,
             fiscalQuarterMonths: effectiveQuarterMonths,
             filters: filters,
