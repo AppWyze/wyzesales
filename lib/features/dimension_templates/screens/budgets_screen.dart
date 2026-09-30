@@ -250,7 +250,35 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
             customerAssignedRepCode: restrictToOwnCustomers ? profile.repCode : null,
           );
     final data = _BudgetEntityData(list);
-    _applyGlobalFilterSelection(data);
+    // 2026-09-30, Craig, after confirming the filter-driven redesign above
+    // works everywhere else: "This works perfectly except for Company. I
+    // suggest we merge the Contribution by entity screen and the actual
+    // Sales Budget, Seasonal Forecast Screen for only Company into one."
+    // Root cause: Company always has exactly ONE entity — `entitiesFor`'s
+    // own doc comment, `CodeName(code: 'ALL', name: 'Company')`, no real
+    // reference table backs it — and `company` is deliberately excluded
+    // from `SalesDimension.filterable` (global_filter_bar.dart), so it was
+    // never offered as a filterable dimension in "Add filter"/the search
+    // bar at all, for any screen. That's harmless everywhere else (Sales
+    // By/Performance just show the one Company row directly), but for
+    // Budgets specifically it meant `_applyGlobalFilterSelection` could
+    // never fire for this dimension once the standalone entity-list panel
+    // was removed — with no filter able to select it and no list left to
+    // click it from, Company's month table became permanently unreachable,
+    // stuck showing a "Company: 100%" one-row summary that told you
+    // nothing you didn't already know just from being on this screen.
+    // Since there is never a second entity to choose between, select the
+    // one there is unconditionally rather than routing it through the
+    // filter — the Contribution summary would be pure redundancy for this
+    // one dimension (a single row that's always 100% of itself), so skip
+    // straight to the real Sales Budget/Seasonal Forecast view every time,
+    // exactly as Craig asked. Every other dimension is untouched — this is
+    // the one place `widget.dimension == 'company'` is special-cased.
+    if (widget.dimension == 'company' && data.entities.isNotEmpty) {
+      if (mounted) _selectEntity(data.entities.first);
+    } else {
+      _applyGlobalFilterSelection(data);
+    }
     return data;
   }
 
