@@ -398,6 +398,35 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
       }
     });
 
+    // 2026-09-30, Craig: "On the budgets screen the filter selection does
+    // not work." Root cause: `_applyGlobalFilterSelection` (this screen's
+    // own "jump to the entity a global filter already names for THIS
+    // screen's dimension" behaviour — see that method's own doc comment)
+    // only ever ran once, from `initState`/`didUpdateWidget`, using
+    // whatever filter was already active at that moment. Every OTHER
+    // screen that reacts to the global filter bar while already open
+    // (SalesByScreen.build(), for one) does it via a `ref.listen` on
+    // `globalFiltersProvider` — this screen was simply missing the
+    // equivalent listener, so picking (or changing) a same-dimension
+    // filter via "Add filter"/the search bar while already sitting on
+    // Budgets — Sales Person did nothing visible at all until you
+    // navigated away and back (which re-runs `initState`) or switched
+    // dimensions and back. Scoped to only react when THIS screen's own
+    // dimension selection actually changed — an unrelated dimension's
+    // filter changing (which this screen can't use anyway, see
+    // `_applyGlobalFilterSelection`'s doc comment) fires this listener too
+    // but is a same-value no-op re-application, not a second bug.
+    // Re-reads `_entitiesFuture` rather than reloading it — the entity
+    // LIST itself never depends on the filter (only which one is
+    // auto-selected does), so there's nothing to re-fetch, just re-match
+    // against what's already loaded.
+    ref.listen<GlobalFilters>(globalFiltersProvider, (previous, next) {
+      if (previous?.forKey(widget.dimension) == next.forKey(widget.dimension)) return;
+      _entitiesFuture.then((data) {
+        if (mounted) _applyGlobalFilterSelection(data);
+      });
+    });
+
     // Checked separately from "not yet loaded" so a still-loading profile
     // shows a spinner instead of flashing content computed from a null
     // profile (which `_allowedDimensionsFor`/`canEditBudgets` below would
