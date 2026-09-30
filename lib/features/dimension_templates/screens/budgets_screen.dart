@@ -120,11 +120,13 @@ class _DimensionContributionData {
 /// happen to reduce to the identical formula.
 String _formatContributionPct(num value, num total) => total == 0 ? '—' : '${(value / total * 100).round()}%';
 
-/// Entity picker on the left, two 12-month fiscal columns on the right — an
-/// editable Sales Budget and a read-only Seasonal Forecast
-/// (Wyzesales_Screens_and_Recommendations.md Section 1). Editing requires
-/// adminuser (schema/008 retired superuser from this and everything else —
-/// see `Profile.canEditBudgets`'s own comment).
+/// A dimension dropdown plus the global filter bar select which entity is
+/// showing (2026-09-30 — see `build()`'s own doc comment for the standalone
+/// entity-list panel this replaced); the selected entity's own two
+/// 12-month fiscal columns are an editable Sales Budget and a read-only
+/// Seasonal Forecast (Wyzesales_Screens_and_Recommendations.md Section 1).
+/// Editing requires adminuser (schema/008 retired superuser from this and
+/// everything else — see `Profile.canEditBudgets`'s own comment).
 ///
 /// 2026-09-03, Craig (Wyzesales_Rebuild_Decisions.md Section 70): "A User
 /// must be able to see their own Budget but also Category Budget, Item
@@ -262,9 +264,10 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   ///
   /// Awaits `_entitiesFuture` itself rather than re-deriving the entity
   /// list a second way, so this always reflects the exact same
-  /// level-filtered/RLS-visible entities the picker on the left shows — an
-  /// entity a User isn't allowed to see there never appears in this
-  /// summary either. `BudgetRepository.fetchBudget`/`fetchForecast` already
+  /// level-filtered/RLS-visible entities a same-dimension filter can match
+  /// against (`_applyGlobalFilterSelection`) — an entity a User isn't
+  /// allowed to see never appears in this summary, or gets selected via a
+  /// filter, either. `BudgetRepository.fetchBudget`/`fetchForecast` already
   /// support "every entity in this dimension" by simply omitting
   /// `entityCode` (added 2026-09-03 for the Dashboard's Rep Target
   /// Attainment — see that method's own doc comment), so this needs no new
@@ -317,13 +320,26 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   /// dimension's code recorded against a budget row at all, so unlike every
   /// other screen this migration wires up, a global filter for a DIFFERENT
   /// dimension genuinely can't narrow anything here (there's no data to
-  /// narrow). What this can do is jump straight to the entity a global
+  /// narrow). What this CAN do is jump straight to the entity a global
   /// filter already names for THIS screen's own dimension — e.g. arriving
   /// on Budgets — Sales Person with a global Sales Person filter active
-  /// auto-selects that rep instead of leaving the list unselected. Flagged
-  /// in Wyzesales_Rebuild_Decisions.md Section 18 as the one screen this
-  /// pass only partially wires up, rather than silently pretending it's
-  /// fully filterable.
+  /// selects that rep instead of leaving the summary unselected.
+  ///
+  /// 2026-09-30, Craig: "Can we change the Budgets screen to work the same
+  /// way as the other screens. Defaults to Dimension = Sales Person. We can
+  /// change the Dimension via the dropdown and filter on an Entity." Until
+  /// today this was one of two ways to pick an entity (the other being the
+  /// standalone scrollable entity-list panel this screen used to show
+  /// alongside the dropdown) — Craig's ask removed that panel entirely (see
+  /// `build()`'s own doc comment), so the global filter — "Add filter"/the
+  /// top search bar, exactly like Sales By/Performance/the Dashboard — is
+  /// now the ONLY way to select an entity here, matching how every other
+  /// dimension-template screen already worked. No longer flagged as a
+  /// partial exception in Wyzesales_Rebuild_Decisions.md Section 18 — this
+  /// screen is now as fully filter-driven as the others, for its own
+  /// dimension; the cross-dimension limitation in the paragraph above still
+  /// stands (there's still no data to narrow the summary by another
+  /// dimension), that part hasn't changed.
   void _applyGlobalFilterSelection(_BudgetEntityData data) {
     final selection = ref.read(globalFiltersProvider).forKey(widget.dimension);
     if (selection == null || !mounted) return;
@@ -337,6 +353,21 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
       _selectedEntityCode = entity.code;
       _selectedEntityName = entity.displayLabel;
       _monthDataFuture = _loadMonthData(entity.code);
+    });
+  }
+
+  /// 2026-09-30: the counterpart to `_selectEntity`, now that the global
+  /// filter is the only way in or out of a selected entity (see
+  /// `_applyGlobalFilterSelection`'s doc comment) — removing this screen's
+  /// own dimension filter (the chip's own "x", "Clear all", or picking a
+  /// different search result) needs to drop back to the Contribution
+  /// summary, not leave the last-viewed entity's month table stranded on
+  /// screen with no filter chip left to explain why it's showing.
+  void _clearSelection() {
+    setState(() {
+      _selectedEntityCode = null;
+      _selectedEntityName = null;
+      _monthDataFuture = null;
     });
   }
 
@@ -411,17 +442,36 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     // filter via "Add filter"/the search bar while already sitting on
     // Budgets — Sales Person did nothing visible at all until you
     // navigated away and back (which re-runs `initState`) or switched
-    // dimensions and back. Scoped to only react when THIS screen's own
-    // dimension selection actually changed — an unrelated dimension's
-    // filter changing (which this screen can't use anyway, see
-    // `_applyGlobalFilterSelection`'s doc comment) fires this listener too
-    // but is a same-value no-op re-application, not a second bug.
-    // Re-reads `_entitiesFuture` rather than reloading it — the entity
-    // LIST itself never depends on the filter (only which one is
-    // auto-selected does), so there's nothing to re-fetch, just re-match
-    // against what's already loaded.
+    // dimensions and back.
+    //
+    // 2026-09-30 (later same day, Craig: "change the Budgets screen to work
+    // the same way as the other screens... filter on an Entity"): this
+    // listener is now the ONLY way an entity gets selected at all — the
+    // standalone entity-list panel `_applyGlobalFilterSelection` used to
+    // merely supplement is gone (see `build()`'s own doc comment), so a
+    // CLEARED selection (the filter chip's "x", "Clear all", or search
+    // for/pick a different dimension entirely) has to actively drop this
+    // screen back to the Contribution summary via `_clearSelection()` —
+    // before today that case was simply never reachable this way (the list
+    // panel's own click-to-select handled every case), so there was
+    // nothing else for a cleared filter to do here.
+    //
+    // Scoped to only react when THIS screen's own dimension selection
+    // actually changed — an unrelated dimension's filter changing (which
+    // this screen still can't use, see `_applyGlobalFilterSelection`'s doc
+    // comment) fires this listener too but is a same-value no-op, not a
+    // second bug. Re-reads `_entitiesFuture` rather than reloading it — the
+    // entity LIST itself never depends on the filter (only which one is
+    // selected does), so there's nothing to re-fetch, just re-match against
+    // what's already loaded.
     ref.listen<GlobalFilters>(globalFiltersProvider, (previous, next) {
-      if (previous?.forKey(widget.dimension) == next.forKey(widget.dimension)) return;
+      final previousSelection = previous?.forKey(widget.dimension);
+      final nextSelection = next.forKey(widget.dimension);
+      if (previousSelection == nextSelection) return;
+      if (nextSelection == null) {
+        _clearSelection();
+        return;
+      }
       _entitiesFuture.then((data) {
         if (mounted) _applyGlobalFilterSelection(data);
       });
@@ -472,49 +522,43 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
       );
     }
 
-    // Entity picker (dimension dropdown + list) and the selected entity's
-    // month table, factored out of the Row/Column choice below — 2026-09-07
-    // (Craig: "optimised for Mobile, Tablet and Desktop"). Neither widget
-    // changed; only how they're arranged did (see the LayoutBuilder below).
-    final picker = Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: BoxedDropdown<String>(
-            value: widget.dimension,
-            width: 236,
-            items: [
-              for (final d in allowedDimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
-              // Same "value must match an item" fallback as
-              // SalesByScreen/PerformanceScreen's own dimension
-              // switchers — see their doc comments.
-              if (!allowedDimensions.any((d) => d.dimensionKey == widget.dimension))
-                DropdownMenuItem(value: widget.dimension, child: Text(dimensionLabel)),
-            ],
-            onChanged: (d) {
-              if (d != null && d != widget.dimension) context.go('/budgets/$d');
-            },
-          ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: AsyncSection<_BudgetEntityData>(
-            future: _entitiesFuture,
-            isEmpty: (d) => d.entities.isEmpty,
-            builder: (context, data) => ListView.builder(
-              itemCount: data.entities.length,
-              itemBuilder: (context, index) {
-                final entity = data.entities[index];
-                return ListTile(
-                  title: Text(entity.displayLabel, overflow: TextOverflow.ellipsis),
-                  selected: entity.code == _selectedEntityCode,
-                  onTap: () => _selectEntity(entity),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
+    // 2026-09-30, Craig: "Can we change the Budgets screens to work the
+    // same way as the other screens. Defaults to Dimension = Sales Person.
+    // We can change the Dimension via the drop down and filter on an
+    // Entity." Until today this screen paired the dimension dropdown with
+    // its OWN standalone, scrollable entity-list panel (a fixed-width
+    // side-by-side column below ~900px collapsing to a fixed-height stack
+    // above a `_stackBreakpoint` of 700px — the 2026-09-07 "optimised for
+    // Mobile, Tablet and Desktop" layout this replaces) — every other
+    // dimension-template screen (Sales By, Performance, the Dashboard) has
+    // no such panel at all: just the dimension dropdown plus the global
+    // filter bar's "Add filter"/search-driven entity selection. Dropped the
+    // list panel entirely so Budgets now matches that same pattern — the
+    // dropdown here still only switches WHICH dimension (unchanged), and
+    // `_applyGlobalFilterSelection`/`_clearSelection` (see their own doc
+    // comments) are what actually select or deselect an entity now, driven
+    // purely by the global filter the same way every other screen already
+    // works. `detail` (the Contribution summary vs. the selected entity's
+    // month table) is unchanged from before — only what used to sit beside
+    // it is gone, so this is a plain single-column layout now, no more
+    // LayoutBuilder/breakpoint stacking needed either.
+    final dropdown = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: BoxedDropdown<String>(
+        value: widget.dimension,
+        width: 236,
+        items: [
+          for (final d in allowedDimensions) DropdownMenuItem(value: d.dimensionKey, child: Text(d.displayLabel)),
+          // Same "value must match an item" fallback as
+          // SalesByScreen/PerformanceScreen's own dimension
+          // switchers — see their doc comments.
+          if (!allowedDimensions.any((d) => d.dimensionKey == widget.dimension))
+            DropdownMenuItem(value: widget.dimension, child: Text(dimensionLabel)),
+        ],
+        onChanged: (d) {
+          if (d != null && d != widget.dimension) context.go('/budgets/$d');
+        },
+      ),
     );
     final detail = _selectedEntityCode == null
         ? AsyncSection<_DimensionContributionData>(
@@ -555,48 +599,22 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     return AppShell(
       title: 'Budgets — $dimensionLabel',
       currentRoute: '/budgets/${widget.dimension}',
-      // 2026-09-07 (Craig: "optimised for Mobile, Tablet and Desktop"): this
-      // screen used to always be a side-by-side Row with a fixed 260px
-      // entity-picker column, regardless of window width. AppShell's own
-      // nav sidebar collapses into a drawer below 900px, but that only ever
-      // covered AppShell's chrome — this screen was re-introducing its own
-      // second fixed-260px column on top of whatever width AppShell handed
-      // its body, which on a ~360-400px phone left the actual budget table
-      // (the editable Sales Budget field, Seasonal Forecast, Confidence,
-      // and the Save button) squeezed into roughly 90-140px, well before
-      // ResponsiveDataTable's own horizontal-scroll fallback ever got a
-      // chance to help. Below `_stackBreakpoint`, the picker and the month
-      // table now stack instead of sitting side by side — same "same
-      // components, different structure" approach AppShell's own
-      // sidebar-to-drawer collapse already takes, just scoped to this
-      // screen's own layout instead of the app-wide nav.
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxWidth < _stackBreakpoint) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // A fixed height, not Expanded — the entity list needs to
-                // stay reachable (scrollable in its own right) without
-                // eating all the vertical space the month table below it
-                // also needs; 260 mirrors the column's old fixed WIDTH so
-                // the entity list gets a comparable amount of room either
-                // way.
-                SizedBox(height: 260, child: picker),
-                const Divider(height: 1),
-                Expanded(child: detail),
-              ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(width: 260, child: picker),
-              const VerticalDivider(width: 1),
-              Expanded(child: detail),
-            ],
-          );
-        },
+      // Plain single-column body — dropdown up top (matching Sales By/
+      // Performance's own dimension switcher placement), then whichever of
+      // the Contribution summary or the selected entity's month table
+      // `detail` currently is. No LayoutBuilder/breakpoint stacking left to
+      // do now that there's no second column competing for width on a
+      // narrow screen (see the dropdown's own doc comment above).
+      body: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            dropdown,
+            const Divider(height: 1),
+            Expanded(child: detail),
+          ],
+        ),
       ),
     );
   }
@@ -604,8 +622,9 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   /// The landing-pane summary itself — a plain, read-only table (Craig,
   /// confirming this feature: not clickable, percentage only, no dollar
   /// values) ranking every entity in the current dimension by its share of
-  /// the dimension's total Sales Budget and Seasonal Forecast. Sits where
-  /// "Select an entity from the list." used to be the only thing shown.
+  /// the dimension's total Sales Budget and Seasonal Forecast. This is what
+  /// shows by default for the current dimension until a same-dimension
+  /// global filter selects one entity (`_applyGlobalFilterSelection`).
   Widget _buildContributionSummary(BuildContext context, _DimensionContributionData data) {
     // isDark/lightTextSecondary-darkTextSecondary — the app's own
     // established muted-text pattern (e.g. settings_screen.dart), since
@@ -620,7 +639,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
           const SizedBox(height: 4),
           Text(
             "Each entity's share of this dimension's total Sales Budget and Seasonal Forecast. "
-            'Select an entity from the list to view or edit its own figures.',
+            'Filter by an entity above to view or edit its own figures.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
                 ),
@@ -648,17 +667,6 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     );
   }
 }
-
-/// Below this width, BudgetsScreen stacks its entity picker above the month
-/// table instead of placing them side by side — see the LayoutBuilder's own
-/// doc comment above. Narrower than AppShell's 900px `_sidebarBreakpoint`
-/// on purpose: by the time AppShell's nav sidebar is already gone (below
-/// 900), this screen's own 260px picker column plus the month table (which
-/// itself needs real width before ResponsiveDataTable's horizontal scroll
-/// becomes the primary way to read it, rather than the only way) can still
-/// comfortably share a tablet-width screen; it's specifically the narrower
-/// phone range this addresses.
-const double _stackBreakpoint = 700;
 
 class _MonthTable extends ConsumerStatefulWidget {
   const _MonthTable({
