@@ -96,4 +96,35 @@ class BudgetRepository {
     final result = await supabase.rpc('fn_apportion_company_budget');
     return result as int;
   }
+
+  /// 2026-09-30, Craig: "The budget apportion works well. How would your
+  /// recommend increasing or decreasing a dimension budget?... what if we
+  /// wanted to say increase or decrease only a single dimension budget by a
+  /// % across it's entities." Calls `fn_scale_dimension_budget` — the
+  /// mirror of [apportionCompanyBudget] above, but simpler: a plain
+  /// in-place multiply of every already-saved budget_figures row in ONE
+  /// dimension, no sales_forecast join needed. Craig's confirmed choices:
+  /// applies to the whole fiscal year at once (not a single month/range),
+  /// and always a full overwrite of that dimension's own budget_value —
+  /// same "always overwrite" behaviour as the Company apportionment, just
+  /// scoped to one dimension instead of cascading from Company.
+  ///
+  /// `percent` is the % to add (positive) or remove (negative) — e.g. 10
+  /// for a 10% increase, -15 for a 15% decrease. A decrease of more than
+  /// 100% is clamped to 0 server-side rather than going negative (see the
+  /// migration's own comment). Deliberately cannot be called with
+  /// dimension 'company' — the RPC itself rejects that with a clear error,
+  /// since scaling Company here would leave it not tying back to every
+  /// other dimension's total, which is exactly what the apportion flow
+  /// exists to keep consistent; Company still only ever goes through
+  /// [apportionCompanyBudget]. Returns the number of rows scaled, for the
+  /// same "Scaled 187 entities" confirmation purpose as
+  /// [apportionCompanyBudget]'s return value.
+  Future<int> scaleDimensionBudget({required String dimension, required num percent}) async {
+    final result = await supabase.rpc('fn_scale_dimension_budget', params: {
+      'p_dimension': dimension,
+      'p_percent': percent,
+    });
+    return result as int;
+  }
 }

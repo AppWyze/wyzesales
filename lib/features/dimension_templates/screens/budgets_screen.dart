@@ -202,11 +202,28 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   Future<_BudgetMonthData>? _monthDataFuture;
   late Future<_DimensionContributionData> _contributionFuture;
 
+  /// 2026-09-30, Craig: "How would your recommend increasing or decreasing
+  /// a dimension budget?... increase or decrease only a single dimension
+  /// budget by a % across it's entities." Backs the "Adjust budget by %"
+  /// control on the Contribution-by-entity summary — see
+  /// `_buildAdjustByPercent` below. Lives on this State (not its own
+  /// StatefulWidget) for the same reason `_MonthTableState` keeps its own
+  /// TextEditingControllers directly on its State: one control, one owner,
+  /// no need for a separate widget just to hold it.
+  final TextEditingController _scalePercentController = TextEditingController();
+  bool _scaling = false;
+
   @override
   void initState() {
     super.initState();
     _entitiesFuture = _loadEntities();
     _contributionFuture = _loadContribution();
+  }
+
+  @override
+  void dispose() {
+    _scalePercentController.dispose();
+    super.dispose();
   }
 
   @override
@@ -593,7 +610,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
             future: _contributionFuture,
             isEmpty: (d) => d.entities.isEmpty,
             emptyMessage: 'No entities to show for this dimension yet.',
-            builder: (context, data) => _buildContributionSummary(context, data),
+            builder: (context, data) => _buildContributionSummary(context, data, canEditBudgets),
           )
         : Padding(
             padding: const EdgeInsets.all(16),
@@ -672,7 +689,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   /// to this app-wide pattern — see its own `build()` doc comment for the
   /// live-TextField focus-stealing risk that's still unrelated to and
   /// unaffected by this change.
-  Widget _buildContributionSummary(BuildContext context, _DimensionContributionData data) {
+  Widget _buildContributionSummary(BuildContext context, _DimensionContributionData data, bool canEditBudgets) {
     // isDark/lightTextSecondary-darkTextSecondary — the app's own
     // established muted-text pattern (e.g. settings_screen.dart), since
     // AppColors has no single theme-agnostic "secondary text" constant.
@@ -715,9 +732,161 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
               ],
             ),
           ),
+          if (canEditBudgets) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+            _buildAdjustByPercent(context, data),
+          ],
         ],
       ),
     );
+  }
+
+  /// 2026-09-30, Craig: "The budget apportion works well. How would your
+  /// recommend increasing or decreasing a dimension budget?... what if we
+  /// wanted to say increase or decrease only a single dimension budget by a
+  /// % across it's entities." Sits directly below the Contribution-by-
+  /// entity table above, scoped to the dimension currently showing —
+  /// applies to every entity in `widget.dimension` at once, for all 12
+  /// fiscal months (Craig's confirmed choice: whole year, not a month
+  /// range — see `BudgetRepository.scaleDimensionBudget`'s own doc
+  /// comment). Deliberately never shown for Company: `_loadEntities`
+  /// already routes Company straight to its own single-entity month table
+  /// (see that method's own doc comment), so this summary — and this
+  /// control — is never reachable for that dimension; Company only ever
+  /// goes through the apportion dialog on `_MonthTable` instead, which is
+  /// the only place Company Budget itself can be changed.
+  ///
+  /// Requires typing an explicit % and pressing Apply, which then shows a
+  /// before/after TOTAL preview in a confirm dialog before anything is
+  /// written (Craig's confirmed choice — unlike the Company apportion
+  /// dialog, which applies immediately once confirmed with no numeric
+  /// preview, because there the "before" figure is just whatever was typed
+  /// into Company's own field a moment earlier and already visible on
+  /// screen; here the admin hasn't seen a total for the OTHER entities
+  /// being changed, so showing one first is what makes the confirmation
+  /// meaningful rather than a blind "Yes").
+  Widget _buildAdjustByPercent(BuildContext context, _DimensionContributionData data) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Adjust budget by %', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        Text(
+          "Scales every entity's Sales Budget in this dimension by the same % — "
+          "across all 12 months, and always for this dimension only. Company Budget and "
+          'every other dimension are left untouched, so totals may no longer tie back '
+          'to Company after this — that\'s expected, not a bug.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? AppColors.darkTextSecondary
+                    : AppColors.lightTextSecondary,
+              ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            SizedBox(
+              width: 120,
+              child: TextField(
+                controller: _scalePercentController,
+                enabled: !_scaling,
+                keyboardType: TextInputType.numberWithOptions(signed: true, decimal: true),
+                // Allows a leading "-" and decimals (e.g. "-12.5") — unlike
+                // _ThousandsInputFormatter above, this is a small signed %,
+                // not a comma-grouped Rand value, so that formatter doesn't
+                // apply here.
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.\-]'))],
+                decoration: const InputDecoration(isDense: true, suffixText: '%', hintText: 'e.g. 10 or -15'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              height: 36,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: _scaling ? null : () => _confirmAndApplyScale(context, data),
+                icon: _scaling
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.percent, size: 16),
+                label: Text(_scaling ? 'Applying…' : 'Apply'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Parses `_scalePercentController`'s text, shows the before/after TOTAL
+  /// preview dialog, and — only once confirmed — actually calls
+  /// `BudgetRepository.scaleDimensionBudget`. The preview total
+  /// (`data.budgetGrandTotal * (1 + percent/100)`) is a client-side
+  /// approximation for display purposes only: it multiplies the DIMENSION'S
+  /// total the same way the server scales each entity's own row, so it
+  /// matches exactly except in the edge case where the % is a decrease so
+  /// large (beyond -100%) that one or more individual entities would go
+  /// negative — the server floors each of THOSE rows at 0 individually
+  /// (see the migration's own comment), which this simple total-level
+  /// multiply doesn't model. Not worth the extra round-trip to compute
+  /// exactly for what's just a confirmation preview; the actual write is
+  /// always the server's own per-row math, never this estimate.
+  Future<void> _confirmAndApplyScale(BuildContext context, _DimensionContributionData data) async {
+    final text = _scalePercentController.text.trim();
+    if (text.isEmpty) return;
+    final percent = num.tryParse(text);
+    if (percent == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a number, e.g. 10 or -15.')),
+      );
+      return;
+    }
+
+    final currentTotal = data.budgetGrandTotal;
+    final previewTotal = (currentTotal * (1 + percent / 100)).clamp(0, double.infinity);
+    final entityCount = data.entities.length;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Adjust budget by %?'),
+        content: Text(
+          'Apply a ${percent > 0 ? '+' : ''}$percent% change to the Sales Budget of every '
+          'entity in this dimension ($entityCount ${entityCount == 1 ? 'entity' : 'entities'}), '
+          'across all 12 months?\n\n'
+          'Current total: ${formatRand(currentTotal)}\n'
+          'New total: ${formatRand(previewTotal)}',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Apply')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _scaling = true);
+    try {
+      final rowsWritten = await ref
+          .read(budgetRepositoryProvider)
+          .scaleDimensionBudget(dimension: widget.dimension, percent: percent);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Adjusted $rowsWritten budget figures.')));
+        _scalePercentController.clear();
+        setState(() => _contributionFuture = _loadContribution());
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not adjust: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _scaling = false);
+    }
   }
 }
 
