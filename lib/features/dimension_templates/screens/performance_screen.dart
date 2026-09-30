@@ -144,11 +144,74 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   // in build() below still covers all of them, so a filter set on a
   // different screen (or via GlobalFilterBar right here) still triggers a
   // refetch.
+  //
+  // 2026-09-30: the "no bare-landing default" part of that 2026-09-29 change
+  // was itself reversed the same day — see `_maybeDefaultToCurrentPeriod`
+  // (called from initState) for the current behaviour: a genuinely bare
+  // landing now writes the current fiscal year + month into GlobalFilters
+  // itself, so it's a real, visible Year/Month chip, not an invisible local
+  // default the way it worked before 2026-09-29.
 
   @override
   void initState() {
     super.initState();
+    _maybeDefaultToCurrentPeriod();
     _future = _load();
+  }
+
+  /// 2026-09-30, Craig: "My mistake, please can we amend the Performance
+  /// Screens to default to the current month and year with the filter chips
+  /// displaying" — reversing part of the 2026-09-29 change above
+  /// (`_effectiveFiscalYear`/`_effectiveFiscalMonth` no longer silently
+  /// default to anything). Craig's own framing as "my mistake" refers to
+  /// that 2026-09-29 decision to drop the bare-landing default entirely
+  /// ("default to all data and then allow the user to filter as they
+  /// please") — on reflection he wants the default back, just not
+  /// INVISIBLE the way it used to be (the old `_effectiveFiscalYear`/
+  /// `_effectiveFiscalMonth` computed a value only this screen ever saw,
+  /// with no chip on GlobalFilterBar showing why the table was already
+  /// narrowed).
+  ///
+  /// So this doesn't restore the old local-default mechanism — it writes
+  /// the current fiscal year + month straight into the SAME shared
+  /// `GlobalFilters` state every other filter goes through
+  /// (`GlobalFiltersNotifier.setFiscalYear`/`setFiscalMonth`), so
+  /// GlobalFilterBar renders real Year and Month chips the user can see
+  /// and clear ("with the filter chips displaying" — Craig's exact ask).
+  /// `_effectiveFiscalYear`/`_effectiveFiscalMonth` below need no change at
+  /// all for this: they already just pass `filters.fiscalYear`/
+  /// `filters.fiscalMonth` straight through, so they'll naturally reflect
+  /// whatever this method just wrote.
+  ///
+  /// Called from initState — BEFORE `_future = _load()` — rather than from
+  /// a post-frame callback, so `_load()`'s very first fetch already sees
+  /// the defaulted filters instead of firing once unfiltered and then again
+  /// a moment later once `ref.listen` (registered in build(), which hasn't
+  /// run yet at this point) reacts to the change. Mutating a
+  /// StateNotifierProvider from initState (never from build()) is the
+  /// standard-safe Riverpod pattern; nothing here calls `ref.watch`, only
+  /// `ref.read`, matching every other provider read `_load()` itself
+  /// already does from the exact same lifecycle stage.
+  ///
+  /// Guarded on `filters.isEmpty` — the identical bare-landing condition
+  /// `_effectiveFiscalYear`/`_effectiveFiscalMonth` used to check before
+  /// 2026-09-29 — so arriving here with ANY filter already active (set via
+  /// GlobalFilterBar, a row click on another screen, a Saved Filter Preset,
+  /// or simply navigating back to a Performance screen already filtered)
+  /// is left completely alone. And because this only ever runs once, from
+  /// initState, it only fires on a genuinely fresh mount of this screen —
+  /// deliberately clearing filters back to empty WHILE already on this
+  /// screen (GlobalFilterBar's "Clear all") does NOT re-trigger it, so
+  /// "clear all" still actually shows unfiltered data as the user asked,
+  /// rather than snapping straight back to this month.
+  void _maybeDefaultToCurrentPeriod() {
+    final filters = ref.read(globalFiltersProvider);
+    if (!filters.isEmpty) return;
+    final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final now = DateTime.now();
+    final notifier = ref.read(globalFiltersProvider.notifier);
+    notifier.setFiscalYear(fiscalYearFor(now, startMonth: startMonth));
+    notifier.setFiscalMonth(_currentFiscalMonthLabel(now));
   }
 
   @override
