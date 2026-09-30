@@ -647,12 +647,31 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     );
   }
 
-  /// The landing-pane summary itself — a plain, read-only table (Craig,
-  /// confirming this feature: not clickable, percentage only, no dollar
-  /// values) ranking every entity in the current dimension by its share of
-  /// the dimension's total Sales Budget and Seasonal Forecast. This is what
-  /// shows by default for the current dimension until a same-dimension
-  /// global filter selects one entity (`_applyGlobalFilterSelection`).
+  /// The landing-pane summary — ranks every entity in the current dimension
+  /// by its share of the dimension's total Sales Budget and Seasonal
+  /// Forecast. This is what shows by default for the current dimension
+  /// until a same-dimension global filter selects one entity
+  /// (`_applyGlobalFilterSelection`).
+  ///
+  /// Row click -> global cross-filter (Craig, 2026-09-30: "if you click on
+  /// an entity it needs to apply the filters according to selected rows and
+  /// filter the data accordingly", extending Sales By/Performance's existing
+  /// `applyRowCrossFilters` wiring — see that function's own doc comment,
+  /// core/filters/global_filters.dart — to this table too). This supersedes
+  /// an earlier explicit decision (Craig, confirming the original version of
+  /// this feature: "not clickable, percentage only, no dollar values") — the
+  /// table itself is unchanged (still percentage-only, no dollar values),
+  /// only the row-click behaviour is new. Selecting a row here narrows this
+  /// same table to that one entity (`_applyGlobalFilterSelection` already
+  /// reacts to any global filter change on this dimension), exactly like
+  /// clicking a Company entity already does via `_loadEntities`'s special
+  /// case. No date on this screen's rows (a per-entity rollup, not a
+  /// document), so only this screen's own dimension gets set — same "just
+  /// the fields the row actually carries" rule every other screen's row
+  /// click follows. `_MonthTable` below remains the one deliberate exception
+  /// to this app-wide pattern — see its own `build()` doc comment for the
+  /// live-TextField focus-stealing risk that's still unrelated to and
+  /// unaffected by this change.
   Widget _buildContributionSummary(BuildContext context, _DimensionContributionData data) {
     // isDark/lightTextSecondary-darkTextSecondary — the app's own
     // established muted-text pattern (e.g. settings_screen.dart), since
@@ -682,11 +701,17 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
               ],
               rows: [
                 for (final e in data.entities)
-                  DataRow(cells: [
-                    DataCell(Text(e.label, overflow: TextOverflow.ellipsis)),
-                    DataCell(Text(_formatContributionPct(e.budgetTotal, data.budgetGrandTotal))),
-                    DataCell(Text(_formatContributionPct(e.forecastTotal, data.forecastGrandTotal))),
-                  ]),
+                  DataRow(
+                    onSelectChanged: (_) => applyRowCrossFilters(
+                      ref,
+                      dimensions: {widget.dimension: FilterSelection(e.code, e.label)},
+                    ),
+                    cells: [
+                      DataCell(Text(e.label, overflow: TextOverflow.ellipsis)),
+                      DataCell(Text(_formatContributionPct(e.budgetTotal, data.budgetGrandTotal))),
+                      DataCell(Text(_formatContributionPct(e.forecastTotal, data.forecastGrandTotal))),
+                    ],
+                  ),
               ],
             ),
           ),
