@@ -22,7 +22,11 @@ namespace WyzeSalesExtract.Domain;
 /// lib/data/models/sales_document.dart) and leaves the rest null.
 /// </summary>
 public sealed record SalesDocumentFact(
-    string DocumentKind,     // 'invoice' | 'credit_note' | 'quote' | 'sales_order' | 'journal' | 'adjustment'
+    // 'journal' dropped 2026-09-30 -- Edgetec's extractor now maps GL entry type 'J'
+    // straight to 'adjustment' (see EdgetecSourceExtractor.cs's own doc comment); 'journal'
+    // is still a valid document_kind enum value in Supabase (existing values are never
+    // removed), just nothing in this program writes it any more.
+    string DocumentKind,     // 'invoice' | 'credit_note' | 'quote' | 'sales_order' | 'adjustment'
     string Document,
     string AccountCode,      // ACCNUM
     DateTime DocDate,

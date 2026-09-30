@@ -158,11 +158,25 @@ public sealed class EdgetecSourceExtractor : ISourceExtractor
             // distinct value and folded into 'invoice' rather than aborting the run, matching
             // what the very first historical load already did for J/A before this mapping
             // existed.
+            //
+            // 2026-09-30: J now maps to 'adjustment' too, not 'journal'. Craig, 2026-09-29 (see
+            // lib/core/constants/document_kinds.dart / docs/schema/wyzesales_fn_revenue_
+            // document_kinds.sql): "Wyzesales now needs to cater for Invoice, Credit and
+            // Adjustment. That's it... journals etc. are all just adjustments." Craig's own
+            // relabel script converted every EXISTING 'journal' row to 'adjustment' (1,911 rows,
+            // confirmed zero left on both Supabase projects), and fn_revenue_document_kinds()/
+            // kRevenueDocumentKinds were narrowed to drop 'journal' from what counts as revenue
+            // -- but this mapping was never updated to match, so every GL entry type 'J' this
+            // scheduled extractor pulled from that day forward kept silently writing fresh
+            // 'journal' rows that then fell outside revenue, reproducing the exact under-count
+            // bug the relabel was meant to fix, just for new data instead of old. 'journal'
+            // stays a valid document_kind enum value (Postgres enum values are never removed,
+            // and nothing needs it to be) -- this extractor just no longer produces it.
             var documentKind = line.Entry switch
             {
                 "I" => "invoice",
                 "C" => "credit_note",
-                "J" => "journal",
+                "J" => "adjustment",
                 "A" => "adjustment",
                 _ => LogUnrecognizedEntry(line.Entry, unrecognizedEntries, log),
             };
