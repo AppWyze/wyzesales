@@ -868,9 +868,59 @@ class _MonthTableState extends ConsumerState<_MonthTable> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sales Budget saved.')));
       }
+      // Company only (2026-09-30, Craig — see BudgetRepository.
+      // apportionCompanyBudget's own doc comment for the full mechanics).
+      // Deliberately after the snackbar above, not instead of it — Company's
+      // own save already succeeded and is worth confirming on its own,
+      // independently of whatever the admin decides on this dialog.
+      if (widget.dimension == 'company' && mounted) {
+        await _promptApportionCompanyBudget();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Asks whether to push the Company Budget just saved down through every
+  /// other dimension's entities, weighted by each entity's own share of
+  /// that month's Seasonal Forecast (per-month, not a flat annual %, and
+  /// always a full overwrite — both Craig's explicit choices, 2026-09-30;
+  /// see `fn_apportion_company_budget`'s migration comment for why). A "No"
+  /// leaves every entity's own budget exactly as it was — Company's figure
+  /// is still saved either way, this only controls whether it also
+  /// cascades down.
+  Future<void> _promptApportionCompanyBudget() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Apportion Company Budget?'),
+        content: const Text(
+          'Apportion the Company Budget across all Dimensions and Entities, '
+          "according to each entity's Seasonal Forecast contribution for that month? "
+          'This replaces any existing budget already entered for those entities. '
+          '(Saving a Company Budget of 0 and apportioning reverses everything back out.)',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('No')),
+          FilledButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Yes')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _saving = true);
+    try {
+      final rowsWritten = await ref.read(budgetRepositoryProvider).apportionCompanyBudget();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Apportioned to $rowsWritten entity/month figures.')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not apportion: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
