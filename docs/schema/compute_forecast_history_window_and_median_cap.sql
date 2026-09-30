@@ -1,0 +1,153 @@
+-- compute_forecast_history_window_and_median_cap.sql
+--
+-- Narrative doc, not a migration (nothing here touches the database schema
+-- -- every change described is in the compute-forecast Edge Function itself,
+-- index.ts / _shared/service_key.ts). Kept in docs/schema alongside the
+-- other compute-forecast write-ups (EDGETEC_FORECAST_ROBUSTNESS_FIX_NOTES.md,
+-- compute_forecast_reapply_and_flaky_zero_rows.sql) for the same reason
+-- those exist: a forecast-quality bug found and fixed against real client
+-- data deserves a permanent record of what was wrong and what changed, not
+-- just a commit message.
+--
+-- 2026-09-30. Craig: "Have you run the Seasonal Forecast Calc Edge Function
+-- across all clients earlier and has the Contribution by entity recalculated
+-- accordingly? Doesn't seem right. Please check." Investigating that
+-- surfaced three distinct, real bugs in compute-forecast's Holt-Winters
+-- model -- all found and verified against live Morgenster 1711 (Pty) Ltd
+-- data, all now fixed and deployed (compute-forecast version 7).
+--
+-- ============================================================================
+-- Fix #4 -- unbounded history window
+-- ============================================================================
+-- `full_history_months` (forecast_settings, default 24) was always meant to
+-- define "how much history counts as the full picture" -- the confidence-
+-- tier check already used it that way -- but nothing ever actually bounded
+-- the series fed into the model to that many months. A years-old anomalous
+-- month sitting before a long dormant gap could still shape a forecast
+-- computed today.
+--
+-- Real example: Morgenster sales rep *Z0100 traded normally in 2021
+-- (including one real R629,500 month), went essentially quiet for ~4 years,
+-- then resumed trading normally at R30k-80k/month in late 2025. That one
+-- 2021 spike was still setting this rep's historical-max cap and shaping a
+-- 2026 forecast.
+--
+--   Before: R5.46m/year forecast, vs. a real recent run-rate of ~R450k-950k.
+--   After:  R776,543/year -- in line with real trading.
+--
+-- Fix: truncate the series to at most the most recent `full_history_months`
+-- months before running Holt-Winters at all.
+--
+-- ============================================================================
+-- Fix #5 -- peak-relative cap can't catch the peak itself
+-- ============================================================================
+-- The existing safeguard (2026-09-04/2026-09-21 fixes) capped the
+-- deseasonalized value fed into the level/trend recursion at 1.5x the
+-- entity's own highest actual month ever -- but that cap is built from the
+-- very same number it's meant to guard against, so it can't help when the
+-- entity's own historical maximum IS the anomaly.
+--
+-- Real example: Morgenster sales rep *R011 trades normally at
+-- R35k-220k/month, but had two genuine, extreme one-off months (R802k in
+-- Jun 2026, R589k in Nov 2024) that pulled its forecast well above its real
+-- run-rate.
+--
+--   Before: R3.53m/year forecast, vs. a real run-rate of roughly R1-1.7m/
+--           year (the two spike months make a clean "run-rate" figure
+--           somewhat fuzzy -- see below).
+--   After:  R2.59m/year -- down 27%, and defensible given a genuine R802k
+--           sale landed as recently as Jun 2026 and legitimately raises
+--           expectations; this is not a case that should go all the way to
+--           R1m, just no longer 3.5x it.
+--
+-- Fix: the cap/floor is now the TIGHTER of the existing peak-relative bound
+-- and a new bound relative to the entity's own MEDIAN non-zero month (5x,
+-- MEDIAN_CAP_MULTIPLE in index.ts).
+--
+-- Control case verified unaffected by fixes 4 & 5: Morgenster sales rep
+-- *113 -- continuous recent history, no dormant gap, no freak month --
+-- forecasts R1,996,401/year, against a real recent run-rate of ~R1.56m/
+-- year (23-month actuals, mv_sales_cube_monthly). Same order of magnitude
+-- before and after; the model's normal trend/seasonality extrapolation
+-- accounts for the rest, same as it always did.
+--
+-- ============================================================================
+-- Fix #6 -- dormant entities still forecast off stale history
+-- ============================================================================
+-- Fixes 4 and 5 alone didn't close the gap this investigation actually set
+-- out to check: summing every Morgenster sales rep's own forecast against
+-- the Company dimension's own independently-computed forecast for the same
+-- client and period.
+--
+--   Before any of today's fixes:  R40.5m (reps) vs. R15.9m (company) -- 2.55x
+--   After fixes 4 & 5 only:       R39.6m (reps) vs. R21.7m (company) -- 1.82x
+--   After fix 6 as well:          R27.9m (reps) vs. R21.7m (company) -- 1.29x
+--
+-- (The company-level figure itself moved between the second and third rows
+-- because it hadn't been recomputed with fixes 4/5 live until the fix-6
+-- verification pass -- R15.9m was the STALE pre-fix number in the first
+-- comparison Craig originally flagged.)
+--
+-- Root cause, found by querying real sales data directly: 27 Morgenster
+-- sales reps whose very LAST sale is 6+ months in the past -- several 2 to
+-- 5+ years -- still had a live, often sizeable, forecast computed for
+-- them: R12.1m combined, out of the R39.6m (fixes 4/5 only) total.
+--
+-- forecast_input_series() (003_wyzesales_forecast_series.sql) builds each
+-- entity's series from its own first sale to its own LAST sale
+-- (`end_month = max(month) from v_dimension_monthly_sales`) -- it does not
+-- keep extending a dormant entity's series with trailing zero months all
+-- the way through to today the way a currently-active entity's implicitly
+-- does. So fix 4's "most recent full_history_months months" window, for a
+-- rep who stopped trading 21 months ago, is 24 months of real but entirely
+-- stale data -- nothing in the series itself distinguishes "active 21
+-- months ago" from "active last month".
+--
+-- Real example: Morgenster sales rep *109's last-ever sale was December
+-- 2024 -- 21 months before this fix. Its most-recent-24-months window (fix
+-- 4) is built from real R100k-240k/month numbers from 2023-2024 that once
+-- looked perfectly healthy.
+--
+--   Before fix 6: R2,760,121/year forecast, as if still an active rep.
+--   After fix 6:  R0/year, confidence "low".
+--
+-- Other examples from the same 27-rep group (all last active 6+ months
+-- ago, several years): *111 (36 months dormant, was R1.72m/year), *112 (32
+-- months, was R1.47m/year), *101 (46 months, was R961k/year), *103 (65
+-- months, was R589k/year) -- all now R0.
+--
+-- Fix: compute the gap between an entity's own last real month and today
+-- BEFORE running Holt-Winters at all. When that gap is at least
+-- `partial_history_months` (the SAME existing, client-configurable setting
+-- already used to decide "is there enough recent history to trust a
+-- seasonal pattern" -- reused here rather than inventing a new magic
+-- number), forecast a flat zero instead of extrapolating a pattern with no
+-- supporting evidence in over a year.
+--
+-- ============================================================================
+-- Full-system verification (all clients, all dimensions, 2026-09-30)
+-- ============================================================================
+-- Re-ran every client_dimensions row (38 total across WCSA, Edgetec,
+-- Fynbos, Morgenster) against the fixed function (version 7) -- all 38
+-- returned HTTP 200 with no errors. Sum-of-entity-forecast vs.
+-- Company-dimension-forecast, per client:
+--
+--   Fynbos Hill Vineyards:      R87.39m (reps) vs. R88.09m (company) -- 0.8% apart
+--   Morgenster 1711 (Pty) Ltd:  R27.95m (reps) vs. R21.71m (company) -- 1.29x
+--   Edgetec Systems (Pty) Ltd:  R109.57m (reps) vs. R153.72m (company) -- reps
+--     are LOWER than company by ~29%, the opposite direction from
+--     Morgenster's gap. Not investigated further as part of this fix -- it's
+--     plausibly unattributed/house sales that land in the Company total but
+--     don't attribute to any one rep (an "UNASSIGNED" branch code exists in
+--     the raw sales cube), which is a normal, expected pattern rather than
+--     a bug, but this wasn't confirmed against real Edgetec data the way
+--     the Morgenster numbers above were. Worth a follow-up look if Craig
+--     wants Edgetec's own Contribution-by-entity reviewed the same way.
+--
+-- Deployed as compute-forecast version 7 (Supabase project vnzflygyqslvlvndyhql).
+-- Also fixed in the same version: a transcription bug introduced while
+-- deploying fixes 4/5 (version 5) -- _shared/service_key.ts's legacy-key
+-- fallback line was mistakenly typed as a second SUPABASE_SECRET_KEYS
+-- lookup instead of the intended SUPABASE_SERVICE_ROLE_KEY fallback. Caught
+-- and corrected before any dependent screen was affected (version 6, same
+-- day), unrelated to fixes 4-6 above but shipped in the same investigation.
