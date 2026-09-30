@@ -1,0 +1,90 @@
+-- WyzeSales — compute-forecast: cron fix re-applied live + a newly found,
+-- separate intermittent issue under the per-dimension sharded dispatch
+-- ============================================================================
+-- Craig, 2026-09-30: reported "The Seasonal Forecast Calc is failing" with a
+-- screenshot of the compute-forecast Edge Function dashboard showing one
+-- error in the last 24h — CPU Time exceeded, status 546, ~41s duration.
+--
+-- FINDING #1 — the documented per-client+dimension cron fix had never
+-- actually taken effect in production
+-- ----------------------------------------------------------------------
+-- wyzesales_compute_forecast_daily_one_invocation_per_client.sql documents
+-- switching the compute-forecast-daily cron job (jobid 3) from one
+-- net.http_post per CLIENT to one per client_dimensions ROW (client +
+-- dimension), specifically because Morgenster's largest dimensions (customer:
+-- 767 entities, item: 421) were still enough on their own to trip
+-- WORKER_RESOURCE_LIMIT even with the earlier one-per-client fix. That
+-- migration's own text says the fix was "applied directly to production...
+-- fully verified live."
+--
+-- It wasn't, or didn't stay applied. Querying live `cron.job` on 2026-09-30
+-- showed jobid 3's `command` was STILL the old one-per-client version
+-- (`body := jsonb_build_object('client_id', c.id) from clients c`), and
+-- `cron.job_run_details` for that morning's 03:00 UTC run confirmed it
+-- executed with that old command. Morgenster's forecast crashed again for
+-- exactly the reason the per-dimension fix was supposed to prevent — this is
+-- what Craig's screenshot caught.
+--
+-- Re-applied `cron.alter_job(job_id := 3, command := ...)` with the correct
+-- per-client+dimension command live via the Supabase SQL tool on 2026-09-30.
+-- Verified: `cron.job` now shows the corrected command; a full manual
+-- dispatch of all 38 client_dimensions rows returned HTTP 200 for all 38;
+-- Morgenster's sales_forecast rows across all 10 of its non-empty dimensions
+-- refreshed to a fresh 2026-09-30 computed_at. No more CPU Time exceeded /
+-- status 546 in any of several manual re-runs since.
+--
+-- FINDING #2 (new, separate, lower severity) — a small random subset of the
+-- 38 per-dimension invocations silently write 0 rows when run together
+-- ----------------------------------------------------------------------
+-- While verifying Finding #1 end-to-end, two of Morgenster's ten real
+-- dimensions (dim_3, dim_5) came back `{"ok":true,"rowsWritten":{...:0},
+-- "errors":{}}` from that morning's full 38-invocation dispatch — no error,
+-- HTTP 200, but zero rows computed, despite both dimensions having real,
+-- populated historical data (684 and 132 sales_forecast rows respectively
+-- from the last successful run). compute-forecast only UPSERTs when it has
+-- rows to write (see index.ts: `if (rowsToUpsert.length > 0)`), so a 0-row
+-- result doesn't clear or touch the existing rows — it just leaves that one
+-- dimension's forecast exactly as stale as it already was, silently.
+--
+-- Re-firing JUST dim_3 and dim_5 for Morgenster on their own (not as part of
+-- the 38-call batch) succeeded immediately both times, with the expected row
+-- counts (684, 132). This rules out a data problem or a client_dimensions.
+-- resolution_kind mismatch (checked: dim_3 is 'customer_attribute' and its
+-- attr_3_code is populated on 100% of Morgenster's mv_sales_cube_monthly
+-- rows; dim_5 is 'fact_column' and dim_5_code is likewise 100% populated —
+-- both resolve entity_code correctly). It only fails as part of the larger
+-- concurrent/near-simultaneous batch.
+--
+-- Added a small `perform pg_sleep(0.2)` between each of the 38 dispatches in
+-- the cron job (see the command now stored on jobid 3) to reduce concurrent
+-- load, on the theory this was connection-pool/session related. Tested: it
+-- did NOT reliably fix it — a second full staggered run still produced 3
+-- unexpected zero-writes for Morgenster (dim_3, dim_5, AND dim_6 that time —
+-- a different subset than the first run), while every single isolated
+-- single-dimension re-fire has succeeded 100% of the time (5/5 so far).
+-- Kept the stagger anyway since it's harmless and mildly reduces load, but
+-- it is not a real fix for this issue.
+--
+-- Most likely root cause (not yet confirmed): v_sales_cube_monthly's access
+-- check —
+--   WHERE CURRENT_USER = 'service_role' OR (select auth.role()) = 'service_role'
+-- — is the same "new sb_secret_... key doesn't behave identically to the
+-- legacy service_role JWT" gap already documented in
+-- _shared/service_key.ts's 2026-09-29 postscript (that postscript is about
+-- this exact view). That gap had been invisible for compute-forecast
+-- specifically because, per this function's own file header, an unrelated
+-- bug was feeding it empty result sets on every previous run — 2026-09-30 is
+-- the first time real data has flowed through this path at volume, which is
+-- likely why this is only surfacing now.
+--
+-- Impact is low: no crash, no error, no data loss (old rows aren't cleared),
+-- just an unpredictable one or two of a client's dimensions staying one
+-- extra day stale on an occasional run, self-correcting whenever that
+-- dimension's dispatch happens to land cleanly (which is most days, for most
+-- dimensions). Left as an open follow-up rather than guessing at a change to
+-- a multi-tenant access-control view without being sure of the actual
+-- mechanism — worth a closer look at how Supabase's connection pooler
+-- assigns CURRENT_USER per pooled connection for the new secret-key type
+-- specifically, or alternatively adding a defensive one-time retry inside
+-- compute-forecast itself when a dimension that has existing sales_forecast
+-- rows computes zero new ones.
