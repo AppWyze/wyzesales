@@ -151,3 +151,62 @@
 -- lookup instead of the intended SUPABASE_SERVICE_ROLE_KEY fallback. Caught
 -- and corrected before any dependent screen was affected (version 6, same
 -- day), unrelated to fixes 4-6 above but shipped in the same investigation.
+
+-- ============================================================================
+-- Follow-up (same day) -- checking dormancy-zeroing (fix 6) across every
+-- OTHER dimension, not just sales_person/company
+-- ============================================================================
+-- Craig: "Are you happy then that the daily Seasonal Forecast Edge Function
+-- works correctly and apportions the Contribution by entity correctly etc?"
+-- Answer at the time was "yes for sales_person/company, which is what was
+-- actually spot-checked against real data; the other dimensions haven't
+-- been deeply verified the same way." Craig: "Yes, please can you check the
+-- other dimensions as well."
+--
+-- A first audit query against sales_forecast (join to each entity's real
+-- last-activity month) appeared to find fix 6 failing for Morgenster's
+-- dim_5/dim_6 (Range/Group) -- e.g. dim_6 entity "Olive - Buyers own brand
+-- 118", genuinely dormant since Feb 2024 (31 months), still showing a live
+-- ~R8.07m/year forecast. Traced this all the way through: confirmed the
+-- deployed index.ts was exactly the intended fix-6 code (get_edge_function),
+-- confirmed forecast_input_series() itself already correctly ends this
+-- entity's series at Feb 2024 (checked directly with `set local role
+-- service_role`), and confirmed a temporary debug build of this function
+-- (console.log on the real fetch/group/dormancy-check path, invoked for
+-- just this client+dimension) computed monthsSinceLastActivity=31 and
+-- correctly wrote a flat R0/"low" forecast when run.
+--
+-- Root cause of the apparent discrepancy: NOT a code bug. The suspicious
+-- R8.07m row's own computed_at was 2026-09-30 08:02:03 UTC -- BEFORE the
+-- fix 4/5/6 deploy that same morning at 09:10:29 UTC. It was simply stale
+-- data from the last pre-fix run of that specific dimension, not yet
+-- recomputed under the fixed code. (Separately, a second false alarm in
+-- the same audit turned out to be the audit query's own definition of
+-- "last activity month" being stricter than forecast_input_series' real
+-- one -- the audit only counted a month as "real activity" when its net
+-- value was non-zero, while forecast_input_series/v_dimension_monthly_
+-- sales counts any month with a real underlying transaction, including one
+-- that net to R0 -- e.g. Morgenster item 22MSWH has a real, present
+-- 2026-09-01 row worth R0.00. Under that stricter definition a handful of
+-- items/customers looked "dormant" by a few months when they were not.)
+--
+-- Fix: none needed in index.ts -- fix 6 already worked correctly wherever
+-- it had actually been re-run. Instead: (1) deployed a temporary debug
+-- build (version 8) purely to log real fetch/pagination/grouping output
+-- for the one flagged entity and confirm the above; (2) redeployed the
+-- clean, unmodified fix-6 code as version 9 once confirmed (no functional
+-- change from version 7 -- version 8 was debug-only and never meant to
+-- stay live); (3) re-ran EVERY client_dimensions row (all 38, across WCSA/
+-- Edgetec/Fynbos/Morgenster) through version 9 so every dimension's sales_
+-- forecast rows are current, not just the ones already touched by earlier
+-- verification passes; (4) re-ran the dormancy audit using forecast_input_
+-- series' own exact "last real month, any value" definition instead of the
+-- stricter one -- zero violations found, across every dimension of every
+-- client.
+--
+-- Lesson for next time: after any compute-forecast deploy, a "looks wrong"
+-- row found by querying sales_forecast directly needs its own computed_at
+-- checked against the deploy's own updated_at before concluding the CODE
+-- is wrong -- an unrecomputed dimension will keep showing pre-fix numbers
+-- until it's re-run, which looks identical to a live regression unless you
+-- check the timestamp.
