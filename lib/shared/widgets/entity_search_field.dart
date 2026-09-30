@@ -13,15 +13,23 @@ import '../utils/responsive.dart';
 ///
 /// Why this exists rather than a plain dropdown: ReferenceDataRepository
 /// already supports a `search` parameter on every entity lookup
-/// (customers()/items()/etc.), but customers and items are capped at 200
-/// rows when that parameter is left off. The dropdowns this replaced loaded
-/// that capped list ONCE with no search term and then filtered it
-/// client-side as the user typed — which meant anything past the first 200
-/// customers/items (alphabetically) was never reachable at all, no matter
-/// what was typed. This dialog instead re-queries the repository's `search`
-/// parameter on every keystroke (debounced 300ms, the same pattern
-/// TopBarSearch already uses), so what's actually being searched is always
-/// the full table, not a local copy that silently stopped at 200 rows.
+/// (customers()/items()/etc.). The dropdowns this replaced loaded a list
+/// ONCE with no search term and then filtered it client-side as the user
+/// typed, so anything the initial load didn't happen to include was never
+/// reachable at all, no matter what was typed. This dialog instead
+/// re-queries the repository's `search` parameter on every keystroke
+/// (debounced 300ms, the same pattern TopBarSearch already uses), so
+/// what's actually being searched is always the full table.
+///
+/// 2026-09-30 postscript: customers() and items() used to ALSO cap their
+/// unfiltered browse list (no search term yet typed) at an explicit
+/// `.limit(200)` — real client data well past that (Edgetec: 765 items,
+/// Morgenster: 767 customers) meant even the "first N, unfiltered" browse
+/// state opened straight into an incomplete list. Craig: "All dropdowns
+/// must show all entities." That cap is gone now — see
+/// ReferenceDataRepository's own doc comment on `_fetchAllRows` — every
+/// entity list this dialog can show, browse or searched, is now the
+/// complete result set, paginated server-side rather than truncated.
 ///
 /// 2026-08-27: the boxed `EntitySearchField` widget that used to open this
 /// dialog from an inline per-screen filter row (Sales Analysis/Quote

@@ -9,23 +9,72 @@ import '../models/reference_data.dart';
 /// WyzeSalesExtract (or directly by WCSA staff for the display_code/name
 /// columns), never by this app.
 class ReferenceDataRepository {
-  Future<List<CodeName>> branches({String? search}) async {
-    var query = supabase.from('branches').select('code, display_code, name');
-    if (search != null && search.isNotEmpty) {
-      query = query.ilike('name', '%$search%');
+  /// A plain `.from(...).select()...` query with no explicit `.range()` on
+  /// it is silently capped at this Supabase project's own "Max Rows" API
+  /// setting, with no error and no signal anything was cut off —
+  /// SalesRepository's own `_fetchAllRows` (sales_repository.dart) has the
+  /// full story of the first time this codebase got bitten by it live
+  /// (Sales by Customer, 2026-09-08: "2024 data is missing", traced to an
+  /// unbounded Customer query silently truncating at the project cap).
+  /// Identical pattern here, same reason, same fix — pages through
+  /// `buildQuery()` (which MUST build and return a fresh query each call,
+  /// never one already awaited) in `_pageSize`-row `.range()` windows,
+  /// stopping only on a genuinely EMPTY page.
+  ///
+  /// 2026-09-30, Craig: "Filter option drop downs only show some entities
+  /// not all... All dropdowns must show all entities" — this repository's
+  /// own `customers()`/`items()` had an even more direct version of the
+  /// same bug: an explicit `.limit(200)` on top, hit by real client data
+  /// well before the project's own cap ever would be (Edgetec: 765 items;
+  /// Morgenster: 767 customers — both silently missing everything past the
+  /// alphabetically-first 200 the moment the picker was opened with no
+  /// search term typed yet). That explicit cap is gone now, replaced by
+  /// this same pagination every other entity list below also uses, so a
+  /// browse list is never truncated at all — by an arbitrary local limit OR
+  /// by the project's own cap, however large a client's entity list grows.
+  static const int _pageSize = 1000;
+
+  Future<List<Map<String, dynamic>>> _fetchAllRows(dynamic Function() buildQuery) async {
+    final all = <Map<String, dynamic>>[];
+    var start = 0;
+    while (true) {
+      final List page = await buildQuery().range(start, start + _pageSize - 1);
+      if (page.isEmpty) break;
+      all.addAll(page.cast<Map<String, dynamic>>());
+      start += page.length;
     }
-    final rows = await query.order('code');
+    return all;
+  }
+
+  /// 2026-09-30, Craig: "filter selections show alphabetically ascending...
+  /// can we change to descending order" — every entity picker below
+  /// (GlobalFilterBar's "Add filter" search dialog, in both its initial
+  /// browse-with-no-search-term state and while actively searching, plus
+  /// Budgets' own entity list) reads straight off whichever order these
+  /// queries return, so flipping the sort here is the one change that
+  /// covers all of them at once, exactly the way removing the `.limit(200)`
+  /// above does for "show all entities."
+  Future<List<CodeName>> branches({String? search}) async {
+    final rows = await _fetchAllRows(() {
+      var query = supabase.from('branches').select('code, display_code, name');
+      if (search != null && search.isNotEmpty) {
+        query = query.ilike('name', '%$search%');
+      }
+      return query.order('code', ascending: false);
+    });
     return rows
         .map<CodeName>((r) => CodeName(code: r['code'] as String, name: (r['name'] as String?) ?? (r['display_code'] as String?)))
         .toList();
   }
 
   Future<List<CodeName>> salesReps({String? search}) async {
-    var query = supabase.from('sales_reps').select('rep_code, name');
-    if (search != null && search.isNotEmpty) {
-      query = query.ilike('name', '%$search%');
-    }
-    final rows = await query.order('name');
+    final rows = await _fetchAllRows(() {
+      var query = supabase.from('sales_reps').select('rep_code, name');
+      if (search != null && search.isNotEmpty) {
+        query = query.ilike('name', '%$search%');
+      }
+      return query.order('name', ascending: false);
+    });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'rep_code')).toList();
   }
 
@@ -42,32 +91,38 @@ class ReferenceDataRepository {
   /// gets the exact same unfiltered-beyond-RLS list as before — this is
   /// additive, not a change to the default.
   Future<List<CodeName>> customers({String? search, String? assignedRepCode}) async {
-    var query = supabase.from('customers').select('code, name');
-    if (assignedRepCode != null) {
-      query = query.eq('assigned_rep_code', assignedRepCode);
-    }
-    if (search != null && search.isNotEmpty) {
-      query = query.ilike('name', '%$search%');
-    }
-    final rows = await query.order('name').limit(200);
+    final rows = await _fetchAllRows(() {
+      var query = supabase.from('customers').select('code, name');
+      if (assignedRepCode != null) {
+        query = query.eq('assigned_rep_code', assignedRepCode);
+      }
+      if (search != null && search.isNotEmpty) {
+        query = query.ilike('name', '%$search%');
+      }
+      return query.order('name', ascending: false);
+    });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'code')).toList();
   }
 
   Future<List<CodeName>> categories({String? search}) async {
-    var query = supabase.from('categories').select('department_code, name');
-    if (search != null && search.isNotEmpty) {
-      query = query.ilike('name', '%$search%');
-    }
-    final rows = await query.order('name');
+    final rows = await _fetchAllRows(() {
+      var query = supabase.from('categories').select('department_code, name');
+      if (search != null && search.isNotEmpty) {
+        query = query.ilike('name', '%$search%');
+      }
+      return query.order('name', ascending: false);
+    });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'department_code')).toList();
   }
 
   Future<List<CodeName>> items({String? search}) async {
-    var query = supabase.from('items').select('code, name');
-    if (search != null && search.isNotEmpty) {
-      query = query.ilike('name', '%$search%');
-    }
-    final rows = await query.order('name').limit(200);
+    final rows = await _fetchAllRows(() {
+      var query = supabase.from('items').select('code, name');
+      if (search != null && search.isNotEmpty) {
+        query = query.ilike('name', '%$search%');
+      }
+      return query.order('name', ascending: false);
+    });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'code')).toList();
   }
 
@@ -188,15 +243,17 @@ class ReferenceDataRepository {
   /// caller can't reintroduce this same gap by simply forgetting an optional
   /// argument, the way this one was missed the first time.
   Future<List<CodeName>> dimensionValues(String dimensionKey, String clientId, {String? search}) async {
-    var query = supabase
-        .from('client_dimension_values')
-        .select('code, name')
-        .eq('dimension_key', dimensionKey)
-        .eq('client_id', clientId);
-    if (search != null && search.isNotEmpty) {
-      query = query.ilike('name', '%$search%');
-    }
-    final rows = await query.order('name');
+    final rows = await _fetchAllRows(() {
+      var query = supabase
+          .from('client_dimension_values')
+          .select('code, name')
+          .eq('dimension_key', dimensionKey)
+          .eq('client_id', clientId);
+      if (search != null && search.isNotEmpty) {
+        query = query.ilike('name', '%$search%');
+      }
+      return query.order('name', ascending: false);
+    });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'code')).toList();
   }
 
