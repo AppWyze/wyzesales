@@ -70,4 +70,30 @@ class BudgetRepository {
       'updated_at': DateTime.now().toIso8601String(),
     }, onConflict: 'client_id,dimension,entity_code,fiscal_month');
   }
+
+  /// 2026-09-30, Craig: "If I enter a Company Sales Budget and press Save
+  /// can it come up with a Question... Selecting Yes then takes the Company
+  /// Budget and apportions it across the Dimensions and Entities according
+  /// to the associated Seasonal Forecast Contribution by entity %." Calls
+  /// `fn_apportion_company_budget` (see that migration's own comment for
+  /// the full mechanics/edge cases) — a plain RPC, not a table write,
+  /// because the actual allocation math has to run server-side against
+  /// every dimension's sales_forecast rows at once; doing this client-side
+  /// would mean fetching every entity's forecast for every dimension just
+  /// to recompute what the database can do in one statement.
+  ///
+  /// Reads Company's own budget_figures rows (already saved by the normal
+  /// `setBudgetValue` calls just before this is invoked — see
+  /// `_MonthTableState._saveAll`'s doc comment) rather than taking them as
+  /// parameters, so this is safe to call any time and always reflects
+  /// whatever Company currently has saved, including a 0 (which is what
+  /// makes "Company Budget of 0 reverses everything out" work — it's the
+  /// same formula, not a separate code path). Returns the number of
+  /// entity-level rows written, purely so the caller can show a meaningful
+  /// confirmation ("Apportioned to 187 entities") rather than a bare
+  /// "Done."
+  Future<int> apportionCompanyBudget() async {
+    final result = await supabase.rpc('fn_apportion_company_budget');
+    return result as int;
+  }
 }
