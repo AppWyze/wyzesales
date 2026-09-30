@@ -47,20 +47,27 @@ class ReferenceDataRepository {
   }
 
   /// 2026-09-30, Craig: "filter selections show alphabetically ascending...
-  /// can we change to descending order" — every entity picker below
-  /// (GlobalFilterBar's "Add filter" search dialog, in both its initial
-  /// browse-with-no-search-term state and while actively searching, plus
-  /// Budgets' own entity list) reads straight off whichever order these
-  /// queries return, so flipping the sort here is the one change that
-  /// covers all of them at once, exactly the way removing the `.limit(200)`
-  /// above does for "show all entities."
+  /// can we change to descending order." First attempt set `ascending:
+  /// false` on every query below (Z→A for a text column — the standard
+  /// meaning of "descending" for letters, the same as 9→1 is for numbers).
+  /// Craig, once that was live: "Sort order still starts at Z and ends at
+  /// A????? Descending surely start at A and ends at Z???" — what he
+  /// actually wants is A first, Z last (i.e. what's conventionally called
+  /// ASCENDING order), he just calls that "descending." Terminology aside,
+  /// his explicit, clarified requirement is unambiguous, so every query
+  /// below is `ascending: true` (spelled out explicitly rather than left
+  /// implicit, so nobody has to go check this package's own default again)
+  /// — A first, Z last, everywhere: GlobalFilterBar's "Add filter" search
+  /// dialog (both its initial browse-with-no-search-term state and while
+  /// actively searching) and Budgets' own entity list, which both read
+  /// straight off whichever order these queries return.
   Future<List<CodeName>> branches({String? search}) async {
     final rows = await _fetchAllRows(() {
       var query = supabase.from('branches').select('code, display_code, name');
       if (search != null && search.isNotEmpty) {
         query = query.ilike('name', '%$search%');
       }
-      return query.order('code', ascending: false);
+      return query.order('code', ascending: true);
     });
     return rows
         .map<CodeName>((r) => CodeName(code: r['code'] as String, name: (r['name'] as String?) ?? (r['display_code'] as String?)))
@@ -73,7 +80,7 @@ class ReferenceDataRepository {
       if (search != null && search.isNotEmpty) {
         query = query.ilike('name', '%$search%');
       }
-      return query.order('name', ascending: false);
+      return query.order('name', ascending: true);
     });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'rep_code')).toList();
   }
@@ -99,7 +106,7 @@ class ReferenceDataRepository {
       if (search != null && search.isNotEmpty) {
         query = query.ilike('name', '%$search%');
       }
-      return query.order('name', ascending: false);
+      return query.order('name', ascending: true);
     });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'code')).toList();
   }
@@ -110,7 +117,7 @@ class ReferenceDataRepository {
       if (search != null && search.isNotEmpty) {
         query = query.ilike('name', '%$search%');
       }
-      return query.order('name', ascending: false);
+      return query.order('name', ascending: true);
     });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'department_code')).toList();
   }
@@ -121,7 +128,7 @@ class ReferenceDataRepository {
       if (search != null && search.isNotEmpty) {
         query = query.ilike('name', '%$search%');
       }
-      return query.order('name', ascending: false);
+      return query.order('name', ascending: true);
     });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'code')).toList();
   }
@@ -252,7 +259,7 @@ class ReferenceDataRepository {
       if (search != null && search.isNotEmpty) {
         query = query.ilike('name', '%$search%');
       }
-      return query.order('name', ascending: false);
+      return query.order('name', ascending: true);
     });
     return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'code')).toList();
   }
