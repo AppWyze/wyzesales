@@ -24,6 +24,27 @@ var configArgIndex = Array.IndexOf(args, "--config");
 if (configArgIndex >= 0 && configArgIndex + 1 < args.Length)
     configPath = args[configArgIndex + 1];
 
+// 2026-09-30, Edgetec: installed as a service, then every startup log entry read "Config
+// file not found: appsettings.json" even though the file was right there next to the exe -
+// interactive `WyzeSalesExtract.exe` runs from that same folder worked fine. Root cause: a
+// relative path resolves against the PROCESS's current directory, and the Windows Service
+// Control Manager does not launch a service with its cwd set to the exe's own folder - it's
+// %SystemRoot%\System32 (a well-known .NET Windows Service pitfall, unrelated to
+// UseWindowsService() below, which fixes the *hosting* framework's own ContentRootPath but
+// has no effect on a plain File.Exists/File.ReadAllText call like AppSettings.Load's own, or
+// ServiceInstaller.TryReadClientCode's). An interactive run (typed from inside
+// C:\WyzeSalesExtract, as in every README example, and as `install` itself always is) never
+// hits this - which is exactly why it passed manual testing, why the service still got
+// registered under the right name at install time, and why it only broke once the service
+// was actually started by Windows itself. Log.cs's own fallback-log path already anchors on
+// AppContext.BaseDirectory for precisely this reason (see its constructor) - applying the
+// same fix here so this resolves the same way regardless of what launched this process or
+// what its current directory happens to be. Only rewrites a RELATIVE path (the default
+// "appsettings.json", or a relative --config value) - an already-absolute --config path,
+// e.g. `--config D:\other\appsettings.json`, is left exactly as given.
+if (!Path.IsPathRooted(configPath))
+    configPath = Path.Combine(AppContext.BaseDirectory, configPath);
+
 // --run-once: does a single extract-and-write-to-Supabase run and exits, ignoring
 // Schedule.RunTimes. This is the manual/validation mode - use this to test config changes
 // without waiting for the clock.
@@ -51,7 +72,17 @@ if (args.Contains("--run-once"))
 // service name matches whatever ServiceInstaller.Install() actually registered (derived from
 // appsettings.json's Supabase.ClientCode), not a hardcoded one - see ServiceInstaller's own
 // remarks.
-var (serviceName, _) = ServiceInstaller.ResolveServiceIdentity();
+//
+// Passing the already-resolved (now-absolute) configPath here, not letting
+// ResolveServiceIdentity fall back to its own separate relative DefaultConfigPath - that
+// fallback is exactly the same relative-path-under-the-wrong-cwd trap as the config-loading
+// fix just above, just silent instead of loud: TryReadClientCode swallows a missing-file
+// FileNotFoundException entirely and quietly defaults to "WCSA", so under a service's real
+// cwd this would silently register/report the WRONG service identity to Windows instead of
+// visibly failing - not what broke Edgetec's run (that was AppSettings.Load, above), but the
+// same root cause and worth closing at the same time rather than leaving a second latent copy
+// of it.
+var (serviceName, _) = ServiceInstaller.ResolveServiceIdentity(configPath);
 var builder = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options => options.ServiceName = serviceName)
     .ConfigureServices(services =>
