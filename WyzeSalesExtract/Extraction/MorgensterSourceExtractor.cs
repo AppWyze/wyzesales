@@ -69,16 +69,31 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
         log.Info($"  {salesFacts.Count} row(s) (after SearchType/date filtering, including the restaurant GL rows).");
 
         log.Info("Assembling reference data (salesmen, customers, categories, items)...");
+        var categories = lk.ItemCategoryDescriptionByCode
+            .Where(kv => !string.IsNullOrEmpty(kv.Key))
+            .Select(kv => (DepartmentCode: kv.Key, Name: kv.Value))
+            .ToList();
+        var validCategoryCodes = categories.Select(c => c.DepartmentCode).ToHashSet();
         var refData = new ReferenceData(
             BranchCodes: new List<string>(),
             SalesReps: lk.SalesmanDescriptionByCode.Select(kv => (RepCode: kv.Key, Name: kv.Value)).ToList(),
             Customers: lk.CustomerDescriptionByCode.Select(kv => (Code: kv.Key, Name: kv.Value, AssignedRepCode: (string?)null)).ToList(),
-            Categories: lk.ItemCategoryDescriptionByCode.Select(kv => (DepartmentCode: kv.Key, Name: kv.Value)).ToList(),
+            Categories: categories,
             Suppliers: new List<(string AccountCode, string Name)>(),
             Items: lk.ItemDescriptionByCode.Select(kv => (
                 Code: kv.Key,
                 Name: kv.Value,
-                DepartmentCode: (string?)lk.ItemCategoryCodeByItemCode.GetValueOrDefault(kv.Key),
+                // items.department_code is a foreign key into categories(client_id, department_code),
+                // and Categories above only contains codes InventoryCategory actually defines. Inventory.Category
+                // on the other hand is taken as-is from the source - "" for an uncategorized item (GetString
+                // turns a NULL Category into "", not a real code), or occasionally a stale code InventoryCategory
+                // no longer has a row for. Either one inserted straight through blew up UpsertItemsAsync with a
+                // 23503 FK violation on the first live Morgenster run (Craig, 2026-10-01). Only pass through a
+                // code that's actually in Categories; anything else becomes NULL, same "uncategorized" meaning
+                // the original QlikView ApplyMap-with-no-match would have shown as a blank category anyway.
+                DepartmentCode: lk.ItemCategoryCodeByItemCode.TryGetValue(kv.Key, out var cat) && validCategoryCodes.Contains(cat)
+                    ? cat
+                    : null,
                 SupplierAccountCode: (string?)null,
                 DefaultCost: (decimal?)null,
                 DefaultSellPrice: (decimal?)null)).ToList());
