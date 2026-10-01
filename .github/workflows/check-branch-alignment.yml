@@ -1,0 +1,50 @@
+name: Check main/staging alignment
+
+# Catches exactly the kind of drift this was written for (Craig, 2026-10-01): main and staging
+# silently ending up with different CODE because a change landed on one branch and never made
+# it to the other - not a data difference (staging deliberately points at its own separate
+# Supabase project, that's by design - see netlify.toml's [context.staging]), a code difference,
+# which isn't supposed to happen under the "staging is always merged into main, never bypassed"
+# rule this check exists to backstop.
+#
+# Runs on every push to either branch and does a plain TREE diff between them (not a commit-
+# history comparison) - this project's history already has one real precedent (2026-10-01) of
+# the same change being committed separately to each branch with different hashes but identical
+# final content, which a history-based check would have falsely flagged as drift. Comparing the
+# actual file contents instead means that kind of independently-applied-but-identical change
+# still passes, and only a REAL content difference fails.
+#
+# Fails loudly on a real difference, on purpose - same "a failure here is deliberate, not a
+# false positive to suppress" philosophy as build-wyzesalesextract.yml's own self-test step.
+# The fix when this goes red is always the same: merge whichever branch is ahead into the other.
+on:
+  push:
+    branches: [main, staging]
+  workflow_dispatch: {}
+
+jobs:
+  check-alignment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Diff main against staging
+        run: |
+          git fetch origin main staging
+          DIFF="$(git diff origin/main origin/staging --stat)"
+          if [ -n "$DIFF" ]; then
+            {
+              echo "## ⚠️ main and staging have diverged"
+              echo '```'
+              echo "$DIFF"
+              echo '```'
+              echo ""
+              echo "Merge whichever branch is ahead into the other so they match again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::main and staging have diverged - see the job summary for the file list."
+            echo "$DIFF"
+            exit 1
+          fi
+          echo "main and staging are aligned - no code differences." >> "$GITHUB_STEP_SUMMARY"
