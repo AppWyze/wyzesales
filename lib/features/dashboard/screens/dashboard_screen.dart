@@ -18,6 +18,7 @@ import '../../../data/models/sales_document.dart';
 import '../../../data/models/sales_forecast_figure.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
+import '../../../shared/widgets/help_info_icon.dart';
 import '../../../shared/widgets/simple_pie_chart.dart';
 import '../../../shared/widgets/toggle_stat_card.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
@@ -1793,6 +1794,22 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           qtd: '${formatRand(kpis.companyActualQtd)} of ${formatRand(kpis.companyTargetQtd)} target (QTD)',
                           ytd: '${formatRand(kpis.companyActualYtd)} of ${formatRand(kpis.companyTargetYtd)} target (YTD)',
                         ),
+                        help: const TileHelp(
+                          title: 'How Revenue Target Attainment is calculated',
+                          paragraphs: [
+                            'What % of the Target you\'ve actually sold so far this period — '
+                                'actual revenue divided by Target revenue, for whichever period the '
+                                'page is set to (MTD, QTD or YTD).',
+                            'The Target itself comes from Budgets: a month\'s entered Sales '
+                                'Budget if one exists, otherwise the Seasonal Forecast steps in '
+                                'automatically to fill the gap. You never need to pick which one '
+                                '— this tile just shows whatever the resolved Target actually is.',
+                            '100% or more is green — on or ahead of Target. Anything under '
+                                '100% is amber. There\'s no red state here: falling short of a '
+                                'target partway through a period is normal, not a failure signal '
+                                'on its own.',
+                          ],
+                        ),
                       ),
                       ToggleStatCard(
                         label: 'Gross Profit Margin',
@@ -1803,6 +1820,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           mtd: '${formatRand(kpis.profitMtd)} of ${formatRand(kpis.salesMtd)} sales (MTD)',
                           qtd: '${formatRand(kpis.profitQtd)} of ${formatRand(kpis.salesQtd)} sales (QTD)',
                           ytd: '${formatRand(kpis.profitYtd)} of ${formatRand(kpis.salesYtd)} sales (YTD)',
+                        ),
+                        help: const TileHelp(
+                          title: 'How Gross Profit Margin is calculated',
+                          paragraphs: [
+                            'Gross profit as a percentage of sales, for whichever period the '
+                                'page is set to (MTD, QTD or YTD) — the subtitle shows the exact '
+                                'Rand profit and sales figures behind that percentage.',
+                            'Green means you made a profit over the period; red means the '
+                                'period is running at a loss (gross profit below zero) — a '
+                                'genuine quality signal, not just a comparison against a target.',
+                          ],
                         ),
                       ),
                       ToggleStatCard(
@@ -1820,6 +1848,26 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           ytd: coverageGapYtd <= 0
                               ? '${formatRand(coverageGapYtd.abs())} above target (YTD)'
                               : '${formatRand(coverageGapYtd)} gap to target (YTD)',
+                        ),
+                        help: const TileHelp(
+                          title: 'How Sales Coverage is calculated',
+                          paragraphs: [
+                            'The gap between what you\'ve actually sold and your Target, '
+                                'turned into a more useful question: how many periods of your '
+                                'NORMAL sales pace would it take to close that gap?',
+                            'If you\'re already at or above Target, this just reads "On '
+                                'Target" — there\'s no gap left to cover.',
+                            'Otherwise it works out the Rand gap (Target minus Actual) and '
+                                'divides it by your own average revenue per month, taken from '
+                                'your trailing sales history. A brand-new entity with under 3 '
+                                'months of its own history doesn\'t have a reliable average yet, '
+                                'so the company-wide average is used instead for that one — '
+                                'you\'ll see a small * next to the percentage whenever that '
+                                'fallback kicks in.',
+                            'Under 25% is green (a small, easily-closed gap), 25–50% is amber, '
+                                'and over 50% is red — needing more than half a typical month\'s '
+                                'worth of extra sales to catch up is a meaningfully large gap.',
+                          ],
                         ),
                       ),
                       ToggleStatCard(
@@ -1840,6 +1888,18 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           qtd: 'of QTD revenue, top ${formatQuantity(kpis.top5CustomerCountQtd)} accounts',
                           ytd: 'of YTD revenue, top ${formatQuantity(kpis.top5CustomerCountYtd)} accounts',
                         ),
+                        help: const TileHelp(
+                          title: 'How Top 5 Customer Concentration is calculated',
+                          paragraphs: [
+                            'What share of your total revenue for the period came from just '
+                                'your 5 biggest customers — a quick read on how exposed you are '
+                                'to losing any one or two of them.',
+                            'Amber at 40% or above is a starting-point "worth keeping an eye '
+                                'on" threshold rather than a hard rule — the more revenue sits '
+                                'with a handful of accounts, the more a single customer leaving '
+                                'can move your overall numbers.',
+                          ],
+                        ),
                       ),
                       ToggleStatCard(
                         label: 'Rep Target Attainment',
@@ -1858,6 +1918,18 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           mtd: kpis.repsTotalMtd == 0 ? 'no rep targets set for this month' : 'reps at/above target (MTD)',
                           qtd: kpis.repsTotalQtd == 0 ? 'no rep targets set this quarter' : 'reps at/above target (QTD)',
                           ytd: kpis.repsTotalYtd == 0 ? 'no rep targets set this year' : 'reps at/above target (YTD)',
+                        ),
+                        help: const TileHelp(
+                          title: 'How Rep Target Attainment is calculated',
+                          paragraphs: [
+                            'How many of your sales reps are at or above their own individual '
+                                'Target for the period, out of how many reps actually have a '
+                                'Target set — reps with nothing entered for them aren\'t counted '
+                                'either way.',
+                            'Green means every rep with a target is hitting it; amber means at '
+                                'least one is falling short. If no rep has a target set at all '
+                                'for the period, this shows a dash rather than a misleading 0 of 0.',
+                          ],
                         ),
                       ),
                       // 6. Returns / Credit Note Rate — replaced "Revenue &
@@ -1891,6 +1963,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           mtd: '${formatRand(kpis.creditNoteMtd)} of ${formatRand(kpis.grossInvoicedMtd)} invoiced (MTD)',
                           qtd: '${formatRand(kpis.creditNoteQtd)} of ${formatRand(kpis.grossInvoicedQtd)} invoiced (QTD)',
                           ytd: '${formatRand(kpis.creditNoteYtd)} of ${formatRand(kpis.grossInvoicedYtd)} invoiced (YTD)',
+                        ),
+                        help: const TileHelp(
+                          title: 'How Returns / Credit Note Rate is calculated',
+                          paragraphs: [
+                            'Total credit note value as a percentage of total gross invoiced '
+                                'value for the period — a quality signal, not a revenue one: how '
+                                'much of what you invoiced came back as a return or credit.',
+                            'Unlike the other tiles, lower is better here, so the colour scale '
+                                'is flipped: 3% or under is green, anything above that is amber. '
+                                '3% is a starting-point threshold, not a fixed rule.',
+                          ],
                         ),
                       ),
                       // "Last Updated" tile removed 2026-08-26 — that
