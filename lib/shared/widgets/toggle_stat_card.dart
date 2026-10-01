@@ -180,10 +180,13 @@ class _ToggleStatCardState extends State<ToggleStatCard> {
     return Stack(
       children: [
         Positioned.fill(child: _buildCard(textTheme, value, color, subtitle, label)),
+        // 2026-10-01: nudged in from the bare corner (was top: 2, right: 2)
+        // — Craig, after seeing it pinned right against the edge: "slightly
+        // down and slightly to the left."
         if (widget.help != null)
           Positioned(
-            top: 2,
-            right: 2,
+            top: 8,
+            right: 8,
             child: HelpInfoIcon(help: widget.help!),
           ),
       ],
