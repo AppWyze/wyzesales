@@ -5,6 +5,7 @@ import '../../../core/constants/fiscal.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/client_dimension_config.dart';
+import '../../../data/models/data_load_run.dart';
 import '../../../data/models/pricing_plan.dart';
 import '../../../shared/utils/responsive.dart';
 import '../../../shared/widgets/app_shell.dart';
@@ -323,7 +324,7 @@ class _ClientsTab extends ConsumerStatefulWidget {
 }
 
 class _ClientsTabState extends ConsumerState<_ClientsTab> {
-  late Future<List<Map<String, dynamic>>> _future;
+  late Future<_ClientsTabData> _future;
 
   @override
   void initState() {
@@ -332,7 +333,22 @@ class _ClientsTabState extends ConsumerState<_ClientsTab> {
   }
 
   void _reload() {
-    _future = ref.read(platformAdminRepositoryProvider).fetchClientsWithLicense();
+    _future = _loadData();
+  }
+
+  // Both requests fire together (neither awaited before the other starts),
+  // then both are awaited here — not Future.wait, which would need an
+  // awkward cast back out of its heterogeneous List<dynamic> result for two
+  // differently-typed futures. 2026-10-01, Craig: "include the Load Chip
+  // information for each client... one view... the load status for each
+  // client" — fetchLatestDataLoadRuns() is the new one, see that method's
+  // own doc comment (platform_admin_repository.dart) for why it needs
+  // schema/056's RLS fix to return anything at all for other clients.
+  Future<_ClientsTabData> _loadData() async {
+    final repo = ref.read(platformAdminRepositoryProvider);
+    final clientsFuture = repo.fetchClientsWithLicense();
+    final loadRunsFuture = repo.fetchLatestDataLoadRuns();
+    return _ClientsTabData(clients: await clientsFuture, loadRunsByClientId: await loadRunsFuture);
   }
 
   @override
@@ -340,7 +356,7 @@ class _ClientsTabState extends ConsumerState<_ClientsTab> {
     final isDark = widget.isDark;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
-      child: FutureBuilder<List<Map<String, dynamic>>>(
+      child: FutureBuilder<_ClientsTabData>(
         future: _future,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -352,7 +368,8 @@ class _ClientsTabState extends ConsumerState<_ClientsTab> {
           if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
-          final clients = snapshot.data ?? const [];
+          final clients = snapshot.data?.clients ?? const [];
+          final loadRunsByClientId = snapshot.data?.loadRunsByClientId ?? const {};
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -377,13 +394,14 @@ class _ClientsTabState extends ConsumerState<_ClientsTab> {
                     : SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: SizedBox(
-                          width: 600,
+                          width: 760,
                           child: Column(
                             children: [
                               _tableHeader(isDark),
                               ...clients.map((c) => _ClientRow(
                                     client: c,
                                     isDark: isDark,
+                                    loadRun: loadRunsByClientId[c['id'] as String?],
                                     onSaved: () {
                                       if (mounted) setState(_reload);
                                     },
@@ -460,6 +478,7 @@ class _ClientsTabState extends ConsumerState<_ClientsTab> {
           SizedBox(width: 100, child: _HeaderCell('Plan')),
           SizedBox(width: 80, child: _HeaderCell('Users')),
           SizedBox(width: 100, child: _HeaderCell('License')),
+          SizedBox(width: 160, child: _HeaderCell('Load')),
           SizedBox(width: 40, child: _HeaderCell('')),
         ],
       ),
@@ -467,11 +486,24 @@ class _ClientsTabState extends ConsumerState<_ClientsTab> {
   }
 }
 
+/// `_ClientsTabState._loadData`'s combined result — `clients` is unchanged
+/// from before (fetchClientsWithLicense's own nested license/pricing_plan
+/// shape), `loadRunsByClientId` is new (2026-10-01): every client's own
+/// latest data_load_runs row, keyed by client id, or simply absent for a
+/// client with no rows yet — see `_LoadChip`'s own doc comment for how
+/// `_ClientRow` renders that "absent" case.
+class _ClientsTabData {
+  final List<Map<String, dynamic>> clients;
+  final Map<String, DataLoadRun> loadRunsByClientId;
+  const _ClientsTabData({required this.clients, required this.loadRunsByClientId});
+}
+
 class _ClientRow extends StatelessWidget {
   final Map<String, dynamic> client;
   final bool isDark;
+  final DataLoadRun? loadRun;
   final VoidCallback onSaved;
-  const _ClientRow({required this.client, required this.isDark, required this.onSaved});
+  const _ClientRow({required this.client, required this.isDark, required this.loadRun, required this.onSaved});
 
   @override
   Widget build(BuildContext context) {
@@ -546,6 +578,18 @@ class _ClientRow extends StatelessWidget {
                     ),
                   )
                 : _LicenseBadge(status: status, endDate: endDate),
+          ),
+          SizedBox(
+            width: 160,
+            child: loadRun == null
+                ? Text(
+                    'No extract yet',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                    ),
+                  )
+                : _LoadChip(run: loadRun!),
           ),
           SizedBox(
             width: 40,
@@ -2944,6 +2988,36 @@ class _LicenseBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(5)),
       child: Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500)),
+    );
+  }
+}
+
+/// The same "load status" pill app_shell.dart's top-bar `_LastDataUpdateChip`
+/// shows the signed-in user for their OWN client, sized to match this
+/// table's own `_LicenseBadge` instead of the top-bar's larger chip — one
+/// client per row here rather than one prominent banner (2026-10-01, Craig:
+/// "include the Load Chip information for each client... one view... the
+/// load status for each client"). Reads `DataLoadRunChip`'s shared
+/// `chipLabel`/`chipColor` (data_load_run.dart) — the exact same wording/
+/// colours as the top-bar chip, not a second copy that could drift from it.
+/// `_ClientRow` handles the "no rows yet" case itself with a plain `Text`,
+/// same split `_LicenseBadge`/"No license" already has — this widget is
+/// only ever built once `run` is known non-null.
+class _LoadChip extends StatelessWidget {
+  final DataLoadRun run;
+  const _LoadChip({required this.run});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = run.chipColor;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(5)),
+      child: Text(
+        run.chipLabel,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500),
+      ),
     );
   }
 }

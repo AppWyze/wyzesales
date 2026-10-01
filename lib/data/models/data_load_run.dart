@@ -1,3 +1,7 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../../core/theme/app_theme.dart';
+
 /// Mirrors public.data_load_runs (schema/033_wyzesales_data_load_runs.sql,
 /// 2026-09-04) — one row per WyzeSalesExtract run attempt, written by that
 /// program's own elevated Postgres connection (never through the app). This
@@ -69,4 +73,26 @@ class DataLoadRun {
   /// 'failure' so every call site (the top-bar chip, the history list) only
   /// ever needs to branch on three cases instead of re-deriving this itself.
   String get effectiveStatus => isStuck ? 'failure' : status;
+}
+
+/// Shared "load chip" label/colour logic — originally private to
+/// app_shell.dart's `_LastDataUpdateChip` (the signed-in user's OWN client,
+/// top bar), pulled out here 2026-10-01 so Platform Admin's Clients tab can
+/// show the exact same three/four states for EVERY client in one view
+/// (Craig: "include the Load Chip information for each client... so that I
+/// can go to one view and see exactly the load status for each client")
+/// without the two call sites' wording/colours silently drifting apart.
+extension DataLoadRunChip on DataLoadRun {
+  String get chipLabel {
+    final timeLabel = DateFormat('d MMM, HH:mm').format(startedAt.toLocal());
+    if (effectiveStatus == 'success') return 'Updated $timeLabel';
+    if (effectiveStatus == 'running') return 'Loading… (since $timeLabel)';
+    return isStuck ? 'Load stuck since $timeLabel' : 'Load failed $timeLabel';
+  }
+
+  Color get chipColor {
+    if (effectiveStatus == 'success') return AppColors.positive;
+    if (effectiveStatus == 'running') return AppColors.info;
+    return AppColors.negative;
+  }
 }

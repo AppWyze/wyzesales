@@ -288,8 +288,8 @@ class _LastDataUpdateChip extends ConsumerWidget {
     return runAsync.when(
       data: (run) {
         if (run == null) return _fallbackChip(context, ref);
-        final label = _labelFor(run);
-        final color = _colorFor(run);
+        final label = run.chipLabel;
+        final color = run.chipColor;
         return _chip(context, label, color.withValues(alpha: 0.14), color);
       },
       loading: () => _plainChip(context, 'Updated —'),
@@ -300,19 +300,6 @@ class _LastDataUpdateChip extends ConsumerWidget {
       // yet" rather than fabricating a red state from an unrelated error.
       error: (_, __) => _fallbackChip(context, ref),
     );
-  }
-
-  String _labelFor(DataLoadRun run) {
-    final timeLabel = DateFormat('d MMM, HH:mm').format(run.startedAt.toLocal());
-    if (run.effectiveStatus == 'success') return 'Updated $timeLabel';
-    if (run.effectiveStatus == 'running') return 'Loading… (since $timeLabel)';
-    return run.isStuck ? 'Load stuck since $timeLabel' : 'Load failed $timeLabel';
-  }
-
-  Color _colorFor(DataLoadRun run) {
-    if (run.effectiveStatus == 'success') return AppColors.positive;
-    if (run.effectiveStatus == 'running') return AppColors.info;
-    return AppColors.negative;
   }
 
   Widget _fallbackChip(BuildContext context, WidgetRef ref) {
