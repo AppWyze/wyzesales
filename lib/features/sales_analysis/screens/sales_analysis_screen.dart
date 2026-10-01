@@ -341,6 +341,7 @@ class _DateRangeGraphData {
   final List<String> categories;
   final List<num?> values;
   final List<num?> profits;
+  final List<num?> quantities;
 
   /// 2026-09-24, Craig: "When selecting a date range and there is a
   /// forecast (i.e. current year) then please show the forecast bars as
@@ -367,6 +368,7 @@ class _DateRangeGraphData {
     required this.categories,
     required this.values,
     required this.profits,
+    required this.quantities,
     required this.targetBars,
     required this.targetShareBars,
     required this.targetBasisBars,
@@ -393,7 +395,7 @@ class _DateRangeGraphData {
 /// path's (fiscal year), and nothing else needs the raw rows, so there's no
 /// reason to carry them past `_loadCompareData`.
 class _CompareGraphData {
-  final Map<String, Map<String, ({num value, num profit})>> byEntityAndMonth;
+  final Map<String, Map<String, ({num value, num profit, num quantity})>> byEntityAndMonth;
 
   /// 2026-09-26, Craig: "I don't see the need to include the year selection
   /// as we can already select this from the main filter." The fiscal year
@@ -908,6 +910,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final categories = <String>[];
     final values = <num?>[];
     final profits = <num?>[];
+    final quantities = <num?>[];
     final targetBars = <num?>[];
     final targetShareBars = <double?>[];
     final targetBasisBars = <String?>[];
@@ -919,6 +922,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       final row = byMonth[cursor];
       values.add(row?.value ?? 0);
       profits.add(row?.profit ?? 0);
+      quantities.add(row?.quantity ?? 0);
 
       // Apportionment — Craig: "if it is a potion for the month then divide
       // the forecast by the days and multiply out." Only the first and last
@@ -960,6 +964,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
       categories: categories,
       values: values,
       profits: profits,
+      quantities: quantities,
       targetBars: targetBars,
       targetShareBars: targetShareBars,
       targetBasisBars: targetBasisBars,
@@ -967,9 +972,20 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     );
   }
 
+  /// The series list the range chart/export walk, keyed by whichever
+  /// measure is currently selected — same three-way switch as every other
+  /// screen's `_measure == ValueMeasure.rValue ? a : b` branch point, now a
+  /// `row.quantity` case (2026-10-01, Craig: "We need a third one Quantity").
+  List<num?> _rangeSeriesFor(_DateRangeGraphData data) => switch (_measure) {
+        ValueMeasure.rValue => data.values,
+        ValueMeasure.grossProfit => data.profits,
+        ValueMeasure.quantity => data.quantities,
+      };
+
   Future<ExportData> _buildRangeExportData() async {
     final data = await _rangeFuture!;
-    final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
+    final measureLabel = _measure.label;
+    final series = _rangeSeriesFor(data);
     final dateFormat = DateFormat('yyyy-MM-dd');
     final fromLabel = dateFormat.format(widget.fromDate!);
     final toLabel = dateFormat.format(widget.toDate!);
@@ -992,7 +1008,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
         for (var i = 0; i < data.categories.length; i++)
           [
             data.categories[i],
-            _formatOrDash(_measure == ValueMeasure.rValue ? data.values[i] : data.profits[i]),
+            _formatOrDash(series[i]),
             if (includeTarget) _formatOrDash(data.targetBars[i]),
             if (includeTargetBasis) data.targetBasisBars[i] ?? '—',
             if (includeTargetBasis) _formatShareOrDash(data.targetShareBars[i]),
@@ -1103,12 +1119,12 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
           fiscalYears: [year],
           filters: filters.withDimension(dimension.dimensionKey, null),
         );
-    final byEntityAndMonth = <String, Map<String, ({num value, num profit})>>{};
+    final byEntityAndMonth = <String, Map<String, ({num value, num profit, num quantity})>>{};
     for (final row in rows) {
       if (!tickedCodes.contains(row.entityCode)) continue;
       final label = fiscalMonthLabelFor(row.month);
       byEntityAndMonth.putIfAbsent(row.entityCode, () => {});
-      byEntityAndMonth[row.entityCode]![label] = (value: row.value, profit: row.profit);
+      byEntityAndMonth[row.entityCode]![label] = (value: row.value, profit: row.profit, quantity: row.quantity);
     }
     return _CompareGraphData(year: year, byEntityAndMonth: byEntityAndMonth);
   }
@@ -1118,9 +1134,15 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   /// a real 0 (nothing sold that month) UNLESS `year` is the current,
   /// still-partial fiscal year AND this month hasn't happened yet, in which
   /// case it's a gap, not a zero.
-  num? _compareValueFor(Map<String, ({num value, num profit})> monthMap, String month, int year) {
+  num? _compareValueFor(Map<String, ({num value, num profit, num quantity})> monthMap, String month, int year) {
     final row = monthMap[month];
-    if (row != null) return _measure == ValueMeasure.rValue ? row.value : row.profit;
+    if (row != null) {
+      return switch (_measure) {
+        ValueMeasure.rValue => row.value,
+        ValueMeasure.grossProfit => row.profit,
+        ValueMeasure.quantity => row.quantity,
+      };
+    }
     final currentFiscalMonthIndex = _months.indexOf(fiscalMonthLabelFor(DateTime.now()));
     final currentFy = fiscalYearFor(DateTime.now(), startMonth: _startMonth);
     final isStillFuture = year == currentFy && _months.indexOf(month) > currentFiscalMonthIndex;
@@ -1131,7 +1153,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   /// the 3 months is" reasoning as `_quarterlyValueFor` uses for the normal
   /// path, just keyed by this mode's own per-entity month map instead of
   /// `_groupByMonth`'s fiscal-year one.
-  num? _compareQuarterlyValueFor(Map<String, ({num value, num profit})> monthMap, String quarterLabel, int year) {
+  num? _compareQuarterlyValueFor(Map<String, ({num value, num profit, num quantity})> monthMap, String quarterLabel, int year) {
     final monthValues = [
       for (final month in fiscalMonthsInQuarter(quarterLabel, startMonth: _startMonth)) _compareValueFor(monthMap, month, year),
     ];
@@ -1176,8 +1198,8 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     return TrendLineChart(
       categories: categories,
       series: series,
-      axisValueFormatter: _compactRand,
-      detailValueFormatter: (v) => formatRand(v),
+      axisValueFormatter: _axisFormatter,
+      detailValueFormatter: (v) => _formatDetail(v),
     );
   }
 
@@ -1185,7 +1207,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     final data = await _compareFuture!;
     final isQuarterly = _granularity == _ChartGranularity.quarters;
     final categories = isQuarterly ? fiscalQuarterLabels : _months;
-    final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
+    final measureLabel = _measure.label;
     final dimensionLabel = _compareDimension?.displayLabel ?? '';
     return ExportData(
       headers: [
@@ -1436,7 +1458,13 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   // exported file lines up exactly with a broken point on the chart.
   num? _valueFor(Map<String, Map<int, ConsolidatedSales>> byMonth, String month, int fiscalYear) {
     final row = byMonth[month]?[fiscalYear];
-    if (row != null) return _measure == ValueMeasure.rValue ? row.value : row.profit;
+    if (row != null) {
+      return switch (_measure) {
+        ValueMeasure.rValue => row.value,
+        ValueMeasure.grossProfit => row.profit,
+        ValueMeasure.quantity => row.quantity,
+      };
+    }
     final currentFiscalMonthIndex = _months.indexOf(fiscalMonthLabelFor(DateTime.now()));
     // _fiscalYears is built via fiscalYearWindow(currentFy, historyYears) in
     // initState, which always places the current fiscal year last regardless
@@ -1484,7 +1512,7 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     // onExportReady registration) — _future is guaranteed set in that mode.
     final data = await _future!;
     final byMonth = _groupByMonth(data.rows);
-    final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
+    final measureLabel = _measure.label;
     // 2026-09-25, Craig — export mirrors whichever granularity the chart is
     // currently showing (see `_ChartGranularity`'s own doc comment), same as
     // it already mirrors `_measure`.
@@ -1538,9 +1566,27 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     );
   }
 
-  String _formatOrDash(num? value) => value == null ? '—' : formatRand(value);
+  String _formatOrDash(num? value) => value == null ? '—' : _formatDetail(value);
 
   String _formatShareOrDash(double? share) => share == null ? '—' : '${(share * 100).toStringAsFixed(1)}%';
+
+  /// Same compacting as _compactRand but without the 'R' prefix — Quantity
+  /// is a unit count, not a Rand amount (2026-10-01, added alongside
+  /// Quantity as a third ValueGpToggle option).
+  String _compactQuantity(num value) {
+    final abs = value.abs();
+    if (abs >= 1000000) return '${(value / 1000000).toStringAsFixed(1)}M';
+    if (abs >= 1000) return '${(value / 1000).toStringAsFixed(0)}K';
+    return value.toStringAsFixed(0);
+  }
+
+  /// Axis-gridline formatter for whichever measure is currently selected —
+  /// see _compactQuantity's doc comment.
+  String Function(num) get _axisFormatter => _measure == ValueMeasure.quantity ? _compactQuantity : _compactRand;
+
+  /// Hover/tap detail-row formatter for whichever measure is currently
+  /// selected — full precision, unlike the compact axis formatter above.
+  String _formatDetail(num v) => _measure == ValueMeasure.quantity ? formatQuantity(v) : formatRand(v);
 
   Widget _buildChart(_GraphData data) {
     final byMonth = _groupByMonth(data.rows);
@@ -1634,8 +1680,8 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     return TrendLineChart(
       categories: categories,
       series: series,
-      axisValueFormatter: _compactRand,
-      detailValueFormatter: (v) => formatRand(v),
+      axisValueFormatter: _axisFormatter,
+      detailValueFormatter: (v) => _formatDetail(v),
       targetBars: showTarget ? targetBars : null,
       targetShareBars: showTarget ? targetShareBars : null,
       targetBasisBars: showTarget ? targetBasisBars : null,
@@ -1672,9 +1718,9 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
   Widget _buildRangeChart(_DateRangeGraphData data) {
     final series = [
       TrendSeries(
-        label: _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit',
+        label: _measure.label,
         color: AppColors.teal,
-        values: _measure == ValueMeasure.rValue ? data.values : data.profits,
+        values: _rangeSeriesFor(data),
       ),
     ];
 
@@ -1685,8 +1731,8 @@ class _GraphTabState extends ConsumerState<_GraphTab> {
     return TrendLineChart(
       categories: data.categories,
       series: series,
-      axisValueFormatter: _compactRand,
-      detailValueFormatter: (v) => formatRand(v),
+      axisValueFormatter: _axisFormatter,
+      detailValueFormatter: (v) => _formatDetail(v),
       targetBars: showTarget ? data.targetBars : null,
       targetShareBars: showTarget ? data.targetShareBars : null,
       targetBasisBars: showTarget ? data.targetBasisBars : null,

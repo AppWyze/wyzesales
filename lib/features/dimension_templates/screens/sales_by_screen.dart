@@ -177,6 +177,14 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
         return ValueMeasure.grossProfit;
       case 'rValue':
         return ValueMeasure.rValue;
+      // 2026-10-01: the Dashboard's pie-chart drill-down (_drillDown,
+      // dashboard_screen.dart) now also passes `measure=quantity` since
+      // Quantity became a 3rd ValueGpToggle option — without this case a
+      // Quantity-mode drill-down silently fell through to `_measure`
+      // (initState's default, ValueMeasure.rValue), landing on the wrong
+      // measure.
+      case 'quantity':
+        return ValueMeasure.quantity;
       default:
         return _measure;
     }
@@ -241,7 +249,11 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     final yearTotals = <String, Map<int, num>>{};
     final monthTotals = <String, Map<DateTime, num>>{};
     for (final row in rows) {
-      final value = _measure == ValueMeasure.rValue ? row.value : row.profit;
+      final value = switch (_measure) {
+        ValueMeasure.rValue => row.value,
+        ValueMeasure.grossProfit => row.profit,
+        ValueMeasure.quantity => row.quantity,
+      };
       yearTotals.putIfAbsent(row.entityCode, () => {});
       yearTotals[row.entityCode]![row.fiscalYear] = (yearTotals[row.entityCode]![row.fiscalYear] ?? 0) + value;
       if (recentMonths.contains(row.month)) {
@@ -562,7 +574,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
           final cells = <DataCell>[DataCell(Text(data.names[code] ?? code))];
           for (final col in yearColumns) {
             if (!col.isVariance) {
-              cells.add(DataCell(Text(formatRand(data.yearTotals[code]?[col.current]))));
+              cells.add(DataCell(Text(_formatValue(data.yearTotals[code]?[col.current]))));
             } else {
               final current = data.yearTotals[code]?[col.current];
               final previous = data.yearTotals[code]?[col.previous];
@@ -571,7 +583,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
           }
           for (final col in monthColumns) {
             if (!col.isVariance) {
-              cells.add(DataCell(Text(formatRand(data.monthTotals[code]?[col.current]))));
+              cells.add(DataCell(Text(_formatValue(data.monthTotals[code]?[col.current]))));
             } else {
               final current = data.monthTotals[code]?[col.current];
               final previous = data.monthTotals[code]?[col.previous];
@@ -621,14 +633,14 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     final cells = <DataCell>[const DataCell(Text('Total', style: style))];
     for (final col in _interleavedNewestFirst(data.fiscalYears)) {
       if (!col.isVariance) {
-        cells.add(DataCell(Text(formatRand(yearTotal(col.current)), style: style)));
+        cells.add(DataCell(Text(_formatValue(yearTotal(col.current)), style: style)));
       } else {
         cells.add(DataCell(Text(_varianceLabel(yearTotal(col.current), yearTotal(col.previous!)), style: style)));
       }
     }
     for (final col in _interleavedNewestFirst(chronological)) {
       if (!col.isVariance) {
-        cells.add(DataCell(Text(formatRand(monthTotal(col.current)), style: style)));
+        cells.add(DataCell(Text(_formatValue(monthTotal(col.current)), style: style)));
       } else {
         cells.add(DataCell(Text(_varianceLabel(monthTotal(col.current), monthTotal(col.previous!)), style: style)));
       }
@@ -643,6 +655,12 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     final variance = variancePercent(current, previous);
     return variance == null ? '—' : formatPercent(variance);
   }
+
+  /// Formats a cell for whichever measure is currently selected - Quantity
+  /// is a unit count (formatQuantity), R Value/R Gross Profit are both Rand
+  /// (formatRand) - replacing the bare `formatRand` calls below that predate
+  /// the Quantity option (2026-10-01).
+  String _formatValue(num? value) => _measure == ValueMeasure.quantity ? formatQuantity(value) : formatRand(value);
 
   /// Same column layout as _buildTable (dimension name, then a value/
   /// variance pair per fiscal year, then a value/variance pair per recent
@@ -697,14 +715,14 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     final totalsRow = <String>['Total'];
     for (final col in yearColumns) {
       totalsRow.add(
-        col.isVariance ? _varianceLabel(yearTotal(col.current), yearTotal(col.previous!)) : formatRand(yearTotal(col.current)),
+        col.isVariance ? _varianceLabel(yearTotal(col.current), yearTotal(col.previous!)) : _formatValue(yearTotal(col.current)),
       );
     }
     for (final col in monthColumns) {
       totalsRow.add(
         col.isVariance
             ? _varianceLabel(monthTotal(col.current), monthTotal(col.previous!))
-            : formatRand(monthTotal(col.current)),
+            : _formatValue(monthTotal(col.current)),
       );
     }
 
@@ -713,14 +731,14 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       final cells = <String>[data.names[code] ?? code];
       for (final col in yearColumns) {
         if (!col.isVariance) {
-          cells.add(formatRand(data.yearTotals[code]?[col.current]));
+          cells.add(_formatValue(data.yearTotals[code]?[col.current]));
         } else {
           cells.add(_varianceLabel(data.yearTotals[code]?[col.current], data.yearTotals[code]?[col.previous]));
         }
       }
       for (final col in monthColumns) {
         if (!col.isVariance) {
-          cells.add(formatRand(data.monthTotals[code]?[col.current]));
+          cells.add(_formatValue(data.monthTotals[code]?[col.current]));
         } else {
           cells.add(_varianceLabel(data.monthTotals[code]?[col.current], data.monthTotals[code]?[col.previous]));
         }
