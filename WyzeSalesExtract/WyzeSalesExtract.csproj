@@ -38,12 +38,17 @@
          - ClosedXML: reads "Edgetec Formats.xlsx" at runtime (Data/EdgetecLookups.cs) - chosen
            over EPPlus specifically because EPPlus's licence forbids commercial use without a
            paid licence, which would be inappropriate for Craig's commercial product; ClosedXML
-           is MIT licensed. -->
+           is MIT licensed.
+         - System.Text.Encoding.CodePages: opt-in legacy code page support .NET doesn't ship by
+           default (2026-10-01) - needed for Data/DelimitedFile.cs's Encoding.GetEncoding(1252),
+           reading Edgetec's Windows-1252 STOCK.TXT/ACCOUNTS.TXT. Program.cs registers it
+           (Encoding.RegisterProvider) before anything else runs. -->
     <PackageReference Include="System.Data.Odbc" Version="8.0.1" />
     <PackageReference Include="Npgsql" Version="8.0.5" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -6,6 +6,18 @@ using WyzeSalesExtract.Logging;
 using WyzeSalesExtract.ServiceInstall;
 using WyzeSalesExtract.Worker;
 
+// .NET (unlike the old .NET Framework CLR) doesn't ship legacy Windows code pages built in -
+// only Unicode (UTF-8/16/32) and ASCII are available out of the box, specifically to keep the
+// runtime's footprint down. Edgetec's STOCK.TXT/ACCOUNTS.TXT are Windows-1252 (the original
+// QlikView script's own "codepage is 1252" setting - see Data/DelimitedFile.cs), and
+// Encoding.GetEncoding(1252) throws NotSupportedException without this provider registered
+// first - confirmed live on Edgetec's own server, 2026-10-01 ("No data is available for
+// encoding 1252"), the first real run past the earlier REPS.DBF permissions fix. Must run
+// before anything that could call DelimitedFile.ReadWithHeader, so this sits as the very first
+// statement in the program, ahead of even --selftest (which doesn't need it, but there's no
+// reason to register it any later than "as early as possible, exactly once").
+System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
 // --selftest: proves the date-math cleanup (FiscalDate) is equivalent to the original
 // script's nested-If logic. Needs no database and no config file - run this first on a new
 // machine / after any date-logic change.
