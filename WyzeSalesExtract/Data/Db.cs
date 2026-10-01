@@ -48,7 +48,22 @@ public static class Row
     public static string GetString(this OdbcDataReader r, string col)
     {
         var ord = r.GetOrdinal(col);
-        return r.IsDBNull(ord) ? "" : r.GetValue(ord).ToString() ?? "";
+        var value = r.IsDBNull(ord) ? "" : r.GetValue(ord).ToString() ?? "";
+        // Postgres' text type flatly rejects an embedded null byte (0x00), regardless of
+        // encoding - "invalid byte sequence for encoding UTF8: 0x00" on whatever insert hits
+        // it first, the whole batch failing even though every OTHER field in it is fine.
+        // Morgenster's driver (Sage Pastel Partner / Pervasive PSQL, fixed-width CHAR columns)
+        // pads unused space in some columns with null bytes rather than spaces - confirmed live,
+        // 2026-10-01: ReplaceSalesDocumentFactsAsync failed with exactly this error on Craig's
+        // first clean run (the earlier FK-violation run never got this far). .NET's ODBC driver
+        // passes that padding straight through as literal '\0' characters with no trimming of
+        // its own. Stripped here, in the one shared reader every client's Db/EdgetecDb/
+        // MorgensterDb funnels every string column through, rather than in each client's own
+        // extractor - this is pure defensive sanitization (a null byte is invisible, non-printable
+        // padding with no business meaning in any of these fields), not a change to the actual
+        // data, so it's correct to apply it everywhere a string comes off any client's ODBC
+        // driver, not just Morgenster's.
+        return value.IndexOf('\0') >= 0 ? value.Replace("\0", "") : value;
     }
 
     public static decimal GetDecimal(this OdbcDataReader r, string col)

@@ -15,6 +15,7 @@ public static class SourceExtractorFactory
     {
         "WCSA" => new WcsaSourceExtractor(),
         "EDGETEC" => new EdgetecSourceExtractor(),
+        "MORGENSTER" => new MorgensterSourceExtractor(),
         _ => throw new NotSupportedException(
             $"No extractor registered for Source.Type '{sourceType}'. " +
             "Add one to SourceExtractorFactory.Create once that client's extractor is built - " +

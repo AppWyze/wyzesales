@@ -103,6 +103,7 @@ Extraction/ISourceExtractor.cs        The per-client plug-in point - see "Adding
 Extraction/SourceExtractorFactory.cs  Picks which client's extractor to run, from Source.Type
 Extraction/WcsaSourceExtractor.cs     WCSA/IQRetail's extractor - wraps Data/Db+Lookups+Facts and Builders/* below, unchanged
 Extraction/EdgetecSourceExtractor.cs  EDGETEC-SPECIFIC: wraps Data/EdgetecDb+EdgetecLookups+EdgetecFacts below - see "Adding a new client"
+Extraction/MorgensterSourceExtractor.cs  MORGENSTER-SPECIFIC: wraps Data/MorgensterDb+MorgensterLookups below - see "Adding a new client"
 Data/Db.cs                    WCSA-SPECIFIC: IQRetail ODBC connection + query helper + the exact text-cleaning rules
 Data/Lookups.cs                WCSA-SPECIFIC: all ~20 raw dimension pulls (customers, reps, categories, suppliers, stock counts, lead times)
 Data/Facts.cs                  WCSA-SPECIFIC: the raw invoice/credit-note line facts
@@ -110,6 +111,8 @@ Data/EdgetecDb.cs             EDGETEC-SPECIFIC: Edgetec's own ODBC connection + 
 Data/EdgetecLookups.cs        EDGETEC-SPECIFIC: static reference data - REPS/STOCKCAT (ODBC), STOCK.TXT/ACCOUNTS.TXT (flat files), "Edgetec Formats.xlsx" (ClosedXML)
 Data/EdgetecFacts.cs          EDGETEC-SPECIFIC: the raw GLTRANS/STTRANS-derived facts (DOCNO- and DOCNO&amp;ACCNO-keyed lookups, GL lines)
 Data/DelimitedFile.cs         EDGETEC-SPECIFIC: small RFC4180-ish CSV reader for STOCK.TXT/ACCOUNTS.TXT (no NuGet dependency for two small files)
+Data/MorgensterDb.cs          MORGENSTER-SPECIFIC: Morgenster's own ODBC connection + query helper (plain "FROM MORGEN.Table", no path prefix - simplest of the three dialects, 32-bit-only DSN)
+Data/MorgensterLookups.cs     MORGENSTER-SPECIFIC: all the reference/mapping pulls (customers, items, categories, groups, salesmen) - ODBC only, no file-based sources
 Data/SupabaseWriter.cs        SHARED by every client: everything written to Supabase - upserts for reference data, full replace for raw facts
 Domain/FiscalDate.cs          Date-window math + the CheckYear assumption (WCSA's Mar-Feb fiscal year - see "Adding a new client")
 Domain/SelfTest.cs            Proves FiscalDate matches the original logic - run with --selftest
@@ -126,7 +129,7 @@ ServiceInstall/ServiceInstaller.cs   SHARED: install/uninstall - registers this 
 Program.cs                    SHARED: dispatches to the above based on command-line args (see "Command-line options")
 ```
 
-"SHARED" means every client uses this file unchanged. "WCSA-SPECIFIC"/"EDGETEC-SPECIFIC" means the file only exists to serve that one client's extractor - a new client gets its own equivalent files under `Extraction/`/`Data/`, not edits to these. Note Edgetec has no `Builders/*` files of its own: its dimension model (`client_dimensions`/`dim_N_code`) is simple enough that `EdgetecSourceExtractor.cs` builds `SalesDocumentFact` rows directly, without a separate Builders class the way WCSA's `Builders/SalesDocumentFactsBuilder.cs` does - and it writes no stock-movement or stock-snapshot facts at all (Edgetec's `ExtractedData` carries empty lists for both, since the original QlikView script never produced them).
+"SHARED" means every client uses this file unchanged. "WCSA-SPECIFIC"/"EDGETEC-SPECIFIC"/"MORGENSTER-SPECIFIC" means the file only exists to serve that one client's extractor - a new client gets its own equivalent files under `Extraction/`/`Data/`, not edits to these. Note Edgetec and Morgenster both have no `Builders/*` files of their own: both dimension models (`client_dimensions`/`dim_N_code`) are simple enough that `EdgetecSourceExtractor.cs`/`MorgensterSourceExtractor.cs` build `SalesDocumentFact` rows directly, without a separate Builders class the way WCSA's `Builders/SalesDocumentFactsBuilder.cs` does - and neither writes any stock-movement or stock-snapshot facts at all (both clients' `ExtractedData` carries empty lists for both, since neither original script produced them).
 
 ## Adding a new client
 
@@ -136,7 +139,11 @@ first client built this way, and its extractor (`Extraction/EdgetecSourceExtract
 real second example alongside WCSA, not just a forward reference to one - built from
 `docs/WyzeSalesExtract_Edgetec_DesignNotes.md` and verified field-by-field against the original
 QlikView "Edgetec Extract" script and Edgetec's live Supabase `client_dimensions` configuration.
-WCSA was retrofitted onto the `ISourceExtractor` shape unchanged in behaviour.
+WCSA was retrofitted onto the `ISourceExtractor` shape unchanged in behaviour. Morgenster
+(`Extraction/MorgensterSourceExtractor.cs` and `Data/MorgensterDb.cs`/`MorgensterLookups.cs`) is
+the third, built 2026-10-01 from `docs/WyzeSalesExtract_Morgenster_DesignNotes.md` - structurally
+closer to WCSA than Edgetec (no row grouping, no file-based sources) but the first client whose
+ODBC DSN turned out to be 32-bit-only, see item 7 below.
 
 The program is split into two halves. Everything under **SHARED** in "Project layout" above
 (SupabaseWriter, the scheduler, run tracking, the Windows Service host, the raw row shapes in
@@ -204,7 +211,27 @@ Building a new client means:
    DSN/connection string and `FilesPath` filled into `appsettings.json`'s `Edgetec` section before
    a real `--run-once` against Edgetec's live server is possible - that first real run is the
    only true proof this extractor is correct, design review and code reading aren't a substitute
-   for it.
+   for it. Morgenster's extractor is in the same state as of 2026-10-01: built and field-by-field
+   verified against the original QlikView script and Morgenster's existing 259,119-row Supabase
+   history, but still needs a real `--run-once` against Morgenster's live server before it's
+   trusted on a schedule.
+
+7. **Check whether the client's ODBC driver is 32-bit-only** before publishing. This
+   `.csproj` targets `win-x64` by default (see the `<RuntimeIdentifier>` note at the top of
+   `WyzeSalesExtract.csproj`) - fine for WCSA (IQRetail) and Edgetec, whose DSNs are 64-bit
+   visible, but Morgenster's "Morgen" DSN (Sage Pastel Partner's Pervasive ODBC Engine
+   Interface) turned out to be 32-bit-only: it shows up in BOTH the 32-bit and 64-bit ODBC
+   Data Source Administrators, but the 64-bit one's own dialog says "This is a 32-bit System
+   DSN. It can only be removed or configured with the 32-bit ODBC Data Source Administrator" -
+   a `win-x64` process cannot actually open it despite the name appearing in both lists. On the
+   server, open both `C:\Windows\System32\odbcad32.exe` (64-bit) and
+   `C:\Windows\SysWOW64\odbcad32.exe` (32-bit) and check the DSN's Platform column under System
+   DSN. If it's 32-bit-only, publish that client's build with
+   `dotnet publish -c Release -r win-x86 --self-contained true -o publish` instead of the
+   default `-r win-x64` - no `.csproj` change needed, `-r` on the command line overrides the
+   project's default `RuntimeIdentifier`. `SelfContained`/`PublishSingleFile` still apply
+   regardless of which runtime identifier is published, so the result is still one
+   self-contained exe, just a 32-bit one.
 
 What deliberately does NOT change for a new client: the Supabase schema, the scheduler, the
 Windows Service install/uninstall, or anything in the Flutter app that reads this data - all of
