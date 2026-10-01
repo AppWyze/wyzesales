@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'help_info_icon.dart';
+
 // 2026-09-07: `qtd` added for the Dashboard's Quarter feature — this widget's
 // OWN internal toggle still only ever renders the mtd/ytd segments below (see
 // `_ToggleStatCardState.build`), since every current call site now drives a
@@ -49,6 +51,7 @@ class ToggleStatCard extends StatefulWidget {
     this.showToggle = true,
     this.initialPeriod = StatPeriod.mtd,
     this.footnote,
+    this.help,
   }) : assert(
           !showToggle || (ytdValue != null && ytdColor != null),
           'ytdValue and ytdColor are required whenever showToggle is true',
@@ -68,6 +71,14 @@ class ToggleStatCard extends StatefulWidget {
   /// points at a footnote printed elsewhere on the page — Quote → Order
   /// Conversion's schema caveat is the one call site today.
   final String? footnote;
+
+  /// "How it works" content for this tile's corner info icon (2026-10-01,
+  /// Craig — see `HelpInfoIcon`'s own doc comment for the full reasoning).
+  /// Omitted entirely means no icon renders at all, not an empty one — a
+  /// tile with nothing written for it yet should look exactly as it did
+  /// before this feature existed, not show a dead-end "?" with no content
+  /// behind it.
+  final TileHelp? help;
 
   @override
   State<ToggleStatCard> createState() => _ToggleStatCardState();
@@ -137,6 +148,28 @@ class _ToggleStatCardState extends State<ToggleStatCard> {
     // widened (4/4/1 -> 8/8/4) now that there's real room to give the
     // content some breathing space instead of packing it as tight as
     // possible.
+    // Stack, not a Card alone — the info icon is absolutely positioned into
+    // the Card's top-right corner (2026-10-01) rather than taking a row of
+    // its own, so a tile with `help` set comes out exactly the same height
+    // as every other tile (see this class' own doc comment on why every
+    // tile staying identically sized matters — Craig: "The tiles all need
+    // to be the same size as well"). The Stack sizes itself to the Card
+    // (its only non-positioned child), so this adds no extra layout box
+    // around tiles that have no `help` at all.
+    return Stack(
+      children: [
+        _buildCard(textTheme, value, color, subtitle, label),
+        if (widget.help != null)
+          Positioned(
+            top: 2,
+            right: 2,
+            child: HelpInfoIcon(help: widget.help!),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCard(TextTheme textTheme, String value, Color color, String? subtitle, String label) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
