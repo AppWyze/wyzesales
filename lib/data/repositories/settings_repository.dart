@@ -234,19 +234,32 @@ class SettingsRepository {
 
   /// The signed-in user's client's most recent WyzeSalesExtract run —
   /// powers the top-bar health chip (2026-09-04, data_load_runs, schema/033).
-  /// No clientId parameter, same RLS-scoped convention as every other method
-  /// here (`data_load_runs_select`, schema/033). Returns null both when this
-  /// client has no rows yet (WyzeSalesExtract not yet redeployed with the
-  /// 2026-09-04 update — a real, expected state, not an error) and on any
-  /// query failure, so callers can treat "no data" as one case and fall back
-  /// to the old extracted_at-based indicator without needing a try/catch of
-  /// their own at every call site.
-  Future<DataLoadRun?> getLatestDataLoadRun() async {
+  /// Returns null both when this client has no rows yet (WyzeSalesExtract not
+  /// yet redeployed with the 2026-09-04 update — a real, expected state, not
+  /// an error) and on any query failure, so callers can treat "no data" as
+  /// one case and fall back to the old extracted_at-based indicator without
+  /// needing a try/catch of their own at every call site.
+  ///
+  /// 2026-10-01: now takes clientId explicitly and filters on it instead of
+  /// relying on RLS alone to narrow to one row - same fix, same root cause,
+  /// as getBudgetVarianceThreshold/getFiscalYearStartMonth (2026-09-07):
+  /// data_load_runs_select carries an is_platform_admin() bypass, so the old
+  /// unfiltered .order().limit(1) silently returned whichever CLIENT's run
+  /// was globally most recent for any platform-admin caller, not necessarily
+  /// the client whose dashboard was actually being viewed - caught live when
+  /// Fynbos Hill's demo chip showed Morgenster's "Updated" status instead of
+  /// its own (Craig, 2026-10-01).
+  Future<DataLoadRun?> getLatestDataLoadRun(String clientId) async {
     try {
       // .order().limit(1) then index into the list - same shape as
       // lastDataUpdateProvider's own query (app_providers.dart) - rather than
       // chaining .maybeSingle(), which nothing else in this codebase does yet.
-      final rows = await supabase.from('data_load_runs').select().order('started_at', ascending: false).limit(1);
+      final rows = await supabase
+          .from('data_load_runs')
+          .select()
+          .eq('client_id', clientId)
+          .order('started_at', ascending: false)
+          .limit(1);
       if (rows.isEmpty) return null;
       return DataLoadRun.fromMap(rows.first);
     } catch (_) {
@@ -258,8 +271,16 @@ class SettingsRepository {
   /// most recent first, capped at 20 (a troubleshooting view, not a full
   /// audit log; WyzeSalesExtract's Schedule.RunTimes is normally 1-2 runs a
   /// day, so 20 already covers 1-3 weeks).
-  Future<List<DataLoadRun>> getRecentDataLoadRuns({int limit = 20}) async {
-    final rows = await supabase.from('data_load_runs').select().order('started_at', ascending: false).limit(limit);
+  ///
+  /// 2026-10-01: same explicit-clientId fix as getLatestDataLoadRun above,
+  /// same root cause.
+  Future<List<DataLoadRun>> getRecentDataLoadRuns(String clientId, {int limit = 20}) async {
+    final rows = await supabase
+        .from('data_load_runs')
+        .select()
+        .eq('client_id', clientId)
+        .order('started_at', ascending: false)
+        .limit(limit);
     return rows.map<DataLoadRun>((r) => DataLoadRun.fromMap(r)).toList();
   }
 

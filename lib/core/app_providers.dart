@@ -137,9 +137,20 @@ final lastDataUpdateProvider = FutureProvider<DateTime?>((ref) async {
 /// for a client mid-rollout. Same plain (non-autoDispose) FutureProvider
 /// convention as lastDataUpdateProvider — changes at most a couple of times a
 /// day (Schedule.RunTimes), so one shared cached read is right.
+///
+/// 2026-10-01: fixed to explicitly pass clientId, same
+/// budgetVarianceThresholdProvider/fiscalYearStartMonthProvider fix
+/// (2026-09-07) and same root cause - data_load_runs_select carries an
+/// is_platform_admin() RLS bypass (confirmed live against the policy table),
+/// so the old RLS-only narrowing silently broke for any platform-admin
+/// caller: previewing one client's dashboard as admin showed whichever
+/// client's run was globally most recent, not that client's own - caught
+/// live when Fynbos Hill's demo chip showed Morgenster's "Updated" status
+/// (Craig, 2026-10-01). Same null-guard convention as those two providers.
 final latestDataLoadRunProvider = FutureProvider<DataLoadRun?>((ref) {
-  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
-  return ref.watch(settingsRepositoryProvider).getLatestDataLoadRun();
+  final clientId = ref.watch(sessionProvider).value?.clientId;
+  if (clientId == null) return Future.value(null);
+  return ref.watch(settingsRepositoryProvider).getLatestDataLoadRun(clientId);
 });
 
 /// Recent WyzeSalesExtract run history for Settings > Company's admin-only
@@ -148,9 +159,13 @@ final latestDataLoadRunProvider = FutureProvider<DataLoadRun?>((ref) {
 /// above (separate query, separate cache) since the two are read from
 /// different places for different reasons and there's no benefit to coupling
 /// their cache lifetimes.
+///
+/// 2026-10-01: same explicit-clientId fix as latestDataLoadRunProvider above,
+/// same root cause.
 final recentDataLoadRunsProvider = FutureProvider<List<DataLoadRun>>((ref) {
-  ref.watch(sessionProvider); // see the note above sessionProvider — refetch on user switch, not just once per app load
-  return ref.watch(settingsRepositoryProvider).getRecentDataLoadRuns();
+  final clientId = ref.watch(sessionProvider).value?.clientId;
+  if (clientId == null) return Future.value(const []);
+  return ref.watch(settingsRepositoryProvider).getRecentDataLoadRuns(clientId);
 });
 
 /// v_active_alerts (schema/034, 2026-09-04, Item 3) — the top-bar
