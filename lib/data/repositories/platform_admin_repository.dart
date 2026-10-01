@@ -4,6 +4,7 @@ import '../../core/supabase/supabase_config.dart';
 import '../../core/utils/edge_function_errors.dart';
 import '../models/client.dart';
 import '../models/client_dimension_config.dart';
+import '../models/data_load_run.dart';
 import '../models/license.dart';
 import '../models/pricing_plan.dart';
 
@@ -27,6 +28,37 @@ class PlatformAdminRepository {
         .select('*, license(*, pricing_plan(*))')
         .order('name');
     return (rows as List).cast<Map<String, dynamic>>();
+  }
+
+  /// Every client's own latest data_load_runs row, keyed by client_id — the
+  /// same "load chip" information app_shell.dart's `_LastDataUpdateChip`
+  /// already shows the signed-in user for their OWN client, now for every
+  /// client in one view (Craig, 2026-10-01: "include the Load Chip
+  /// information for each client... so that I can go to one view and see
+  /// exactly the load status for each client"). Requires schema/056's
+  /// `is_platform_admin()` bypass on `data_load_runs_select` — without it
+  /// this silently comes back scoped to just the signed-in platform admin's
+  /// own client, same trap `fiscal_year_settings_select` had before
+  /// schema/048's identical fix.
+  ///
+  /// One query, not N+1 per client: fetched newest-first and reduced
+  /// client-side to the first (= latest) row seen per client_id. 500 is a
+  /// deliberately generous cap — WyzeSalesExtract runs at most a handful of
+  /// times a day per client (one scheduled 4am run, plus the occasional
+  /// manual `--run-once` retry), so even a few dozen clients' worth of
+  /// recent history comfortably fits before any of their LATEST rows could
+  /// fall off the end; a client with no rows at all (not yet redeployed with
+  /// schema/033) simply has no entry in the returned map, same "null means
+  /// fall back to the neutral chip" contract every other reader of this
+  /// table already follows.
+  Future<Map<String, DataLoadRun>> fetchLatestDataLoadRuns() async {
+    final rows = await supabase.from('data_load_runs').select().order('started_at', ascending: false).limit(500);
+    final byClient = <String, DataLoadRun>{};
+    for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+      final run = DataLoadRun.fromMap(row);
+      byClient.putIfAbsent(run.clientId, () => run);
+    }
+    return byClient;
   }
 
   Future<List<PricingPlan>> fetchPricingPlans() async {
