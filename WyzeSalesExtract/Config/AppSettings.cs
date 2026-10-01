@@ -24,6 +24,7 @@ public sealed class AppSettings
     public SourceSettings Source { get; set; } = new();
     public DatabaseSettings Database { get; set; } = new();
     public EdgetecSettings Edgetec { get; set; } = new();
+    public MorgensterSettings Morgenster { get; set; } = new();
     public SupabaseSettings Supabase { get; set; } = new();
     public FiscalYearSettings FiscalYear { get; set; } = new();
     public DataWindowSettings DataWindow { get; set; } = new();
@@ -71,6 +72,12 @@ public sealed class AppSettings
                 problems.Add("Edgetec.BasePath must be set (the unquoted path Edgetec's ODBC driver uses in FROM clauses, e.g. \"Z:\").");
             if (string.IsNullOrWhiteSpace(Edgetec.FilesPath))
                 problems.Add("Edgetec.FilesPath must be set (the folder holding STOCK.TXT, ACCOUNTS.TXT, and \"Edgetec Formats.xlsx\").");
+        }
+
+        if (Source.Type == "MORGENSTER")
+        {
+            if (string.IsNullOrWhiteSpace(Morgenster.Dsn) && string.IsNullOrWhiteSpace(Morgenster.ConnectionString))
+                problems.Add("Morgenster.Dsn or Morgenster.ConnectionString must be set.");
         }
 
         if (string.IsNullOrWhiteSpace(Supabase.ConnectionString))
@@ -128,6 +135,29 @@ public sealed class EdgetecSettings
     // ACCOUNTS.TXT, and "Edgetec Formats.xlsx" (the ledger-account-to-dimension mapping Craig
     // uploaded 2026-09-22 and confirmed against the real Sales Analysis screen).
     public string FilesPath { get; set; } = "Z:\\QlikView";
+
+    public string GetConnectionString()
+    {
+        if (!string.IsNullOrWhiteSpace(ConnectionString))
+            return ConnectionString;
+        return $"DSN={Dsn};";
+    }
+}
+
+public sealed class MorgensterSettings
+{
+    // Matches the QlikView script's own "ODBC CONNECT32 TO [Morgen;DBQ=Morgen]" - Sage Pastel
+    // Partner's Pervasive ODBC Engine Interface driver, confirmed 32-bit-only (Craig,
+    // 2026-10-01: both the 32-bit and 64-bit ODBC Data Source Administrators list "Morgen",
+    // but the 64-bit one's own dialog says "This is a 32-bit System DSN. It can only be removed
+    // or configured with the 32-bit ODBC Data Source Administrator" - a win-x64 process cannot
+    // actually open it despite the name appearing in both lists). This is why Morgenster's
+    // published build targets win-x86, not win-x64 like WCSA/Edgetec - see README "Adding a new
+    // client" and the installation guide's own publish step. No BasePath/FilesPath needed here
+    // (unlike WCSA/Edgetec): every query in the original script is a plain unquoted
+    // "FROM MORGEN.TableName" with no path prefix, and there are no file-based sources at all.
+    public string? Dsn { get; set; }
+    public string? ConnectionString { get; set; }
 
     public string GetConnectionString()
     {
