@@ -202,7 +202,11 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     final byMonth = <String, Map<int, num>>{};
     for (final row in rows) {
       final label = DateFormat('MMM').format(row.month);
-      final value = _measure == ValueMeasure.rValue ? row.value : row.profit;
+      final value = switch (_measure) {
+        ValueMeasure.rValue => row.value,
+        ValueMeasure.grossProfit => row.profit,
+        ValueMeasure.quantity => row.quantity,
+      };
       final yearTotals = byMonth.putIfAbsent(label, () => {});
       yearTotals[row.fiscalYear] = (yearTotals[row.fiscalYear] ?? 0) + value;
     }
@@ -214,6 +218,12 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     final variance = variancePercent(current, previous);
     return variance == null ? '—' : formatPercent(variance);
   }
+
+  /// Formats a cell for whichever measure is currently selected - Quantity
+  /// is a unit count (formatQuantity), R Value/R Gross Profit are both Rand
+  /// (formatRand) - replacing the bare `formatRand` calls below that
+  /// predate the Quantity option (2026-10-01).
+  String _formatValue(num? value) => _measure == ValueMeasure.quantity ? formatQuantity(value) : formatRand(value);
 
   Future<ExportData> _buildExportData() async {
     final rows = await _future;
@@ -227,11 +237,11 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     final totalsRow = <String>['Total'];
     for (final col in columns) {
       totalsRow.add(
-        col.isVariance ? _varianceLabel(yearTotal(col.year), yearTotal(col.previousYear!)) : formatRand(yearTotal(col.year)),
+        col.isVariance ? _varianceLabel(yearTotal(col.year), yearTotal(col.previousYear!)) : _formatValue(yearTotal(col.year)),
       );
     }
 
-    final measureLabel = _measure == ValueMeasure.rValue ? 'R Value' : 'R Gross Profit';
+    final measureLabel = _measure.label;
     return ExportData(
       headers: [
         'Month',
@@ -245,7 +255,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
             for (final col in columns)
               col.isVariance
                   ? _varianceLabel(row.yearValues[col.year], row.yearValues[col.previousYear])
-                  : formatRand(row.yearValues[col.year]),
+                  : _formatValue(row.yearValues[col.year]),
           ],
       ],
       fileNameBase: 'wyzesales_ytd_comparative_${DateTime.now().millisecondsSinceEpoch}',
@@ -284,7 +294,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
           final cells = <DataCell>[DataCell(Text(row.monthLabel))];
           for (final col in _yearColumns()) {
             if (!col.isVariance) {
-              cells.add(DataCell(Text(formatRand(row.yearValues[col.year]))));
+              cells.add(DataCell(Text(_formatValue(row.yearValues[col.year]))));
             } else {
               final current = row.yearValues[col.year];
               final previous = row.yearValues[col.previousYear];
@@ -333,7 +343,7 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     final cells = <DataCell>[const DataCell(Text('Total', style: style))];
     for (final col in _yearColumns()) {
       if (!col.isVariance) {
-        cells.add(DataCell(Text(formatRand(yearTotal(col.year)), style: style)));
+        cells.add(DataCell(Text(_formatValue(yearTotal(col.year)), style: style)));
       } else {
         final current = yearTotal(col.year);
         final previous = yearTotal(col.previousYear!);

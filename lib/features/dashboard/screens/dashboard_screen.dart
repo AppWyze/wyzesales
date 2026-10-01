@@ -295,7 +295,8 @@ class _DimensionRawData {
 class _EntityPeriod {
   final num value;
   final num profit;
-  const _EntityPeriod(this.value, this.profit);
+  final num quantity;
+  const _EntityPeriod(this.value, this.profit, this.quantity);
 }
 
 /// Whole-company KPI row, then an interactive breakdown: pick a dimension
@@ -1300,14 +1301,22 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final totals = <String, _EntityPeriod>{};
     for (final row in rows) {
       final existing = totals[row.entityCode];
-      totals[row.entityCode] = _EntityPeriod((existing?.value ?? 0) + row.value, (existing?.profit ?? 0) + row.profit);
+      totals[row.entityCode] = _EntityPeriod(
+        (existing?.value ?? 0) + row.value,
+        (existing?.profit ?? 0) + row.profit,
+        (existing?.quantity ?? 0) + row.quantity,
+      );
     }
     return totals;
   }
 
   num _valueOf(_EntityPeriod? period, ValueMeasure measure) {
     if (period == null) return 0;
-    return measure == ValueMeasure.rValue ? period.value : period.profit;
+    return switch (measure) {
+      ValueMeasure.rValue => period.value,
+      ValueMeasure.grossProfit => period.profit,
+      ValueMeasure.quantity => period.quantity,
+    };
   }
 
   DimensionRankMode _toDimensionRankMode(_RankMode mode) {
@@ -2069,6 +2078,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           title: '$dimensionLabel — ${_selectedPeriod.name.toUpperCase()}',
                           totalLabel: _selectedPeriod.name.toUpperCase(),
                           slices: periodSlices,
+                          valueFormatter: _measure == ValueMeasure.quantity ? formatQuantity : formatRand,
                           // Sales By's own drill-down only understands two
                           // buckets today (latest month vs current FY) —
                           // there's no "current quarter" column there yet.
@@ -2205,12 +2215,23 @@ class _KpiTileGrid extends StatelessWidget {
 }
 
 class _PieCard extends StatelessWidget {
-  const _PieCard({required this.title, required this.totalLabel, required this.slices, required this.onSliceTap});
+  const _PieCard({
+    required this.title,
+    required this.totalLabel,
+    required this.slices,
+    required this.onSliceTap,
+    this.valueFormatter = formatRand,
+  });
 
   final String title;
   final String totalLabel;
   final List<PieSlice> slices;
   final ValueChanged<PieSlice> onSliceTap;
+
+  /// Defaults to formatRand (every pre-Quantity call site) — the Top 5/
+  /// Bottom 5/etc breakdown pies pass formatQuantity instead when `_measure
+  /// == ValueMeasure.quantity` (2026-10-01).
+  final String Function(num) valueFormatter;
 
   @override
   Widget build(BuildContext context) {
@@ -2226,7 +2247,7 @@ class _PieCard extends StatelessWidget {
               child: SimplePieChart(
                 slices: slices,
                 totalLabel: totalLabel,
-                valueFormatter: formatRand,
+                valueFormatter: valueFormatter,
                 onSliceTap: onSliceTap,
               ),
             ),
