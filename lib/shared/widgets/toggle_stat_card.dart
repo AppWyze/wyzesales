@@ -153,12 +153,33 @@ class _ToggleStatCardState extends State<ToggleStatCard> {
     // its own, so a tile with `help` set comes out exactly the same height
     // as every other tile (see this class' own doc comment on why every
     // tile staying identically sized matters — Craig: "The tiles all need
-    // to be the same size as well"). The Stack sizes itself to the Card
-    // (its only non-positioned child), so this adds no extra layout box
-    // around tiles that have no `help` at all.
+    // to be the same size as well").
+    //
+    // 2026-10-01, same day, Craig caught the actual rendering on screen:
+    // tiles had gone uneven in size again, and the "?" icon was floating
+    // outside the tile's top-right corner instead of sitting inside it. Root
+    // cause: a bare (non-`Positioned`) child of a `Stack` is given LOOSE
+    // constraints and sized to its own content, even when the `Stack`
+    // itself is pinned to a fixed size by the `SizedBox` every KPI tile is
+    // wrapped in up in dashboard_screen.dart — so `_buildCard(...)` here was
+    // shrink-wrapping to its own padding+text instead of filling that fixed
+    // box the way a bare `Card` (with no `Stack` in between) used to. Two
+    // knock-on effects: the Card came out whatever size its own content
+    // needed (different per tile, since each has different label/value/
+    // subtitle text), and `Positioned(top: 2, right: 2, ...)` placed the
+    // icon 2px from the STACK's corner (the full, fixed tile bounds) rather
+    // than the now-smaller Card's corner — so on any tile where the Card
+    // ended up smaller than its box, the icon rendered past the Card's own
+    // edge, into the gap between tiles. `Positioned.fill` forces the Card to
+    // take the Stack's full size again (loose constraints only applied
+    // because it was a bare, non-positioned child — `Positioned.fill` is
+    // still a `Positioned`, not a size-changing wrapper, so this doesn't
+    // change how the Card itself renders, only how much space it's given),
+    // which puts tile sizing and icon placement both back to matching the
+    // fixed box every call site already hands this widget.
     return Stack(
       children: [
-        _buildCard(textTheme, value, color, subtitle, label),
+        Positioned.fill(child: _buildCard(textTheme, value, color, subtitle, label)),
         if (widget.help != null)
           Positioned(
             top: 2,
