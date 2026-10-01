@@ -9,6 +9,7 @@ import '../../../data/models/consolidated_sales.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
+import '../../../shared/widgets/help_info_icon.dart';
 import '../../../shared/widgets/responsive_data_table.dart';
 import '../../../shared/widgets/value_gp_toggle.dart';
 
@@ -114,6 +115,14 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     return AppShell(
       title: 'YTD Comparative',
       currentRoute: '/ytd-comparative',
+      help: const TileHelp(
+        title: 'How YTD Comparative works',
+        paragraphs: [
+          'One row per fiscal month, whole company (not scoped to a single dimension), with one column per fiscal year you\'ve got data for plus a variance % column between each pair of consecutive years.',
+          'Columns run newest-first: this year, last year, the variance between those two, the year before that, the variance between THAT pair, and so on — so each variance column always sits directly next to the two years it\'s comparing.',
+          'The R Value / R Gross Profit / Quantity toggle controls which figure every column shows — it doesn\'t change which years or months are included, only what\'s measured for each one.',
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(

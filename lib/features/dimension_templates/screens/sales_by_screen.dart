@@ -11,6 +11,7 @@ import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
+import '../../../shared/widgets/help_info_icon.dart';
 import '../../../shared/widgets/responsive_data_table.dart';
 import '../../../shared/widgets/value_gp_toggle.dart';
 
@@ -432,6 +433,14 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     return AppShell(
       title: 'Sales by $dimensionLabel',
       currentRoute: '/sales-by/${widget.dimension}',
+      help: const TileHelp(
+        title: 'How Sales By works',
+        paragraphs: [
+          'One row per entity in whichever dimension is selected at the top (customer, rep, branch, or any of this client\'s own configured dimensions) — switch dimensions there without leaving the screen.',
+          'Each row shows 3 fiscal years side by side plus the variance % between each pair of consecutive years, and separately the 3 most recent individual months plus their own variance %s — so you can see both the long-run year-on-year trend and the most recent month-to-month movement for the same entity in one place.',
+          'The R Value / R Gross Profit / Quantity toggle controls what every column measures. Active global filters (Year, Month, Branch, and so on) narrow which rows and figures show, same as everywhere else in WyzeSales.',
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(

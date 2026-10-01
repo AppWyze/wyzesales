@@ -21,6 +21,7 @@ import '../../../shared/utils/responsive.dart';
 import '../../../shared/widgets/app_logo.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/client_logo_mark.dart';
+import '../../../shared/widgets/help_info_icon.dart';
 
 /// Company / Users / License — every client's own adminuser-gated Settings
 /// area (schema/008's profiles_adminuser_manage_own_client and related RLS
@@ -97,6 +98,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         title: 'Settings',
         currentRoute: '/settings',
         showGlobalFilters: false,
+        help: _helpForTab(_selectedNav),
         body: Column(
           children: [
             Container(
@@ -122,6 +124,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       title: 'Settings',
       currentRoute: '/settings',
         showGlobalFilters: false,
+      help: _helpForTab(_selectedNav),
       body: Row(
         children: [
           Container(
@@ -159,6 +162,44 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         return _LicenseTab(clientId: clientId, isDark: isDark);
       default:
         return const SizedBox();
+    }
+  }
+
+  // 2026-10-01: Settings has one title ("Settings") and one AppShell for
+  // all three tabs, but each tab means something different enough that one
+  // fixed explanation wouldn't fit all three — so this recomputes which
+  // TileHelp applies every time `_selectedNav` changes, same as everything
+  // else on this screen that depends on the active tab. AppShell itself
+  // doesn't know this screen has tabs at all; it just renders whichever
+  // TileHelp it's handed for that build.
+  TileHelp? _helpForTab(int tab) {
+    switch (tab) {
+      case 0:
+        return const TileHelp(
+          title: 'How Company settings work',
+          paragraphs: [
+            'Your logo, and the figures used elsewhere in WyzeSales: fiscal year start month (which month your fiscal year 1 begins), data history window (how many years back trailing-history calculations like Sales Coverage look), and alert threshold (how far under budget, as a %, triggers a proactive alert).',
+            'Changing the fiscal year start month or data history window reshapes how every other screen groups and compares figures by fiscal year — give it a moment to recompute after saving.',
+          ],
+        );
+      case 1:
+        return const TileHelp(
+          title: 'How Users works',
+          paragraphs: [
+            'Every user on your account, their role, and what that role can see. User sees only their own attributed sales; RegUser sees a wider scope tied to their rep code or branch; Admin sees and can manage everything for this client, including Budgets/Targets and these Settings themselves.',
+            'Password resets and account removal are here too — removing a user revokes their access immediately but doesn\'t delete their historical sales attribution.',
+          ],
+        );
+      case 2:
+        return const TileHelp(
+          title: 'How License works',
+          paragraphs: [
+            'Your plan\'s dates, seat count, and pricing. "Expired" is worked out by comparing today\'s date to the license\'s own end date — not a status a person has to remember to update — so a license can show Expired the moment its end date passes even if nothing else has changed.',
+            'A fiscal year that runs Oct–Sep, for example, will show Expired right at the start of a new fiscal year until its dates are rolled forward to match — a Platform Admin can do that in one click from Platform Admin → Clients → Edit License → "Align to fiscal year".',
+          ],
+        );
+      default:
+        return null;
     }
   }
 
