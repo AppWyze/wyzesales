@@ -14,13 +14,22 @@ name: Build WyzeSalesExtract
 #    download WyzeSalesExtract.exe from the finished run's artifacts - no local dotnet install
 #    needed anywhere.
 #
-# Deliberately does NOT take any client-specific input or produce a client-specific exe: the
-# same single-file exe already supports every client whose ISourceExtractor is compiled in -
-# Source.Type in THAT SERVER's own appsettings.json is what picks which one actually runs (see
-# WyzeSalesExtract/README.md "Adding a new client"). One build serves every client at once;
-# only the config differs between them, and that config - especially the Supabase connection
-# string - deliberately never passes through this workflow or gets baked into the exe, so it
-# never ends up in an Actions log or a downloadable artifact.
+# Deliberately does NOT take any client-specific input or produce a client-specific exe in the
+# sense of different SOURCE per client: the same compiled program already supports every client
+# whose ISourceExtractor is compiled in - Source.Type in THAT SERVER's own appsettings.json is
+# what picks which one actually runs (see WyzeSalesExtract/README.md "Adding a new client"). One
+# build serves every client at once; only the config differs between them, and that config -
+# especially the Supabase connection string - deliberately never passes through this workflow or
+# gets baked into the exe, so it never ends up in an Actions log or a downloadable artifact.
+#
+# 2026-10-01: now builds TWO architectures, not one. Every client so far (WCSA, Edgetec) has a
+# 64-bit-visible ODBC DSN, but Morgenster's turned out to be 32-bit-only (Sage Pastel Partner's
+# Pervasive ODBC Engine Interface - see WyzeSalesExtract/README.md "Adding a new client" item 7)
+# - a win-x64 exe simply cannot open that DSN, no config change fixes it, only a win-x86 build
+# does. Rather than make this workflow client-aware (which the comment above still holds against
+# - no client-specific build logic), it builds both architectures every time and uploads both as
+# separate artifacts; whoever's installing a given client picks the matching one (win-x64 for
+# WCSA/Edgetec, win-x86 for Morgenster - the installation guide for each client says which).
 on:
   push:
     branches: [main]
@@ -31,13 +40,18 @@ on:
 
 jobs:
   build:
-    # Matches the actual target OS (win-x64, self-contained, Windows Service APIs) rather than
+    # Matches the actual target OS (self-contained, Windows Service APIs) rather than
     # cross-compiling from Linux - this workflow can't be test-run before Craig sees the
-    # result, so the safest choice was taken over the faster one.
+    # result, so the safest choice was taken over the faster one. A win-x86 exe runs fine on
+    # this (64-bit) runner via WOW64, same as on any 64-bit Windows Server - no separate x86
+    # runner needed to build or self-test it.
     runs-on: windows-latest
     defaults:
       run:
         working-directory: WyzeSalesExtract
+    strategy:
+      matrix:
+        rid: [win-x64, win-x86]
     steps:
       - uses: actions/checkout@v4
 
@@ -49,21 +63,22 @@ jobs:
       - name: Restore
         run: dotnet restore
 
-      - name: Publish (win-x64, self-contained, single file)
-        run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+      - name: Publish (${{ matrix.rid }}, self-contained, single file)
+        run: dotnet publish -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -o publish-${{ matrix.rid }}
 
       # Runs the exe's own --selftest (Domain/SelfTest.cs) on the built artifact itself, not
       # just the source - proves the date-math and scheduler logic actually work on a real
       # machine before anyone downloads this build. Needs no database connection. A failure
       # here fails the whole workflow run, on purpose - nothing gets published as an artifact
-      # from a build that fails its own self-test.
+      # from a build that fails its own self-test. Runs for both architectures - a win-x86
+      # build that fails its self-test is exactly as unfit to ship as a win-x64 one would be.
       - name: Run built-in self-test
         shell: pwsh
-        run: .\publish\WyzeSalesExtract.exe --selftest
+        run: .\publish-${{ matrix.rid }}\WyzeSalesExtract.exe --selftest
 
-      - name: Upload WyzeSalesExtract.exe
+      - name: Upload WyzeSalesExtract.exe (${{ matrix.rid }})
         uses: actions/upload-artifact@v4
         with:
-          name: WyzeSalesExtract-${{ github.sha }}
-          path: WyzeSalesExtract/publish/WyzeSalesExtract.exe
+          name: WyzeSalesExtract-${{ matrix.rid }}-${{ github.sha }}
+          path: WyzeSalesExtract/publish-${{ matrix.rid }}/WyzeSalesExtract.exe
           retention-days: 90
