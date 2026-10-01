@@ -17,6 +17,7 @@ import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
 import '../../../shared/widgets/document_analysis_view.dart';
 import '../../../shared/widgets/entity_search_field.dart';
+import '../../../shared/widgets/help_info_icon.dart';
 import '../../../shared/widgets/trend_line_chart.dart';
 import '../../../shared/widgets/value_gp_toggle.dart';
 
@@ -119,6 +120,15 @@ class _SalesAnalysisScreenState extends State<SalesAnalysisScreen> {
     return AppShell(
       title: 'Sales Analysis',
       currentRoute: '/sales-analysis',
+      help: const TileHelp(
+        title: 'How Sales Analysis works',
+        paragraphs: [
+          'The Chart / Table toggle below switches between a trend chart and the same figures as a plain table — same underlying data either way.',
+          'In Chart mode, the default view plots actual sales across your trailing fiscal years, one line per year, so you can compare this year\'s shape against prior years month by month. "Compare entities" switches to plotting several individual entities (reps, customers, etc.) against each other over the same period instead of years.',
+          'Picking a custom date range (via the filter bar\'s "Date range" option) replaces the trailing-years view with one chart covering exactly that range — this is the only screen in WyzeSales where a day-level date range applies, since every other screen reads from monthly pre-aggregated figures with no day-level detail to filter by.',
+          'The R Value / R Gross Profit / Quantity toggle controls which figure is plotted or tabulated — it doesn\'t change which sales are included, only what\'s measured about them.',
+        ],
+      ),
       // 2026-09-22, Craig: "put the date range selection with the other
       // filters" — moved out of the Chart/Table toggle row (below) into the
       // shared GlobalFilterBar strip, alongside Year/Month/Quarter, even

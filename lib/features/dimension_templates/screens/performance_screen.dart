@@ -14,6 +14,7 @@ import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
+import '../../../shared/widgets/help_info_icon.dart';
 import '../../../shared/widgets/responsive_data_table.dart';
 
 class _PerformanceData {
@@ -562,6 +563,14 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return AppShell(
       title: 'Performance — $dimensionLabel',
       currentRoute: '/performance/${widget.dimension}',
+      help: const TileHelp(
+        title: 'How Performance is calculated',
+        paragraphs: [
+          'One row per entity in the selected dimension, showing R Gap — Target minus Actual sales for the filtered period. A negative or zero gap means the entity is already at or above target.',
+          '% Coverage Needed turns that Rand gap into a percentage: how much more the entity would need to sell, relative to its own typical average revenue per period, to close the gap. It only shows for a period that\'s still in progress right now (the current fiscal month, or the current fiscal year) — a closed, past period can\'t be "caught up" any more, so this column is intentionally blank for one.',
+          'The average it\'s measured against is normally the entity\'s own trailing sales history. Below 3 active months of its own history (e.g. a brand-new rep), it falls back to the company-wide average instead — shown flagged in the row whenever that fallback is used, so it\'s clear the figure isn\'t purely about that one entity.',
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(

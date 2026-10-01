@@ -15,6 +15,7 @@ import '../../data/models/profile.dart';
 import 'app_logo.dart';
 import 'client_logo_mark.dart';
 import 'global_filter_bar.dart';
+import 'help_info_icon.dart';
 import 'top_bar_search.dart';
 
 /// Below this width the permanent sidebar collapses into a slide-out drawer
@@ -43,11 +44,28 @@ class AppShell extends ConsumerWidget {
     this.extraFilterLabel,
     this.onExtraFilterSelected,
     this.onExtraFilterCleared,
+    this.help,
   });
 
   final String title;
   final Widget body;
   final List<Widget>? actions;
+
+  /// "How it works" content for a small "?" next to the screen title in the
+  /// top bar (2026-10-01, Craig, extending the Dashboard tiles' corner-icon
+  /// pattern to screens that aren't a grid of small tiles — Sales Analysis,
+  /// YTD Comparative, Sales By, Performance, and Settings' tabs don't have a
+  /// natural per-tile corner to anchor an icon to, so this sits once, next
+  /// to the one title every one of these screens already renders via
+  /// `_TopBar` below, rather than needing a bespoke per-screen location).
+  /// Omitted entirely means no icon, same "nothing changes for a screen
+  /// that hasn't opted in yet" contract as `ToggleStatCard.help`. A screen
+  /// whose explanation depends on which of ITS OWN internal tabs is active
+  /// (Settings) just recomputes this at its own build() time and passes
+  /// whichever TileHelp matches the current tab — AppShell itself has no
+  /// idea what a "tab" is, it only ever renders whatever TileHelp it's
+  /// handed for this one build.
+  final TileHelp? help;
 
   /// Passed straight through to GlobalFilterBar's own `extraChip` — lets a
   /// single screen (Sales Analysis' date-range filter, 2026-09-22) add one
@@ -109,7 +127,7 @@ class AppShell extends ConsumerWidget {
             Expanded(
               child: Column(
                 children: [
-                  _TopBar(title: title, actions: actions, showMenuButton: !isWide, themeMode: themeMode),
+                  _TopBar(title: title, help: help, actions: actions, showMenuButton: !isWide, themeMode: themeMode),
                   const Divider(height: 1),
                   if (showGlobalFilters) ...[
                     GlobalFilterBar(
@@ -136,9 +154,10 @@ class AppShell extends ConsumerWidget {
 /// only the sidebar is dark, the dashboard's own top strip is not) rather
 /// than reusing the app's old navy AppBar styling.
 class _TopBar extends ConsumerWidget {
-  const _TopBar({required this.title, required this.actions, required this.showMenuButton, required this.themeMode});
+  const _TopBar({required this.title, this.help, required this.actions, required this.showMenuButton, required this.themeMode});
 
   final String title;
+  final TileHelp? help;
   final List<Widget>? actions;
   final bool showMenuButton;
   final ThemeMode themeMode;
@@ -181,9 +200,26 @@ class _TopBar extends ConsumerWidget {
           // field even when the title is short) so the title always has a
           // hard, deterministic ceiling and the Expanded search field gets
           // everything else.
+          // 2026-10-01: title + optional "?" now share this same 40%-width
+          // ceiling as one `Row` (mainAxisSize.min, so a short title with no
+          // `help` still shrink-wraps exactly as before — this only grows
+          // wider than a bare title when an icon is actually there to show).
+          // `Flexible` (not a bare `Text`) around the title lets IT still be
+          // the thing that ellipsizes if the two together would otherwise
+          // overflow the 40% cap, rather than the fixed-size icon getting
+          // squeezed.
           ConstrainedBox(
             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.4),
-            child: Text(title, style: textTheme.headlineSmall, overflow: TextOverflow.ellipsis),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(child: Text(title, style: textTheme.headlineSmall, overflow: TextOverflow.ellipsis)),
+                if (help != null) ...[
+                  const SizedBox(width: 6),
+                  HelpInfoIcon(help: help!, iconSize: 18),
+                ],
+              ],
+            ),
           ),
           const SizedBox(width: 16),
           // Expanded, not the title above — SeaWyze's own top bar gives the
