@@ -775,9 +775,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
         const SizedBox(height: 4),
         Text(
           "Scales every entity's Sales Budget in this dimension by the same % — "
-          "across all 12 months, and always for this dimension only. Company Budget and "
-          'every other dimension are left untouched, so totals may no longer tie back '
-          'to Company after this — that\'s expected, not a bug.',
+          "across all 12 months, and always for this dimension only.",
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).brightness == Brightness.dark
                     ? AppColors.darkTextSecondary
