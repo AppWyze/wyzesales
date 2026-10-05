@@ -63,7 +63,29 @@ public static class Row
         // padding with no business meaning in any of these fields), not a change to the actual
         // data, so it's correct to apply it everywhere a string comes off any client's ODBC
         // driver, not just Morgenster's.
-        return value.IndexOf('\0') >= 0 ? value.Replace("\0", "") : value;
+        return Clean(value);
+    }
+
+    /// <summary>Strips null-byte padding and trims leading/trailing whitespace. Applied to
+    /// EVERY string any client's ODBC driver returns, via GetString above, so codes and names
+    /// land in Supabase (and in every in-memory lookup/join before it) in one canonical form.
+    ///
+    /// Why trimming is needed (2026-10-05, Morgenster): the Pervasive fixed-width CHAR columns
+    /// return values right-padded with spaces (e.g. "SPA001 " in sales documents, "AV001 " in
+    /// the customer master - and not even to the same width in both). The dashboard joins
+    /// sales_document_facts.account_code to customers.code, items, reps and categories by exact
+    /// string match, so a padded fact never matched its master row: customer names showed as raw
+    /// codes and every Item dropdown listed each item twice (padded and clean). Each daily run
+    /// also re-inserted padded master rows, undoing any manual database cleanup. Stripping the
+    /// null bytes alone (the earlier fix) only handled the 0x00 padding, not the space padding.
+    ///
+    /// This is a pure canonicalisation: a leading/trailing space has no business meaning in any
+    /// code or name field, and the original QlikView script applied Trim() in places too. Clients
+    /// whose data is already clean (WCSA, Edgetec) are unaffected.</summary>
+    public static string Clean(string value)
+    {
+        if (value.IndexOf('\0') >= 0) value = value.Replace("\0", "");
+        return value.Trim();
     }
 
     public static decimal GetDecimal(this OdbcDataReader r, string col)

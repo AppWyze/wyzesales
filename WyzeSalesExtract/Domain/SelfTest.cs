@@ -1,3 +1,4 @@
+using WyzeSalesExtract.Data;
 using WyzeSalesExtract.Worker;
 
 namespace WyzeSalesExtract.Domain;
@@ -85,8 +86,35 @@ public static class SelfTest
             }
         }
 
+        // --- Check 4: string cleaning of fixed-width ODBC values -------------------------
+        // Fixed-width source columns come back space- and/or NUL-padded (Morgenster/Pervasive).
+        // Row.Clean must reduce every variant to the same canonical value so fact rows and
+        // master rows always join by exact match in Supabase.
+        var cleanCases = new (string Input, string Expected)[]
+        {
+            ("SPA001 ", "SPA001"),
+            ("AV001  ", "AV001"),
+            ("SPA001", "SPA001"),
+            ("  Korbicom (Pty) Ltd      ", "Korbicom (Pty) Ltd"),
+            ("ABC\0\0\0", "ABC"),
+            ("ABC \0 \0", "ABC"),
+            ("   ", ""),
+            ("", ""),
+            ("Wine Flies  PTY Ltd   ", "Wine Flies  PTY Ltd"), // inner spacing left alone
+        };
+        foreach (var (input, expected) in cleanCases)
+        {
+            checks++;
+            var actual = Row.Clean(input);
+            if (actual != expected)
+            {
+                allPassed = false;
+                @out.WriteLine($"MISMATCH Row.Clean for input=[{input.Replace("\0", "\\0")}]: expected=[{expected}] actual=[{actual}]");
+            }
+        }
+
         @out.WriteLine(allPassed
-            ? $"SelfTest PASSED ({checks} checks) - date-math cleanup and scheduler logic both check out."
+            ? $"SelfTest PASSED ({checks} checks) - date-math cleanup, scheduler logic and string cleaning all check out."
             : $"SelfTest FAILED - see mismatches above ({checks} checks run).");
 
         return allPassed;
