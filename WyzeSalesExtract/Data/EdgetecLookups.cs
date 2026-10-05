@@ -50,6 +50,7 @@ public sealed class EdgetecLookups
     public Dictionary<string, string> Map1LedgerStockNoByCostLedgerNo { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> Map2LedgerStockNoBySaleLedgerNo { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> GroupCodeByStockNo { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> DescriptionByStockNo { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     // STOCKCAT (CATEGORY/GROUP, DESCRIP, TYPE 'C'|'G').
     // "Group" (dim_1, the script's own Category/DESCRIP) is CategoryDescriptionByCode keyed by
@@ -106,6 +107,7 @@ public sealed class EdgetecLookups
                 lk.Map2LedgerStockNoBySaleLedgerNo[salacc[^3..]] = stockNo;
 
             lk.GroupCodeByStockNo[stockNo] = row.GetValueOrDefault("GROUP", "");
+            lk.DescriptionByStockNo[stockNo] = row.GetValueOrDefault("DESCRIP", "");
         }
 
         // STOCKCAT (SQL SELECT CATEGORY, DESCRIP, TYPE From $(vFINPath)\STOCKCAT).

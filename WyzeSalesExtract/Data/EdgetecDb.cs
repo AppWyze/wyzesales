@@ -36,7 +36,27 @@ public sealed class EdgetecDb : IDisposable
     /// in any of its uses).</summary>
     public string From(string table) => $"FROM {BasePath}\\{table}";
 
+    /// <summary>The dBASE driver reports a table another Fincon user has open as "You do not have the
+    /// necessary permissions to use the '...REPS.DBF' object" (seen 2026-10-05, a daytime manual run).
+    /// That clears when the other user lets go, so retry a few times before failing the run.</summary>
     public List<T> Query<T>(string sql, Func<OdbcDataReader, T> map)
+    {
+        const int maxAttempts = 6;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return QueryOnce(sql, map);
+            }
+            catch (OdbcException ex) when (attempt < maxAttempts
+                && ex.Message.Contains("necessary permissions", StringComparison.OrdinalIgnoreCase))
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(30));
+            }
+        }
+    }
+
+    private List<T> QueryOnce<T>(string sql, Func<OdbcDataReader, T> map)
     {
         using var cmd = new OdbcCommand(sql, _conn) { CommandTimeout = 300 };
         using var reader = cmd.ExecuteReader();

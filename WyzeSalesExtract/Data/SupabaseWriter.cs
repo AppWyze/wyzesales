@@ -131,6 +131,52 @@ public sealed class SupabaseWriter : IDisposable
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>Sets customers.attr_1_code..attr_N_code (N = Attrs length) for customers that
+    /// already exist (UpsertCustomersAsync runs first, so every code is present). Only the N
+    /// columns the extractor actually supplies are touched. Values come straight from the source
+    /// system every run, so a customer re-classified at source follows on the next run.</summary>
+    public async Task UpdateCustomerAttributesAsync(Guid clientId, List<(string Code, string?[] Attrs)> rows)
+    {
+        if (rows.Count == 0) return;
+        var n = rows.Max(r => r.Attrs.Length);
+        if (n == 0) return;
+        if (n > 12) n = 12;
+
+        var sets = string.Join(", ", Enumerable.Range(1, n).Select(i => $"attr_{i}_code = v.a{i}"));
+        var cols = string.Join(", ", Enumerable.Range(1, n).Select(i => $"unnest(@a{i}::text[]) as a{i}"));
+        var sql = $"""
+            update customers c set {sets}
+            from (select unnest(@code::text[]) as code, {cols}) v
+            where c.client_id = @client_id and c.code = v.code
+            """;
+        await using var cmd = new NpgsqlCommand(sql, _conn) { CommandTimeout = 300 };
+        cmd.Parameters.AddWithValue("client_id", clientId);
+        cmd.Parameters.AddWithValue("code", rows.Select(r => r.Code).ToArray());
+        for (var i = 0; i < n; i++)
+        {
+            var idx = i;
+            cmd.Parameters.AddWithValue($"a{idx + 1}", rows.Select(r => idx < r.Attrs.Length ? r.Attrs[idx] : null).ToArray());
+        }
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Inserts item codes that have no items row yet; an existing item (and whatever
+    /// name it already has) is left exactly as it is.</summary>
+    public async Task InsertMissingItemsAsync(Guid clientId, List<(string Code, string Name)> items)
+    {
+        if (items.Count == 0) return;
+        const string sql = """
+            insert into items (client_id, code, name)
+            select @client_id, unnest(@code::text[]), unnest(@name::text[])
+            on conflict (client_id, code) do nothing
+            """;
+        await using var cmd = new NpgsqlCommand(sql, _conn);
+        cmd.Parameters.AddWithValue("client_id", clientId);
+        cmd.Parameters.AddWithValue("code", items.Select(i => i.Code).ToArray());
+        cmd.Parameters.AddWithValue("name", items.Select(i => i.Name).ToArray());
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     public async Task UpsertCategoriesAsync(Guid clientId, List<(string DepartmentCode, string Name)> categories)
     {
         if (categories.Count == 0) return;

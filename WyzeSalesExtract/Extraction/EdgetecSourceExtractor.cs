@@ -64,12 +64,34 @@ public sealed class EdgetecSourceExtractor : ISourceExtractor
         log.Info($"Loading GL transactions from {sinceDate:yyyy-MM-dd}...");
         var facts = EdgetecFacts.Load(db, sinceDate);
         log.Info($"  {facts.GlLines.Count} GL line(s) loaded.");
+        if (facts.GlLines.Count > 0)
+        {
+            // Diagnostic: shows at a glance which months GLTRANS actually returned (a month with no
+            // rows - e.g. after the 30 Sep year-end - is visible in the log without a database query).
+            var byMonth = facts.GlLines
+                .GroupBy(l => new DateTime(l.Date.Year, l.Date.Month, 1))
+                .OrderByDescending(g => g.Key).Take(4)
+                .Select(g => $"{g.Key:yyyy-MM}={g.Count()}");
+            log.Info($"  GL lines by month (latest first): {string.Join(", ", byMonth)}; latest GL date {facts.GlLines.Max(l => l.Date):yyyy-MM-dd}.");
+        }
 
         log.Info("Building sales document facts...");
         var salesFacts = BuildSalesDocumentFacts(facts, lk, log)
             .Where(f => !ctx.ExcludedAccounts.Contains(f.AccountCode))
             .ToList();
         log.Info($"  {salesFacts.Count} rows (after excluded_customer_accounts).");
+
+        // A mistyped GL date (seen: 2028-07-31 on adjustment 00009462) would otherwise land in
+        // a future fiscal year and skew "latest month" views. Anything more than 31 days ahead is
+        // dropped and logged so it can be corrected at source.
+        var futureCutoff = ctx.Today.Date.AddDays(31);
+        var futureFacts = salesFacts.Where(f => f.DocDate > futureCutoff).ToList();
+        if (futureFacts.Count > 0)
+        {
+            foreach (var d in futureFacts.Select(f => f.Document).Distinct().Take(10))
+                log.Info($"  WARNING: document {d} is dated more than 31 days in the future - skipped. Fix the date in Fincon.");
+            salesFacts = salesFacts.Where(f => f.DocDate <= futureCutoff).ToList();
+        }
 
         log.Info("Assembling reference data (sales reps, customers)...");
         var refData = new ReferenceData(
@@ -85,7 +107,16 @@ public sealed class EdgetecSourceExtractor : ISourceExtractor
             Customers: lk.CustomerNameByAccno.Select(kv => (Code: kv.Key, Name: kv.Value, AssignedRepCode: (string?)null)).ToList(),
             Categories: new List<(string DepartmentCode, string Name)>(),
             Suppliers: new List<(string AccountCode, string Name)>(),
-            Items: new List<(string Code, string Name, string? DepartmentCode, string? SupplierAccountCode, decimal? DefaultCost, decimal? DefaultSellPrice)>());
+            Items: new List<(string Code, string Name, string? DepartmentCode, string? SupplierAccountCode, decimal? DefaultCost, decimal? DefaultSellPrice)>(),
+            CustomerAttributes: null,
+            // Item codes on this run's sales lines that have no items row yet (51 rows were showing
+            // no item name). Insert-only: existing items keep their current names.
+            MissingItems: salesFacts
+                .Select(f => f.ItemCode)
+                .Where(code => !string.IsNullOrEmpty(code))
+                .Distinct()
+                .Select(code => (Code: code, Name: lk.DescriptionByStockNo.GetValueOrDefault(code, "") is { Length: > 0 } desc ? desc : code))
+                .ToList());
 
         return Task.FromResult(new ExtractedData(refData, salesFacts, new List<StockMovementFact>(), new List<ItemStockSnapshotFact>()));
     }

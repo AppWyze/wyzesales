@@ -111,6 +111,10 @@ public static class ExtractRunner
                 await supa.UpsertCategoriesAsync(clientId, refData.Categories);
                 await supa.UpsertSuppliersAsync(clientId, refData.Suppliers);
                 await supa.UpsertItemsAsync(clientId, refData.Items);
+                if (refData.CustomerAttributes is { Count: > 0 })
+                    await supa.UpdateCustomerAttributesAsync(clientId, refData.CustomerAttributes);
+                if (refData.MissingItems is { Count: > 0 })
+                    await supa.InsertMissingItemsAsync(clientId, refData.MissingItems);
 
                 var sinceDate = settings.DataWindow.EarliestLoadDate;
                 var replaceScopeDescription = sinceDate.HasValue

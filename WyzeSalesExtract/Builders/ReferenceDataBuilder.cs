@@ -18,7 +18,15 @@ public sealed record ReferenceData(
     List<(string Code, string Name, string? AssignedRepCode)> Customers,
     List<(string DepartmentCode, string Name)> Categories,
     List<(string AccountCode, string Name)> Suppliers,
-    List<(string Code, string Name, string? DepartmentCode, string? SupplierAccountCode, decimal? DefaultCost, decimal? DefaultSellPrice)> Items);
+    List<(string Code, string Name, string? DepartmentCode, string? SupplierAccountCode, decimal? DefaultCost, decimal? DefaultSellPrice)> Items,
+    // Optional extras (default null = "this client doesn't supply them", zero behaviour change
+    // for WCSA). CustomerAttributes: per customer, the values for customers.attr_1_code..attr_N_code
+    // (index 0 = attr_1) - the app reads a 'customer_attribute' dimension (e.g. Morgenster's
+    // Region/Country/Area/Cust. Category) from the customer record, not from the sales line.
+    // MissingItems: item codes seen on sales lines that have no items row yet; inserted only if
+    // absent (never overwrites an existing item's name).
+    List<(string Code, string?[] Attrs)>? CustomerAttributes = null,
+    List<(string Code, string Name)>? MissingItems = null);
 
 public static class ReferenceDataBuilder
 {

@@ -111,7 +111,22 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
                     : null,
                 SupplierAccountCode: (string?)null,
                 DefaultCost: (decimal?)null,
-                DefaultSellPrice: (decimal?)null)).ToList());
+                DefaultSellPrice: (decimal?)null)).ToList(),
+            // The app reads Region/Country/Area/Cust. Category (dim_1..dim_4, resolution_kind
+            // 'customer_attribute') from the CUSTOMER record (customers.attr_1..4_code), not from the
+            // sales line, so they have to be written there every run - otherwise a customer created in
+            // Pastel after the one-off backfill shows as UNASSIGNED in those four breakdowns. Same four
+            // values, same fallbacks ("No Continent Defined" etc.) as the sales-line DimCodes above.
+            CustomerAttributes: lk.CustomerDescriptionByCode.Keys
+                .Where(code => !string.IsNullOrEmpty(code))
+                .Select(code => (Code: code, Attrs: new string?[]
+                {
+                    NullIfEmpty(lk.CustomerContinentByCode.GetValueOrDefault(code, "")),
+                    NullIfEmpty(lk.CustomerCountryByCode.GetValueOrDefault(code, "")),
+                    NullIfEmpty(lk.CustomerAreaByCode.GetValueOrDefault(code, "")),
+                    NullIfEmpty(ResolveCustomerCategoryDescription(code, lk)),
+                }))
+                .ToList());
 
         return Task.FromResult(new ExtractedData(refData, salesFacts, new List<StockMovementFact>(), new List<ItemStockSnapshotFact>()));
     }
@@ -194,7 +209,11 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
                     DocDate: l.DDate,
                     InvoiceRepCode: string.IsNullOrEmpty(salesmanCode) ? null : StarRepCode(salesmanCode),
                     ItemCode: l.ItemCode,
-                    WarehouseCode: string.IsNullOrEmpty(l.MultiStore) ? null : l.MultiStore,
+                    // Always null: the 259k rows already loaded (2021 - 27 Sep 2026) carry no warehouse
+                    // code, and Morgenster has no branch dimension, so writing MultiStore here only made
+                    // rows since 28 Sep disagree with all the history (branch 'UNASSIGNED' vs a store
+                    // code that has no branches row). MultiStore is still used below for the Group lookup.
+                    WarehouseCode: null,
                     Quantity: quantity,
                     Value: value,
                     Cost: cost,
