@@ -39,6 +39,21 @@ namespace WyzeSalesExtract.Extraction;
 /// </summary>
 public sealed class MorgensterSourceExtractor : ISourceExtractor
 {
+    /// <summary>Sales-person codes are stored in Supabase WITH a leading '*' (e.g. "*R004",
+    /// "*111", "*CASH") - the form the original QlikView script produced ('*' &amp; Code), which
+    /// every historical sales row, every sales-person budget and forecast, and the hard-coded
+    /// "*RES" restaurant rows already use. 2026-10-05: this extractor was writing the plain
+    /// Pastel code ("R004") instead, which split each rep in two - history/budgets under "*R004",
+    /// everything loaded since 28 Sep under "R004" - duplicating the rep in dropdowns and
+    /// understating actual-vs-budget for the current month. Applied to BOTH the rep list and
+    /// the per-row invoice rep so they always agree. Idempotent (never double-prefixes), and
+    /// blank stays blank.</summary>
+    public static string StarRepCode(string code)
+    {
+        if (string.IsNullOrEmpty(code)) return code;
+        return code.StartsWith('*') ? code : "*" + code;
+    }
+
     public Task<ExtractedData> ExtractAsync(SourceExtractionContext ctx)
     {
         var log = ctx.Log;
@@ -76,7 +91,7 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
         var validCategoryCodes = categories.Select(c => c.DepartmentCode).ToHashSet();
         var refData = new ReferenceData(
             BranchCodes: new List<string>(),
-            SalesReps: lk.SalesmanDescriptionByCode.Select(kv => (RepCode: kv.Key, Name: kv.Value)).ToList(),
+            SalesReps: lk.SalesmanDescriptionByCode.Select(kv => (RepCode: StarRepCode(kv.Key), Name: kv.Value)).ToList(),
             Customers: lk.CustomerDescriptionByCode.Select(kv => (Code: kv.Key, Name: kv.Value, AssignedRepCode: (string?)null)).ToList(),
             Categories: categories,
             Suppliers: new List<(string AccountCode, string Name)>(),
@@ -177,7 +192,7 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
                     Document: l.DocumentNumber,
                     AccountCode: l.CustomerCode,
                     DocDate: l.DDate,
-                    InvoiceRepCode: string.IsNullOrEmpty(salesmanCode) ? null : salesmanCode,
+                    InvoiceRepCode: string.IsNullOrEmpty(salesmanCode) ? null : StarRepCode(salesmanCode),
                     ItemCode: l.ItemCode,
                     WarehouseCode: string.IsNullOrEmpty(l.MultiStore) ? null : l.MultiStore,
                     Quantity: quantity,

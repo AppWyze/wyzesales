@@ -1,4 +1,5 @@
 using WyzeSalesExtract.Data;
+using WyzeSalesExtract.Extraction;
 using WyzeSalesExtract.Worker;
 
 namespace WyzeSalesExtract.Domain;
@@ -113,8 +114,27 @@ public static class SelfTest
             }
         }
 
+        // --- Check 5: Morgenster sales-person codes carry the historical '*' prefix --------
+        var starCases = new (string Input, string Expected)[]
+        {
+            ("R004", "*R004"),
+            ("111", "*111"),
+            ("*R004", "*R004"), // idempotent - never "**R004"
+            ("", ""),
+        };
+        foreach (var (input, expected) in starCases)
+        {
+            checks++;
+            var actual = MorgensterSourceExtractor.StarRepCode(input);
+            if (actual != expected)
+            {
+                allPassed = false;
+                @out.WriteLine($"MISMATCH StarRepCode for input=[{input}]: expected=[{expected}] actual=[{actual}]");
+            }
+        }
+
         @out.WriteLine(allPassed
-            ? $"SelfTest PASSED ({checks} checks) - date-math cleanup, scheduler logic and string cleaning all check out."
+            ? $"SelfTest PASSED ({checks} checks) - date-math cleanup, scheduler logic, string cleaning and rep-code prefix all check out."
             : $"SelfTest FAILED - see mismatches above ({checks} checks run).");
 
         return allPassed;
