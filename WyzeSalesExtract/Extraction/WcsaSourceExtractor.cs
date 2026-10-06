@@ -5,7 +5,7 @@ namespace WyzeSalesExtract.Extraction;
 
 /// <summary>
 /// WCSA/IQRetail's <see cref="ISourceExtractor"/> implementation - the exact extraction
-/// pipeline ExtractRunner used to run inline (Db, Lookups, Facts, and all four Builders),
+/// pipeline ExtractRunner used to run inline (Db, Lookups, Facts, and the Builders),
 /// relocated here unchanged by the 2026-09-22 refactor that introduced ISourceExtractor.
 /// Every query, every cleaning rule, and every business-rule decision documented in
 /// Data/Db.cs, Data/Lookups.cs, Data/Facts.cs, and Builders/*.cs is untouched by this move -
@@ -39,15 +39,11 @@ public sealed class WcsaSourceExtractor : ISourceExtractor
         var salesFacts = SalesDocumentFactsBuilder.BuildInvoicesAndCreditNotes(invoiceFacts, lookups, ctx.SalesWindowStart);
         log.Info($"  {salesFacts.Count} rows.");
 
-        log.Info("Building quote facts...");
-        var quoteFacts = SalesDocumentFactsBuilder.BuildQuotesOrOrders(db, lookups, ctx.SalesWindowStart, "QUOTES", "QTEItems", "quote");
-        salesFacts.AddRange(quoteFacts);
-        log.Info($"  {quoteFacts.Count} rows.");
-
-        log.Info("Building sales order facts...");
-        var orderFacts = SalesDocumentFactsBuilder.BuildQuotesOrOrders(db, lookups, ctx.SalesWindowStart, "SOrders", "SOrdItem", "sales_order");
-        salesFacts.AddRange(orderFacts);
-        log.Info($"  {orderFacts.Count} rows.");
+        // 2026-10-06 (Craig): WCSA's quotes and sales orders are deliberately NOT extracted.
+        // WCSA has never used them (the old app read them from company 002 and they were
+        // always empty), so only invoices and credit notes are loaded. The builder method
+        // SalesDocumentFactsBuilder.BuildQuotesOrOrders is left in place, unused, in case
+        // that ever changes.
 
         var historyMonths = ctx.HistoryYears * 12;
         log.Info($"Building {historyMonths}-month stock movement facts...");
