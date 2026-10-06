@@ -133,6 +133,25 @@ public static class SelfTest
             }
         }
 
+        // --- Check 6: a document with no salesman is the "*" rep (matches history) ----------
+        var repCases = new (string Input, string Expected)[]
+        {
+            ("", "*"),
+            ("R004", "*R004"),
+            ("*R004", "*R004"),
+            ("*", "*"),
+        };
+        foreach (var (input, expected) in repCases)
+        {
+            checks++;
+            var actual = MorgensterSourceExtractor.InvoiceRepCodeFor(input);
+            if (actual != expected)
+            {
+                allPassed = false;
+                @out.WriteLine($"MISMATCH InvoiceRepCodeFor for input=[{input}]: expected=[{expected}] actual=[{actual}]");
+            }
+        }
+
         @out.WriteLine(allPassed
             ? $"SelfTest PASSED ({checks} checks) - date-math cleanup, scheduler logic, string cleaning and rep-code prefix all check out."
             : $"SelfTest FAILED - see mismatches above ({checks} checks run).");

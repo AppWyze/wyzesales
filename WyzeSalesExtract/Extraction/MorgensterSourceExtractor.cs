@@ -54,6 +54,14 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
         return code.StartsWith('*') ? code : "*" + code;
     }
 
+    /// <summary>The rep stored on a sales line. A document with NO salesman in Pastel is the "*"
+    /// rep, exactly as the original QlikView script produced it ('*' &amp; blank = "*"): 15,589
+    /// historical lines carry rep "*" (name "*"), and the old system's "(*) *" total
+    /// (R 7,951,563.32 / 131,361 units, 2026-10-06) equals those PLUS the 65 lines loaded since
+    /// 28 Sep that this extractor had written with a null rep (shown as UNASSIGNED).</summary>
+    public static string InvoiceRepCodeFor(string salesmanCode)
+        => string.IsNullOrEmpty(salesmanCode) ? "*" : StarRepCode(salesmanCode);
+
     public Task<ExtractedData> ExtractAsync(SourceExtractionContext ctx)
     {
         var log = ctx.Log;
@@ -207,7 +215,7 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
                     Document: l.DocumentNumber,
                     AccountCode: l.CustomerCode,
                     DocDate: l.DDate,
-                    InvoiceRepCode: string.IsNullOrEmpty(salesmanCode) ? null : StarRepCode(salesmanCode),
+                    InvoiceRepCode: InvoiceRepCodeFor(salesmanCode),
                     ItemCode: l.ItemCode,
                     // Always null: the 259k rows already loaded (2021 - 27 Sep 2026) carry no warehouse
                     // code, and Morgenster has no branch dimension, so writing MultiStore here only made
