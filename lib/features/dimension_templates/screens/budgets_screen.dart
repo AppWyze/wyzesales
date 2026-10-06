@@ -202,6 +202,11 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   Future<_BudgetMonthData>? _monthDataFuture;
   late Future<_DimensionContributionData> _contributionFuture;
 
+  // Contribution-by-entity table sort (2026-10-06, Craig: click a column header to sort). Starts where the
+  // loader already ordered it: Sales Budget, biggest first.
+  int _contribSortColumn = 1;
+  bool _contribSortAscending = false;
+
   /// 2026-09-30, Craig: "How would your recommend increasing or decreasing
   /// a dimension budget?... increase or decrease only a single dimension
   /// budget by a % across it's entities." Backs the "Adjust budget by %"
@@ -694,6 +699,18 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     // established muted-text pattern (e.g. settings_screen.dart), since
     // AppColors has no single theme-agnostic "secondary text" constant.
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sortedEntities = [...data.entities]..sort((a, b) {
+        final cmp = switch (_contribSortColumn) {
+          0 => a.label.toLowerCase().compareTo(b.label.toLowerCase()),
+          1 => a.budgetTotal.compareTo(b.budgetTotal),
+          _ => a.forecastTotal.compareTo(b.forecastTotal),
+        };
+        return _contribSortAscending ? cmp : -cmp;
+      });
+    void onSort(int column, bool ascending) => setState(() {
+          _contribSortColumn = column;
+          _contribSortAscending = ascending;
+        });
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -711,20 +728,22 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
           const SizedBox(height: 12),
           Expanded(
             child: ResponsiveDataTable(
-              columns: const [
-                DataColumn(label: Text('Entity')),
-                DataColumn(label: Text('Sales Budget'), numeric: true),
-                DataColumn(label: Text('Seasonal Forecast'), numeric: true),
+              sortColumnIndex: _contribSortColumn,
+              sortAscending: _contribSortAscending,
+              columns: [
+                DataColumn2(label: const Text('Entity'), onSort: onSort, fixedWidth: 340),
+                DataColumn(label: const Text('Sales Budget'), numeric: true, onSort: onSort),
+                DataColumn(label: const Text('Seasonal Forecast'), numeric: true, onSort: onSort),
               ],
               rows: [
-                for (final e in data.entities)
+                for (final e in sortedEntities)
                   DataRow(
                     onSelectChanged: (_) => applyRowCrossFilters(
                       ref,
                       dimensions: {widget.dimension: FilterSelection(e.code, e.label)},
                     ),
                     cells: [
-                      DataCell(Text(e.label, overflow: TextOverflow.ellipsis)),
+                      DataCell(Text(e.label, maxLines: 2, overflow: TextOverflow.ellipsis)),
                       DataCell(Text(_formatContributionPct(e.budgetTotal, data.budgetGrandTotal))),
                       DataCell(Text(_formatContributionPct(e.forecastTotal, data.forecastGrandTotal))),
                     ],

@@ -17,7 +17,16 @@ class CodeName {
   /// What filter bars / pickers display — falls back to the code itself so
   /// an unnamed new branch/customer still shows something useful rather than
   /// a blank row.
-  String get displayLabel => (name == null || name!.isEmpty) ? code : name!;
+  ///
+  /// 2026-10-06 (Morgenster): Pastel's rep master holds 19 retired reps whose
+  /// description is literally "*" (codes *Z001, *Z0011, ...). Shown by name
+  /// they were 19 identical, unreadable "*" rows — so a name that is blank
+  /// or just "*" falls back to the code, which at least tells them apart.
+  String get displayLabel {
+    final n = name?.trim();
+    if (n == null || n.isEmpty || (n == '*' && code != '*')) return code;
+    return n;
+  }
 
   @override
   String toString() => displayLabel;

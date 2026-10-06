@@ -846,10 +846,9 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             // don't lose them when scrolling down").
             pinnedRowCount: rows.isNotEmpty ? 1 : 0,
             columns: [
-              // Phone width: a fixed, wider name column so entity names stay readable (they scroll sideways past it).
-              compareIsCompact(context)
-                  ? DataColumn2(label: Text(dimensionLabel), onSort: _onSort, fixedWidth: 230)
-                  : DataColumn(label: Text(dimensionLabel), onSort: _onSort),
+              // A fixed, generous name column on every screen size so entity names stay readable
+              // (2026-10-06, Craig: names were truncated); the other columns scroll sideways past it on a phone.
+              DataColumn2(label: Text(dimensionLabel), onSort: _onSort, fixedWidth: compareIsCompact(context) ? 260 : 340),
               DataColumn(label: const Text('% Contribution'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Value'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Target'), numeric: true, onSort: _onSort),

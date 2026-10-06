@@ -646,10 +646,9 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       // scrolling down").
       pinnedRowCount: 1,
       columns: [
-        // Phone width: a fixed, wider name column so entity names stay readable (they scroll sideways past it).
-        compareIsCompact(context)
-            ? DataColumn2(label: Text(dimensionLabel), onSort: _onSort, fixedWidth: 230)
-            : DataColumn(label: Text(dimensionLabel), onSort: _onSort),
+        // A fixed, generous name column on every screen size so entity names stay readable
+        // (2026-10-06, Craig: names were truncated); the other columns scroll sideways past it on a phone.
+        DataColumn2(label: Text(dimensionLabel), onSort: _onSort, fixedWidth: compareIsCompact(context) ? 260 : 340),
         // See `_RangeColumn`'s doc comment for the column order.
         for (final col in yearColumns)
           DataColumn(
