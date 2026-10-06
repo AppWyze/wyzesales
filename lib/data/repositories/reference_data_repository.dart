@@ -74,7 +74,13 @@ class ReferenceDataRepository {
         .toList();
   }
 
-  Future<List<CodeName>> salesReps({String? search}) async {
+  /// Retired reps are Pastel reps whose description is just "*" (codes
+  /// `*Z001`, `*Z0011`, ...; Morgenster has 19). They are hidden from every
+  /// picker/list (Budgets, filters, Settings) unless `includeRetired` is set.
+  /// The one rep literally named "*" with code "*" is the blank-rep bucket
+  /// and is NOT retired — it stays. `namesFor` passes `includeRetired: true`
+  /// so any retired rep that still has sales history keeps its label.
+  Future<List<CodeName>> salesReps({String? search, bool includeRetired = false}) async {
     final rows = await _fetchAllRows(() {
       var query = supabase.from('sales_reps').select('rep_code, name');
       if (search != null && search.isNotEmpty) {
@@ -82,7 +88,9 @@ class ReferenceDataRepository {
       }
       return query.order('name', ascending: true);
     });
-    return rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'rep_code')).toList();
+    final all = rows.map<CodeName>((r) => CodeName.fromMap(r, codeKey: 'rep_code')).toList();
+    if (includeRetired) return all;
+    return all.where((r) => !((r.name?.trim() ?? '') == '*' && r.code != '*')).toList();
   }
 
   /// `assignedRepCode`, when given, narrows this to customers whose
@@ -186,7 +194,7 @@ class ReferenceDataRepository {
   /// deliberately excluded: `sales_document_facts.account_code`/`.item_code`
   /// are NOT NULL, so this sentinel can never actually occur on either.
   Future<Map<String, String>> namesFor(SalesDimension dimension) async {
-    final list = await entitiesFor(dimension);
+    final list = dimension == SalesDimension.salesPerson ? await salesReps(includeRetired: true) : await entitiesFor(dimension);
     final names = {for (final c in list) c.code: c.displayLabel};
     const canBeUnassigned = {SalesDimension.salesPerson, SalesDimension.branch, SalesDimension.category};
     if (canBeUnassigned.contains(dimension)) names['UNASSIGNED'] = 'Unassigned';
