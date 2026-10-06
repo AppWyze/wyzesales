@@ -13,8 +13,10 @@ import '../../../data/models/dimension_performance.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
+import '../../../shared/widgets/compare_panel.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
 import '../../../shared/widgets/help_info_icon.dart';
+import 'package:data_table_2/data_table_2.dart' show DataColumn2;
 import '../../../shared/widgets/responsive_data_table.dart';
 
 class _PerformanceData {
@@ -108,6 +110,12 @@ class PerformanceScreen extends ConsumerStatefulWidget {
 
 class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
   late Future<_PerformanceData> _future;
+
+  // Compare (2026-10-04, Craig): rows ticked in the table (in tick order) and
+  // whether the Compare panel is showing under it. Pure UI state — ticking
+  // never refetches the table.
+  List<String> _compareCodes = [];
+  bool _compareOpen = false;
 
   // 2026-08-27, diagnosing Craig's "Filters are not working correctly"
   // report: bumped on every _load() call and used as AsyncSection's `key`
@@ -226,6 +234,8 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // the identical unwrapped reassignment and never got the matching fix.
     if (oldWidget.dimension != widget.dimension) {
       setState(() {
+        _compareCodes = [];
+        _compareOpen = false;
         _loadGeneration++;
         _future = _load();
       });
@@ -559,6 +569,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     // comment for the reasoning.
     final dimensions = ref.watch(clientDimensionsProvider).valueOrNull ?? const <ClientDimensionConfig>[];
     final dimensionLabel = dimensions.forKey(widget.dimension)?.displayLabel ?? widget.dimension;
+    final comparing = _compareOpen && _compareCodes.length >= 2 && !compareIsCompact(context);
 
     return AppShell(
       title: 'Performance — $dimensionLabel',
@@ -620,12 +631,25 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                       if (d != null && d != widget.dimension) context.go('/performance/$d');
                     },
                   ),
-                  DataExportButtons(onExport: _buildExportData),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      CompareButtons(
+                        tickedCount: _compareCodes.length,
+                        onCompare: () => _openCompare(dimensionLabel),
+                        onClear: _clearCompare,
+                      ),
+                      DataExportButtons(onExport: _buildExportData),
+                    ],
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
             Expanded(
+              flex: comparing ? 2 : 1,
               // key: ValueKey(_loadGeneration) — see _loadGeneration's own
               // doc comment above; forces a genuinely fresh AsyncSection
               // (and its internal FutureBuilder) on every refetch rather
@@ -638,9 +662,76 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                 builder: (context, data) => _buildTable(context, data, dimensionLabel),
               ),
             ),
+            if (comparing) ...[
+              const SizedBox(height: 12),
+              Expanded(
+                flex: 3,
+                child: FutureBuilder<_PerformanceData>(
+                  future: _future,
+                  builder: (context, snapshot) {
+                    final data = snapshot.data;
+                    if (data == null) return const SizedBox.shrink();
+                    return _buildComparePanel(data, dimensionLabel, () => setState(() => _compareOpen = false));
+                  },
+                ),
+              ),
+            ],
           ],
         ),
       ),
+    );
+  }
+
+  void _toggleCompare(String code, bool on) {
+    setState(() {
+      if (on) {
+        if (!_compareCodes.contains(code) && _compareCodes.length < kCompareMaxEntities) {
+          _compareCodes = [..._compareCodes, code];
+        }
+      } else {
+        _compareCodes = _compareCodes.where((c) => c != code).toList();
+        if (_compareCodes.length < 2) _compareOpen = false;
+      }
+    });
+  }
+
+  void _clearCompare() {
+    setState(() {
+      _compareCodes = [];
+      _compareOpen = false;
+    });
+  }
+
+  /// Wide windows show the panel inline under the table; phones/small
+  /// tablets get it as a full-screen sheet (see `compareIsCompact`).
+  Future<void> _openCompare(String dimensionLabel) async {
+    if (!compareIsCompact(context)) {
+      setState(() => _compareOpen = true);
+      return;
+    }
+    final data = await _future;
+    if (!mounted) return;
+    await showCompareSheet(context, (close) => _buildComparePanel(data, dimensionLabel, close));
+  }
+
+  Widget _buildComparePanel(_PerformanceData data, String dimensionLabel, VoidCallback onClose) {
+    return ComparePanel(
+      key: ValueKey('compare-${widget.dimension}'),
+      dimensionKey: widget.dimension,
+      dimensionLabel: dimensionLabel,
+      entities: [for (final code in _compareCodes) CompareEntity(code, data.names[code] ?? code)],
+      onClose: onClose,
+      summaries: {
+        for (final r in data.rows)
+          r.entityCode: CompareSummary(
+            value: r.actualValue,
+            profit: r.actualProfit,
+            quantity: r.actualQuantity,
+            target: r.targetValue,
+          ),
+      },
+      summaryNote:
+          'Table figures are for the period filtered above (the same figures as the Performance table); the chart shows each month of the chosen fiscal year.',
     );
   }
 
@@ -755,7 +846,10 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
             // don't lose them when scrolling down").
             pinnedRowCount: rows.isNotEmpty ? 1 : 0,
             columns: [
-              DataColumn(label: Text(dimensionLabel), onSort: _onSort),
+              // Phone width: a fixed, wider name column so entity names stay readable (they scroll sideways past it).
+              compareIsCompact(context)
+                  ? DataColumn2(label: Text(dimensionLabel), onSort: _onSort, fixedWidth: 230)
+                  : DataColumn(label: Text(dimensionLabel), onSort: _onSort),
               DataColumn(label: const Text('% Contribution'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Value'), numeric: true, onSort: _onSort),
               DataColumn(label: const Text('R Target'), numeric: true, onSort: _onSort),
@@ -777,6 +871,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                 final coverageColor = _coverageColor(context, coverage);
                 final gpColor = row.actualProfit < 0 ? Theme.of(context).colorScheme.error : null;
                 return DataRow(
+                  selected: _compareCodes.contains(row.entityCode),
                   // Row click -> global cross-filter (Craig, 2026-09-08 —
                   // see `applyRowCrossFilters`'s own doc comment,
                   // core/filters/global_filters.dart). No date on this
@@ -788,7 +883,14 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
                     dimensions: {widget.dimension: FilterSelection(row.entityCode, data.names[row.entityCode] ?? row.entityCode)},
                   ),
                   cells: [
-                    DataCell(Text(data.names[row.entityCode] ?? row.entityCode)),
+                    DataCell(
+                      CompareTickCell(
+                        name: data.names[row.entityCode] ?? row.entityCode,
+                        ticked: _compareCodes.contains(row.entityCode),
+                        canTick: _compareCodes.length < kCompareMaxEntities,
+                        onChanged: (on) => _toggleCompare(row.entityCode, on),
+                      ),
+                    ),
                     DataCell(Text(formatPercent(row.contributionPercent))),
                     DataCell(Text(formatRand(row.actualValue))),
                     DataCell(Text(formatRand(row.targetValue))),
@@ -858,7 +960,7 @@ class _PerformanceScreenState extends ConsumerState<PerformanceScreen> {
     return DataRow(
       color: WidgetStatePropertyAll(Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.04)),
       cells: [
-        const DataCell(Text('Total', style: style)),
+        const DataCell(Padding(padding: EdgeInsets.only(left: 34), child: Text('Total', style: style))),
         DataCell(Text(formatPercent(totalContribution), style: style)),
         DataCell(Text(formatRand(totalValue), style: style)),
         DataCell(Text(formatRand(totalTarget), style: style)),

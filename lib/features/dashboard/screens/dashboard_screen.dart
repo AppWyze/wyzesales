@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/app_providers.dart';
 import '../../../core/constants/fiscal.dart';
@@ -421,6 +422,44 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     }
   }
 
+  /// "Viewing" month picker (2026-10-06, Morgenster: let a user pick a past
+  /// month and see the Dashboard as it stood at the end of it). `null` means
+  /// "now" - exactly the behaviour the Dashboard always had. Non-null is the
+  /// FIRST DAY of the calendar month being viewed; MTD becomes that whole
+  /// month, QTD becomes its fiscal quarter up to and including that month,
+  /// and YTD becomes the fiscal year up to and including that month. Picking
+  /// the quarter's last month therefore shows the full quarter in QTD, and
+  /// the fiscal year's last month shows the full year in YTD. Session-only
+  /// (a widget field, not persisted) so nobody opens the app next week
+  /// still looking at an old month without realising.
+  DateTime? _asAt;
+
+  /// The date every "today" calculation on this screen resolves against.
+  DateTime get _asAtDate => _asAt ?? DateTime.now();
+
+  /// Months the picker offers, newest first: this month back to the start of
+  /// the client's data-history window (3 or 5 fiscal years).
+  List<DateTime> _selectableMonths() {
+    // Called from build(), so watch (not read): the picker's month list must
+    // refresh once these settings finish loading after sign-in.
+    final startMonth = ref.watch(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+    final historyYears = ref.watch(fiscalYearHistoryYearsProvider).valueOrNull ?? 3;
+    final today = DateTime.now();
+    final windowStart = fiscalYearStart(fiscalYearFor(today, startMonth: startMonth) - (historyYears - 1), startMonth: startMonth);
+    final months = <DateTime>[];
+    var month = DateTime(today.year, today.month, 1);
+    while (!month.isBefore(windowStart)) {
+      months.add(month);
+      month = DateTime(month.year, month.month - 1, 1);
+    }
+    return months;
+  }
+
+  void _setAsAt(DateTime? month) {
+    setState(() => _asAt = month);
+    _refresh();
+  }
+
   ValueMeasure _measure = ValueMeasure.rValue;
 
   /// The KPI row's ONE shared MTD/QTD/YTD toggle (2026-09-07, Craig: "One
@@ -617,9 +656,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     DateTime monthStart,
     GlobalFilters filters, {
     required Set<String> currentQuarterMonths,
+    // Only set when viewing a past month (see `_asAt`): the fiscal months that
+    // count as "year to date" for that month. null = the original behaviour
+    // (every month the data actually has). `useForecast` is false for a past
+    // month - a forecast computed today is not a meaningful target for a
+    // month that has already closed, so only entered budgets count.
+    Set<String>? ytdMonths,
+    bool useForecast = true,
   }) async {
     if (activeDimensionFilterCount(filters) >= 2) {
-      return _fetchEstimatedWholeCompanyTarget(currentFiscalYear, monthStart, filters, currentQuarterMonths: currentQuarterMonths);
+      return _fetchEstimatedWholeCompanyTarget(
+        currentFiscalYear,
+        monthStart,
+        filters,
+        currentQuarterMonths: currentQuarterMonths,
+        ytdMonths: ytdMonths,
+        useForecast: useForecast,
+      );
     }
     final scope = _effectiveScope(filters);
     final actualFilters = singleActiveDimensionFilter(filters) != null ? filters : null;
@@ -634,6 +687,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     num actualMtd = 0, actualYtd = 0, actualQtd = 0;
     for (final row in consolidatedRows) {
+      if (ytdMonths != null && !ytdMonths.contains(fiscalMonthLabelFor(row.month))) continue;
       actualYtd += row.value;
       if (row.month.year == monthStart.year && row.month.month == monthStart.month) {
         actualMtd += row.value;
@@ -646,7 +700,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       budgetByMonth[row.fiscalMonth] = (budgetByMonth[row.fiscalMonth] ?? 0) + row.budgetValue;
     }
     final forecastByMonth = <String, num>{};
-    for (final row in forecastRows) {
+    for (final row in (useForecast ? forecastRows : const <SalesForecastFigure>[])) {
       forecastByMonth[row.fiscalMonth] = (forecastByMonth[row.fiscalMonth] ?? 0) + row.forecastValue;
     }
     final targetByMonth = <String, num>{
@@ -654,7 +708,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         month: resolveTarget(budgetValue: budgetByMonth[month], forecastValue: forecastByMonth[month]) ?? 0,
     };
     final currentMonthLabel = fiscalMonthLabelFor(monthStart);
-    final elapsedMonthLabels = consolidatedRows.map((r) => fiscalMonthLabelFor(r.month)).toSet();
+    final Set<String> elapsedMonthLabels = ytdMonths ?? consolidatedRows.map((r) => fiscalMonthLabelFor(r.month)).toSet();
     final targetMtd = targetByMonth[currentMonthLabel] ?? 0;
     final targetYtd = elapsedMonthLabels.fold<num>(0, (sum, label) => sum + (targetByMonth[label] ?? 0));
     // QTD target — same "sum the target for whichever months have actually
@@ -704,6 +758,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     DateTime monthStart,
     GlobalFilters filters, {
     required Set<String> currentQuarterMonths,
+    Set<String>? ytdMonths, // see _fetchWholeCompanyTarget
+    bool useForecast = true,
   }) async {
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final salesRepo = ref.read(salesRepositoryProvider);
@@ -724,7 +780,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       ]);
       final budgetByMonth = <String, num>{for (final b in results[0] as List<BudgetFigure>) b.fiscalMonth: b.budgetValue};
       final forecastByMonth = <String, num>{
-        for (final f in results[1] as List<SalesForecastFigure>) f.fiscalMonth: f.forecastValue,
+        for (final f in (useForecast ? results[1] as List<SalesForecastFigure> : const <SalesForecastFigure>[])) f.fiscalMonth: f.forecastValue,
       };
       return {
         for (final month in {...budgetByMonth.keys, ...forecastByMonth.keys})
@@ -771,14 +827,16 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     num actualMtd = 0, actualYtd = 0, actualQtd = 0;
     for (final row in fullyFilteredRows) {
       if (row.fiscalYear != currentFiscalYear) continue;
+      if (ytdMonths != null && !ytdMonths.contains(fiscalMonthLabelFor(row.month))) continue;
       actualYtd += row.value;
       if (row.month.year == monthStart.year && row.month.month == monthStart.month) actualMtd += row.value;
       if (currentQuarterMonths.contains(fiscalMonthLabelFor(row.month))) actualQtd += row.value;
     }
-    final elapsedMonthLabels = fullyFilteredRows
-        .where((r) => r.fiscalYear == currentFiscalYear)
-        .map((r) => fiscalMonthLabelFor(r.month))
-        .toSet();
+    final Set<String> elapsedMonthLabels = ytdMonths ??
+        fullyFilteredRows
+            .where((r) => r.fiscalYear == currentFiscalYear)
+            .map((r) => fiscalMonthLabelFor(r.month))
+            .toSet();
 
     // TARGET: one hierarchical derivation per month actually needed (the
     // current month for MTD, every elapsed month for YTD) — see this
@@ -818,7 +876,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 
   Future<_KpiData> _loadKpis() async {
-    final now = DateTime.now();
+    final now = _asAtDate;
+    final historical = _asAt != null; // viewing a past month - see `_asAt`
     final startMonth = ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3;
     final currentFiscalYear = fiscalYearFor(now, startMonth: startMonth);
     final monthStart = firstOfMonth(now);
@@ -843,6 +902,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final currentQuarterLabel = fiscalQuarterFor(now, startMonth: startMonth);
     final currentQuarterMonths = fiscalMonthsInQuarter(currentQuarterLabel, startMonth: startMonth).toSet();
     final elapsedQuarterMonths = elapsedFiscalMonths.intersection(currentQuarterMonths);
+    // Which of the quarter's months count towards QTD. Today: the whole
+    // quarter (months that haven't happened simply have no data). A past
+    // month: only the quarter's months up to and including that month, since
+    // the data DOES contain the later ones.
+    final quarterSumMonths = historical ? elapsedQuarterMonths : currentQuarterMonths;
 
     // Whole-company totals for the Sales/GP tiles — pulled from
     // v_consolidated_sales (the same source Sales Analysis' Graph tab
@@ -884,7 +948,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     final results = await Future.wait([
       salesRepo.fetchConsolidatedSales(fiscalYears: [currentFiscalYear], filters: filters),
-      _fetchWholeCompanyTarget(currentFiscalYear, monthStart, filters, currentQuarterMonths: currentQuarterMonths),
+      _fetchWholeCompanyTarget(
+        currentFiscalYear,
+        monthStart,
+        filters,
+        currentQuarterMonths: quarterSumMonths,
+        ytdMonths: historical ? elapsedFiscalMonths : null,
+        useForecast: !historical,
+      ),
       salesRepo.fetchSalesHistory(dimension: 'company', fiscalYears: historyWindow),
       salesRepo.fetchDimensionMonthlySales(
         dimension: SalesDimension.customer.dbValue,
@@ -919,11 +990,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       salesRepo.fetchSalesDocumentsTotals(
         documentKinds: const ['invoice'],
         fiscalYear: currentFiscalYear,
+        fiscalQuarterMonths: historical ? elapsedFiscalMonths.toList() : null,
         filters: filters.toFilterParams(),
       ),
       salesRepo.fetchSalesDocumentsTotals(
         documentKinds: const ['credit_note'],
         fiscalYear: currentFiscalYear,
+        fiscalQuarterMonths: historical ? elapsedFiscalMonths.toList() : null,
         filters: filters.toFilterParams(),
       ),
       // Every rep's sales_forecast row alongside repBudgetRows above (index
@@ -950,13 +1023,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       salesRepo.fetchSalesDocumentsTotals(
         documentKinds: const ['invoice'],
         fiscalYear: currentFiscalYear,
-        fiscalQuarterMonths: currentQuarterMonths.toList(),
+        fiscalQuarterMonths: quarterSumMonths.toList(),
         filters: filters.toFilterParams(),
       ),
       salesRepo.fetchSalesDocumentsTotals(
         documentKinds: const ['credit_note'],
         fiscalYear: currentFiscalYear,
-        fiscalQuarterMonths: currentQuarterMonths.toList(),
+        fiscalQuarterMonths: quarterSumMonths.toList(),
         filters: filters.toFilterParams(),
       ),
     ]);
@@ -1001,13 +1074,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     num salesMtd = 0, profitMtd = 0, salesYtd = 0, profitYtd = 0, salesQtd = 0, profitQtd = 0;
     for (final row in consolidatedRows) {
+      if (historical && !elapsedFiscalMonths.contains(fiscalMonthLabelFor(row.month))) continue;
       salesYtd += row.value;
       profitYtd += row.profit;
       if (row.month.year == monthStart.year && row.month.month == monthStart.month) {
         salesMtd += row.value;
         profitMtd += row.profit;
       }
-      if (currentQuarterMonths.contains(fiscalMonthLabelFor(row.month))) {
+      if (quarterSumMonths.contains(fiscalMonthLabelFor(row.month))) {
         salesQtd += row.value;
         profitQtd += row.profit;
       }
@@ -1019,7 +1093,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // YTD total directly; MTD narrows further to the current calendar
     // month, same boundary _loadDimension's own MTD pie uses.
     final customerMtdTotals = _sumRows(customerMonthlyRows.where((r) => _sameMonth(r.month, monthStart)));
-    final customerYtdTotals = _sumRows(customerMonthlyRows);
+    final customerYtdTotals = _sumRows(
+      historical ? customerMonthlyRows.where((r) => elapsedFiscalMonths.contains(fiscalMonthLabelFor(r.month))) : customerMonthlyRows,
+    );
     // QTD — customerMonthlyRows only ever contains rows that have actual
     // data (fetched for `fiscalYears: [currentFiscalYear]`, so an
     // unreached future month simply has no rows), same reasoning
@@ -1027,7 +1103,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // elapsed" check needed here the way Rep Target Attainment's target
     // MAPS need one below (a budget/forecast target CAN exist for a future
     // month with zero actual data; a sales rollup row cannot).
-    final customerQtdTotals = _sumRows(customerMonthlyRows.where((r) => currentQuarterMonths.contains(fiscalMonthLabelFor(r.month))));
+    final customerQtdTotals = _sumRows(customerMonthlyRows.where((r) => quarterSumMonths.contains(fiscalMonthLabelFor(r.month))));
 
     num top5Sum(Map<String, _EntityPeriod> totals) {
       final sorted = totals.values.map((p) => p.value).toList()..sort((a, b) => b.compareTo(a));
@@ -1061,7 +1137,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       byMonth[row.fiscalMonth] = (byMonth[row.fiscalMonth] ?? 0) + row.budgetValue;
     }
     final repForecastByMonth = <String, Map<String, num>>{};
-    for (final row in repForecastRows) {
+    for (final row in (historical ? const <SalesForecastFigure>[] : repForecastRows)) {
       final byMonth = repForecastByMonth.putIfAbsent(row.entityCode, () => {});
       byMonth[row.fiscalMonth] = (byMonth[row.fiscalMonth] ?? 0) + row.forecastValue;
     }
@@ -1221,7 +1297,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // `dimension != _dimension`, is the guard that actually matters here.
     final requestId = ++_dimensionRequestId;
     try {
-      final currentFy = fiscalYearFor(DateTime.now(), startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
+      final currentFy = fiscalYearFor(_asAtDate, startMonth: ref.read(fiscalYearStartMonthProvider).valueOrNull ?? 3);
       final filters = _dashboardFilters(ref.read(globalFiltersProvider));
       // Resolved before the Future.wait below (not raced alongside it) since
       // namesForConfig needs the ClientDimensionConfig itself, not just the
@@ -1358,9 +1434,38 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       mode: _toDimensionRankMode(_rankMode),
     );
 
-    return codes.map((code) {
-      return PieSlice(label: names[code] ?? code, entityCode: code, rawValue: currentValues[code] ?? 0);
-    }).toList();
+    final String Function(num) fmt = _measure == ValueMeasure.quantity ? formatQuantity : formatRand;
+    final isChangeMode = _rankMode == _RankMode.diminishing5 || _rankMode == _RankMode.growth5;
+    if (!isChangeMode) {
+      return codes.map((code) {
+        return PieSlice(label: names[code] ?? code, entityCode: code, rawValue: currentValues[code] ?? 0);
+      }).toList();
+    }
+
+    // Diminishing 5 / Growth 5 rank by CHANGE (this period minus the
+    // comparison period), so the wedge has to be the size of that change —
+    // plotting this period's own value showed e.g. four customers at R 0 and
+    // one at R 14,468, i.e. a ring that said nothing about who actually
+    // dropped (Craig, 2026-10-06). Only entities that genuinely moved the
+    // right way are shown, so a period with fewer than 5 decliners shows
+    // fewer than 5 slices rather than padding with ones that grew.
+    final wantDecline = _rankMode == _RankMode.diminishing5;
+    final slices = <PieSlice>[];
+    for (final code in codes) {
+      final cur = currentValues[code] ?? 0;
+      final prev = previousValues[code] ?? 0;
+      final delta = cur - prev;
+      if (wantDecline ? delta >= 0 : delta <= 0) continue;
+      slices.add(
+        PieSlice(
+          label: names[code] ?? code,
+          entityCode: code,
+          rawValue: delta.abs(),
+          note: '${wantDecline ? '\u25BC' : '\u25B2'} ${fmt(delta.abs())}   (was ${fmt(prev)}, now ${fmt(cur)})',
+        ),
+      );
+    }
+    return slices;
   }
 
   bool _sameMonth(DateTime a, DateTime b) => a.year == b.year && a.month == b.month;
@@ -1500,8 +1605,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // which the old two-fixed-pie layout never had at all.
     List<PieSlice> periodSlices = const [];
     if (dimData != null) {
-      final now = DateTime.now();
+      final now = _asAtDate;
       final startMonth = ref.watch(fiscalYearStartMonthProvider).valueOrNull ?? 3;
+      // Viewing a past month: only fiscal months up to and including it count
+      // (the fetched rows also contain the months after it). Not viewing a
+      // past month: every month passes, exactly as before.
+      final fiscalOrder = fiscalMonthOrderFor(startMonth: startMonth);
+      final monthsUpToAsAt = fiscalOrder.sublist(0, fiscalOrder.indexOf(fiscalMonthLabelFor(now)) + 1).toSet();
+      bool inScope(String fiscalMonth) => _asAt == null || monthsUpToAsAt.contains(fiscalMonth);
 
       switch (_selectedPeriod) {
         case StatPeriod.mtd:
@@ -1522,11 +1633,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           final currentQuarterMonths =
               fiscalMonthsInQuarter(fiscalQuarterFor(now, startMonth: startMonth), startMonth: startMonth).toSet();
           final elapsedQuarterMonths = dimData.rows
-              .where((r) => r.fiscalYear == dimData.fiscalYear && currentQuarterMonths.contains(r.fiscalMonth))
+              .where((r) => r.fiscalYear == dimData.fiscalYear && currentQuarterMonths.contains(r.fiscalMonth) && inScope(r.fiscalMonth))
               .map((r) => r.fiscalMonth)
               .toSet();
           final qtdCurrent = _sumRows(
-            dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear && currentQuarterMonths.contains(r.fiscalMonth)),
+            dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear && currentQuarterMonths.contains(r.fiscalMonth) && inScope(r.fiscalMonth)),
           );
           final qtdPrevious = _sumRows(
             dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear - 1 && elapsedQuarterMonths.contains(r.fiscalMonth)),
@@ -1538,8 +1649,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           // against the SAME set of elapsed fiscal months last year, not the
           // whole prior year, so a 5-month-old fiscal year isn't compared
           // against a full 12 months of the one before it.
-          final elapsedFiscalMonths = dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear).map((r) => r.fiscalMonth).toSet();
-          final ytdCurrent = _sumRows(dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear));
+          final elapsedFiscalMonths =
+              dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear && inScope(r.fiscalMonth)).map((r) => r.fiscalMonth).toSet();
+          final ytdCurrent = _sumRows(dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear && inScope(r.fiscalMonth)));
           final ytdPrevious = _sumRows(
             dimData.rows.where((r) => r.fiscalYear == dimData.fiscalYear - 1 && elapsedFiscalMonths.contains(r.fiscalMonth)),
           );
@@ -1566,6 +1678,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             onSelect: _setLayout,
             onSetDefault: profile == null ? null : () => _setDefaultLayout(effectiveLayout, profile.id),
           ),
+          if (effectiveLayout != 'B')
+            _AsAtBar(
+              months: _selectableMonths(),
+              selected: _asAt,
+              onChanged: _setAsAt,
+            ),
           Expanded(
             child: effectiveLayout == 'B'
                 ? const DashboardTableView()
@@ -1756,7 +1874,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   // boxes as fit."
                   _KpiTileGrid(
                     columns: MediaQuery.of(context).size.width > _kpiGridBreakpoint ? 3 : 2,
-                    tileHeight: _kpiTileHeight,
+                    // Phone width (2 narrow columns): subtitles wrap to 3 lines and overflowed the fixed 150px tile by 8px (2026-10-06).
+                    tileHeight: MediaQuery.of(context).size.width < 600 ? 184 : _kpiTileHeight,
                     tiles: [
                       // 1. Toggle added back 2026-08-28 for conformance with
                       // the other 5 tiles (see the comment on
@@ -2159,7 +2278,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       height: 300,
                       child: _PieCard(
                           title: '$dimensionLabel — ${_selectedPeriod.name.toUpperCase()}',
-                          totalLabel: _selectedPeriod.name.toUpperCase(),
+                          totalLabel: switch (_rankMode) {
+                            _RankMode.diminishing5 => '${_selectedPeriod.name.toUpperCase()} decline',
+                            _RankMode.growth5 => '${_selectedPeriod.name.toUpperCase()} growth',
+                            _ => _selectedPeriod.name.toUpperCase(),
+                          },
                           slices: periodSlices,
                           valueFormatter: _measure == ValueMeasure.quantity ? formatQuantity : formatRand,
                           // Sales By's own drill-down only understands two
@@ -2336,6 +2459,71 @@ class _PieCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+
+/// The "Viewing" month picker above the Standard Dashboard (see
+/// `_DashboardScreenState._asAt`). Always shown; when a past month is picked it
+/// also shows a banner and a one-click way back to the current month.
+class _AsAtBar extends StatelessWidget {
+  const _AsAtBar({required this.months, required this.selected, required this.onChanged});
+
+  /// Newest first; months.first is the current month.
+  final List<DateTime> months;
+
+  /// null = viewing the current month (the Dashboard's normal state).
+  final DateTime? selected;
+  final ValueChanged<DateTime?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    if (months.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final format = DateFormat('MMMM yyyy');
+    final current = selected ?? months.first;
+    final viewingPast = selected != null;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      decoration: BoxDecoration(
+        color: viewingPast ? theme.colorScheme.primary.withValues(alpha: 0.08) : null,
+        border: Border(bottom: BorderSide(color: theme.colorScheme.onSurface.withValues(alpha: 0.08))),
+      ),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text('Viewing', style: theme.textTheme.labelLarge),
+          // The key forces the dropdown to rebuild when the value is changed
+          // from outside (the "Back to current month" button) - a form-field
+          // dropdown only reads its starting value once.
+          BoxedDropdown<DateTime>(
+            key: ValueKey<DateTime>(current),
+            value: current,
+            width: 200,
+            items: [
+              for (final month in months)
+                DropdownMenuItem<DateTime>(
+                  value: month,
+                  child: Text(month == months.first ? '${format.format(month)} (current)' : format.format(month)),
+                ),
+            ],
+            // Picking the current month goes back to the normal "now" view.
+            onChanged: (value) => onChanged(value == null || value == months.first ? null : value),
+          ),
+          if (viewingPast) ...[
+            Text(
+              'MTD, QTD and YTD are as at the end of ${format.format(current)}.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            TextButton(onPressed: () => onChanged(null), child: const Text('Back to current month')),
+          ],
+        ],
       ),
     );
   }

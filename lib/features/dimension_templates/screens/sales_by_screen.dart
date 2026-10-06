@@ -10,8 +10,10 @@ import '../../../data/models/client_dimension_config.dart';
 import '../../../shared/widgets/app_shell.dart';
 import '../../../shared/widgets/async_section.dart';
 import '../../../shared/widgets/boxed_dropdown.dart';
+import '../../../shared/widgets/compare_panel.dart';
 import '../../../shared/widgets/data_export_buttons.dart';
 import '../../../shared/widgets/help_info_icon.dart';
+import 'package:data_table_2/data_table_2.dart' show DataColumn2;
 import '../../../shared/widgets/responsive_data_table.dart';
 import '../../../shared/widgets/value_gp_toggle.dart';
 
@@ -161,6 +163,12 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
   late Future<_SalesByData> _future;
   String? _highlightCode;
 
+  // Compare (2026-10-04, Craig): rows ticked in the table (in tick order) and
+  // whether the Compare panel is showing under it. Pure UI state — ticking
+  // never refetches the table.
+  List<String> _compareCodes = [];
+  bool _compareOpen = false;
+
   // 2026-08-26 (Craig's global cross-dimension filters): Year is
   // deliberately NOT applied here — this screen's whole point is a fixed
   // 3-fiscal-year comparison window computed from "today", and a single
@@ -200,6 +208,10 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     final highlightChanged = oldWidget.highlightCode != widget.highlightCode;
     if (!dimensionChanged && !measureChanged && !rankChanged && !highlightChanged) return;
     setState(() {
+      if (dimensionChanged) {
+        _compareCodes = [];
+        _compareOpen = false;
+      }
       if (highlightChanged) _highlightCode = widget.highlightCode;
       if (measureChanged) _measure = _measureFrom(widget.initialMeasure);
       if (rankChanged) _rankPending = true;
@@ -429,6 +441,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     // client has no such dimension configured at all.
     final dimensionLabel =
         ref.watch(clientDimensionsProvider).valueOrNull?.forKey(widget.dimension)?.displayLabel ?? widget.dimension;
+    final comparing = _compareOpen && _compareCodes.length >= 2 && !compareIsCompact(context);
 
     return AppShell(
       title: 'Sales by $dimensionLabel',
@@ -465,10 +478,23 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
                 runSpacing: 12,
                 children: [
                   _DimensionSwitcher(current: widget.dimension, routePrefix: '/sales-by'),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      ValueGpToggle(value: _measure, onChanged: _reloadWithNewMeasure),
+                      CompareButtons(
+                        tickedCount: _compareCodes.length,
+                        onCompare: () => _openCompare(dimensionLabel),
+                        onClear: _clearCompare,
+                      ),
+                      // Phone width: the 3-way toggle is wider than the screen, so let it scroll sideways.
+                      compareIsCompact(context)
+                          ? SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: ValueGpToggle(value: _measure, onChanged: _reloadWithNewMeasure),
+                            )
+                          : ValueGpToggle(value: _measure, onChanged: _reloadWithNewMeasure),
                       DataExportButtons(onExport: _buildExportData),
                     ],
                   ),
@@ -477,6 +503,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
             ),
             const SizedBox(height: 16),
             Expanded(
+              flex: comparing ? 2 : 1,
               child: AsyncSection<_SalesByData>(
                 future: _future,
                 isEmpty: (data) => data.entityCodes.isEmpty,
@@ -499,9 +526,66 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
                 },
               ),
             ),
+            if (comparing) ...[
+              const SizedBox(height: 12),
+              Expanded(
+                flex: 3,
+                child: FutureBuilder<_SalesByData>(
+                  future: _future,
+                  builder: (context, snapshot) {
+                    final data = snapshot.data;
+                    if (data == null) return const SizedBox.shrink();
+                    return _buildComparePanel(data, dimensionLabel, () => setState(() => _compareOpen = false));
+                  },
+                ),
+              ),
+            ],
           ],
         ),
       ),
+    );
+  }
+
+  void _toggleCompare(String code, bool on) {
+    setState(() {
+      if (on) {
+        if (!_compareCodes.contains(code) && _compareCodes.length < kCompareMaxEntities) {
+          _compareCodes = [..._compareCodes, code];
+        }
+      } else {
+        _compareCodes = _compareCodes.where((c) => c != code).toList();
+        if (_compareCodes.length < 2) _compareOpen = false;
+      }
+    });
+  }
+
+  void _clearCompare() {
+    setState(() {
+      _compareCodes = [];
+      _compareOpen = false;
+    });
+  }
+
+  /// Wide windows show the panel inline under the table; phones/small
+  /// tablets get it as a full-screen sheet (see `compareIsCompact`).
+  Future<void> _openCompare(String dimensionLabel) async {
+    if (!compareIsCompact(context)) {
+      setState(() => _compareOpen = true);
+      return;
+    }
+    final data = await _future;
+    if (!mounted) return;
+    await showCompareSheet(context, (close) => _buildComparePanel(data, dimensionLabel, close));
+  }
+
+  Widget _buildComparePanel(_SalesByData data, String dimensionLabel, VoidCallback onClose) {
+    return ComparePanel(
+      key: ValueKey('compare-${widget.dimension}'),
+      dimensionKey: widget.dimension,
+      dimensionLabel: dimensionLabel,
+      entities: [for (final code in _compareCodes) CompareEntity(code, data.names[code] ?? code)],
+      onClose: onClose,
+      initialMeasure: _measure,
     );
   }
 
@@ -562,7 +646,10 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       // scrolling down").
       pinnedRowCount: 1,
       columns: [
-        DataColumn(label: Text(dimensionLabel), onSort: _onSort),
+        // Phone width: a fixed, wider name column so entity names stay readable (they scroll sideways past it).
+        compareIsCompact(context)
+            ? DataColumn2(label: Text(dimensionLabel), onSort: _onSort, fixedWidth: 230)
+            : DataColumn(label: Text(dimensionLabel), onSort: _onSort),
         // See `_RangeColumn`'s doc comment for the column order.
         for (final col in yearColumns)
           DataColumn(
@@ -580,7 +667,16 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
       rows: [
         _totalsRow(context, data, chronological),
         ...entities.map((code) {
-          final cells = <DataCell>[DataCell(Text(data.names[code] ?? code))];
+          final cells = <DataCell>[
+            DataCell(
+              CompareTickCell(
+                name: data.names[code] ?? code,
+                ticked: _compareCodes.contains(code),
+                canTick: _compareCodes.length < kCompareMaxEntities,
+                onChanged: (on) => _toggleCompare(code, on),
+              ),
+            ),
+          ];
           for (final col in yearColumns) {
             if (!col.isVariance) {
               cells.add(DataCell(Text(_formatValue(data.yearTotals[code]?[col.current]))));
@@ -600,6 +696,7 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
             }
           }
           return DataRow(
+            selected: _compareCodes.contains(code),
             color: code == highlightCode
                 ? WidgetStatePropertyAll(Theme.of(context).colorScheme.primary.withValues(alpha: 0.12))
                 : null,
@@ -639,7 +736,9 @@ class _SalesByScreenState extends ConsumerState<SalesByScreen> {
     num monthTotal(DateTime month) => data.entityCodes.fold<num>(0, (sum, code) => sum + (data.monthTotals[code]?[month] ?? 0));
 
     const style = TextStyle(fontWeight: FontWeight.bold);
-    final cells = <DataCell>[const DataCell(Text('Total', style: style))];
+    final cells = <DataCell>[
+      const DataCell(Padding(padding: EdgeInsets.only(left: 34), child: Text('Total', style: style))),
+    ];
     for (final col in _interleavedNewestFirst(data.fiscalYears)) {
       if (!col.isVariance) {
         cells.add(DataCell(Text(_formatValue(yearTotal(col.current)), style: style)));

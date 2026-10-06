@@ -10,7 +10,13 @@ class PieSlice {
   final String label;
   final String entityCode;
   final num rawValue;
-  const PieSlice({required this.label, required this.entityCode, required this.rawValue});
+
+  /// Optional replacement for the default "R value · share" line under the
+  /// name in the legend (and for the value in the hover row). Used by
+  /// Diminishing 5 / Growth 5, where the wedge is the size of the CHANGE and
+  /// the useful text is "was X, now Y" rather than a plain amount.
+  final String? note;
+  const PieSlice({required this.label, required this.entityCode, required this.rawValue, this.note});
 }
 
 /// A dependency-free donut chart — no third-party charting package, same
@@ -62,12 +68,15 @@ class SimplePieChart extends StatefulWidget {
 class _SimplePieChartState extends State<SimplePieChart> {
   int? _hoverIndex;
 
+  // 2026-10-06: AppColors.teal and AppColors.caution are both amber, so two
+  // wedges/legend dots were near-identical (Craig's Bottom 5 / Diminishing 5
+  // screenshots). The 3rd and 5th colours are now clearly different hues.
   static const List<Color> _palette = [
     AppColors.info,
     AppColors.positive,
-    AppColors.teal,
-    AppColors.accentPurple,
     AppColors.caution,
+    AppColors.accentPurple,
+    Color(0xFF06B6D4),
   ];
 
   Color _colorFor(int index, PieSlice slice) {
@@ -113,8 +122,8 @@ class _SimplePieChartState extends State<SimplePieChart> {
                   TextSpan(
                     children: [
                       TextSpan(text: '${hovered.label}: ', style: const TextStyle(fontWeight: FontWeight.w700)),
-                      TextSpan(text: widget.valueFormatter(hovered.rawValue)),
-                      if (totalAbs > 0)
+                      TextSpan(text: hovered.note ?? widget.valueFormatter(hovered.rawValue)),
+                      if (totalAbs > 0 && hovered.note == null)
                         TextSpan(
                           text: '  (${(hovered.rawValue.abs() / totalAbs * 100).toStringAsFixed(0)}% of shown)',
                           style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)),
@@ -187,14 +196,35 @@ class _SimplePieChartState extends State<SimplePieChart> {
                           children: [
                             Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
                             const SizedBox(width: 6),
+                            // Name on top, its real value and share underneath
+                            // (2026-10-06): a wedge can be too small to see (or
+                            // R 0), so the legend now states every entry's actual
+                            // figure instead of leaving it to be read off the ring.
                             Expanded(
-                              child: Text(
-                                slice.label,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: isHovered ? FontWeight.w700 : FontWeight.w500,
-                                ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    slice.label,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: isHovered ? FontWeight.w700 : FontWeight.w500,
+                                    ),
+                                  ),
+                                  Text(
+                                    slice.note ??
+                                        (totalAbs > 0
+                                            ? '${widget.valueFormatter(slice.rawValue)}  ·  ${(slice.rawValue.abs() / totalAbs * 100).toStringAsFixed(1)}%'
+                                            : widget.valueFormatter(slice.rawValue)),
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
@@ -231,9 +261,32 @@ List<_SliceGeometry> _computeGeometry(List<PieSlice> slices) {
     }
     return result;
   }
+  // Every non-zero slice gets at least `minShare` of the ring so it stays
+  // visible (2026-10-06, Craig: Bottom 5 / Diminishing 5 showed 3 wedges for
+  // 5 legend entries, or one solid ring, because the other entries were far
+  // smaller than the biggest and rounded to under a pixel). The wedge sizes
+  // are therefore a readability compromise for tiny slices only; the legend
+  // and hover text always carry the true value and percentage.
+  const minShare = 0.04;
+  var shares = [for (final s in slices) s.rawValue.abs().toDouble() / totalAbs];
+  final tiny = <int>{
+    for (var i = 0; i < shares.length; i++)
+      if (shares[i] > 0 && shares[i] < minShare) i,
+  };
+  if (tiny.isNotEmpty) {
+    final reserved = tiny.length * minShare;
+    var bigTotal = 0.0;
+    for (var i = 0; i < shares.length; i++) {
+      if (!tiny.contains(i)) bigTotal += shares[i];
+    }
+    shares = [
+      for (var i = 0; i < shares.length; i++)
+        tiny.contains(i) ? minShare : (bigTotal > 0 ? shares[i] / bigTotal * (1 - reserved) : 0.0),
+    ];
+  }
   var cursor = 0.0;
-  for (final s in slices) {
-    final sweep = (s.rawValue.abs() / totalAbs) * 2 * math.pi;
+  for (final share in shares) {
+    final sweep = share * 2 * math.pi;
     result.add(_SliceGeometry(cursor, sweep));
     cursor += sweep;
   }

@@ -141,6 +141,7 @@ class ResponsiveDataTable extends StatelessWidget {
   double get _minWidth => columns.fold<double>(0, (sum, column) => sum + _estimatedColumnWidth(column));
 
   double _estimatedColumnWidth(DataColumn column) {
+    if (column is DataColumn2 && column.fixedWidth != null) return column.fixedWidth!;
     const base = 96.0;
     const perChar = 7.0;
     const min = 72.0;
