@@ -13,6 +13,29 @@ namespace WyzeSalesExtract.Builders;
 /// </summary>
 public static class SalesDocumentFactsBuilder
 {
+    /// <summary>
+    /// 2026-10-07: since mid-2025 WCSA's invoice and credit-note lines have a BLANK
+    /// INVITEMS.Warehouse (confirmed against Supabase: every INCPT/INJHB/INDBN invoice since
+    /// June 2025 has no warehouse, while the older INV12-INV14 / CRN17-CRN18 documents all have
+    /// 001/002/003), so every recent sale landed on branch 'Unassigned'. The document number
+    /// itself carries the branch (IN|CN + CPT/JHB/DBN), and CPT/JHB/DBN line up one-to-one with
+    /// warehouses 001/002/003 (matching the old system's CPT-001, JHB-002, DBN-003). Used ONLY
+    /// when the line's own Warehouse is blank - a line that does carry a warehouse keeps it.
+    /// </summary>
+    private static string? BranchWarehouseFromDocument(string document)
+    {
+        if (document.Length < 5) return null;
+        var kind = document.Substring(0, 2).ToUpperInvariant();
+        if (kind != "IN" && kind != "CN") return null;
+        return document.Substring(2, 3).ToUpperInvariant() switch
+        {
+            "CPT" => "001",
+            "JHB" => "002",
+            "DBN" => "003",
+            _ => null,
+        };
+    }
+
     public static List<SalesDocumentFact> BuildInvoicesAndCreditNotes(
         List<InvoiceItemFact> facts, Lookups lk, DateTime windowStart)
     {
@@ -35,7 +58,9 @@ public static class SalesDocumentFactsBuilder
                 DocDate: docDate,
                 InvoiceRepCode: lk.SalesPersonCodeInv.GetValueOrDefault(f.Document),
                 ItemCode: f.PartNo,
-                WarehouseCode: f.Warehouse,
+                WarehouseCode: string.IsNullOrWhiteSpace(f.Warehouse)
+                    ? (BranchWarehouseFromDocument(f.Document) ?? f.Warehouse)
+                    : f.Warehouse,
                 Quantity: f.Qty * sign,
                 Value: f.Value * sign,
                 Cost: f.Cost * sign,

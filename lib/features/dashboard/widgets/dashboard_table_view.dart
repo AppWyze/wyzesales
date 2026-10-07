@@ -68,6 +68,11 @@ class _PanelData {
 /// How many entity rows each panel shows under its Total row.
 const int _topRowCount = 10;
 
+/// Height of one panel's table: the theme's 40px heading row, the pinned Total row plus
+/// [rowCount] entity rows at the theme's 32px row height, and ~16px for the horizontal
+/// scrollbar. Sized to the real rows so there is no empty space under the last one.
+double _panelTableHeight(int rowCount) => 40 + (1 + rowCount) * 32 + 16;
+
 double _estimatedPanelHeight(_PanelData panel) {
   const labelAndSpacing = 32.0; // titleMedium label (~24) + the 8px SizedBox under it
   if (panel.rows.isEmpty) {
@@ -75,7 +80,7 @@ double _estimatedPanelHeight(_PanelData panel) {
     return labelAndSpacing + 12 * 2 + 20;
   }
   final visibleRowCountForHeight = panel.rows.length < _topRowCount ? panel.rows.length : _topRowCount;
-  return labelAndSpacing + 56 + (1 + visibleRowCountForHeight) * 52;
+  return labelAndSpacing + _panelTableHeight(visibleRowCountForHeight);
 }
 
 class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
@@ -455,7 +460,7 @@ class _DimensionPanelState extends State<_DimensionPanel> {
               // pinned Total row + up to 5 entity rows), rather than left
               // to an ancestor that was never going to bound it.
               SizedBox(
-                height: 56 + (1 + visibleRowCountForHeight) * 52,
+                height: _panelTableHeight(visibleRowCountForHeight),
                 child: ResponsiveDataTable(
                   sortColumnIndex: _sortColumnIndex,
                   sortAscending: _sortAscending,
