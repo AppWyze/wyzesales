@@ -87,9 +87,17 @@ public sealed class MorgensterSourceExtractor : ISourceExtractor
         log.Info($"  {rawLines.Count} line(s) loaded (before SearchType/date filtering).");
 
         log.Info("Building sales document facts...");
+        // 2026-10-07: timed separately because this one step took ~19.5 min of a ~20 min run
+        // (676k lines in, 678 rows out). The line filtering/mapping and the restaurant GL query
+        // were previously logged as one lump, so the slow half could not be told apart.
+        var stepTimer = System.Diagnostics.Stopwatch.StartNew();
         var salesFacts = BuildSalesDocumentFacts(rawLines, lk, sinceDate, log);
-        salesFacts.AddRange(BuildRestaurantRevenueFacts(db, sinceDate));
-        log.Info($"  {salesFacts.Count} row(s) (after SearchType/date filtering, including the restaurant GL rows).");
+        log.Info($"  {salesFacts.Count} invoice/credit/adjustment row(s) built in {stepTimer.Elapsed:mm\\:ss}.");
+        stepTimer.Restart();
+        var restaurantFacts = BuildRestaurantRevenueFacts(db, sinceDate);
+        salesFacts.AddRange(restaurantFacts);
+        log.Info($"  {restaurantFacts.Count} restaurant GL row(s) built in {stepTimer.Elapsed:mm\\:ss}.");
+        log.Info($"  {salesFacts.Count} row(s) total (after SearchType/date filtering, including the restaurant GL rows).");
 
         log.Info("Assembling reference data (salesmen, customers, categories, items)...");
         var categories = lk.ItemCategoryDescriptionByCode
