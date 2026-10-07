@@ -149,6 +149,51 @@ class AppTheme {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       ),
+      // Secondary buttons (OutlinedButton), filled and text buttons, and dialogs
+      // were left on Material 3's own defaults (2026-10-07, Craig: the
+      // "View all" button on Customer Segments "looks rubbish"): a fully
+      // rounded pill with a 1px border in the brand amber and amber text,
+      // which neither matched the 8px-radius buttons and fields everywhere
+      // else nor read clearly on a white card. Now: same 8px radius as the
+      // rest of the app, a quiet neutral hairline border, normal text
+      // colour, and a soft amber wash only on hover/press.
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: ButtonStyle(
+          shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+          padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+          foregroundColor: WidgetStatePropertyAll(AppColors.lightText),
+          side: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) return const BorderSide(color: Color(0x14000000));
+            if (states.contains(WidgetState.focused) || states.contains(WidgetState.hovered)) {
+              return const BorderSide(color: AppColors.teal);
+            }
+            return const BorderSide(color: Color(0x33000000));
+          }),
+          overlayColor: WidgetStateProperty.resolveWith((states) {
+            return states.contains(WidgetState.pressed) || states.contains(WidgetState.hovered)
+                ? AppColors.teal.withValues(alpha: 0.10)
+                : null;
+          }),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: AppColors.lightSurface,
+        elevation: 8,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: Color(0x14000000)),
+        ),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
@@ -179,7 +224,11 @@ class AppTheme {
           foregroundColor: WidgetStateProperty.resolveWith((states) {
             return states.contains(WidgetState.selected) ? AppColors.onAccent : AppColors.lightTextSecondary;
           }),
-          side: const WidgetStatePropertyAll(BorderSide(color: AppColors.teal, width: 1)),
+          side: WidgetStateProperty.resolveWith((states) {
+            return BorderSide(
+              color: states.contains(WidgetState.selected) ? AppColors.teal : const Color(0x33000000),
+            );
+          }),
         ),
       ),
       switchTheme: SwitchThemeData(
@@ -256,6 +305,51 @@ class AppTheme {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       ),
+      // Secondary buttons (OutlinedButton), filled and text buttons, and dialogs
+      // were left on Material 3's own defaults (2026-10-07, Craig: the
+      // "View all" button on Customer Segments "looks rubbish"): a fully
+      // rounded pill with a 1px border in the brand amber and amber text,
+      // which neither matched the 8px-radius buttons and fields everywhere
+      // else nor read clearly on a white card. Now: same 8px radius as the
+      // rest of the app, a quiet neutral hairline border, normal text
+      // colour, and a soft amber wash only on hover/press.
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: ButtonStyle(
+          shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+          padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+          foregroundColor: WidgetStatePropertyAll(AppColors.darkText),
+          side: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) return const BorderSide(color: Color(0x14FFFFFF));
+            if (states.contains(WidgetState.focused) || states.contains(WidgetState.hovered)) {
+              return const BorderSide(color: AppColors.teal);
+            }
+            return const BorderSide(color: Color(0x33FFFFFF));
+          }),
+          overlayColor: WidgetStateProperty.resolveWith((states) {
+            return states.contains(WidgetState.pressed) || states.contains(WidgetState.hovered)
+                ? AppColors.teal.withValues(alpha: 0.10)
+                : null;
+          }),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: AppColors.darkSurface,
+        elevation: 8,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: Color(0x14FFFFFF)),
+        ),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: AppColors.navySurface,
@@ -282,7 +376,11 @@ class AppTheme {
           foregroundColor: WidgetStateProperty.resolveWith((states) {
             return states.contains(WidgetState.selected) ? AppColors.onAccent : AppColors.darkTextSecondary;
           }),
-          side: const WidgetStatePropertyAll(BorderSide(color: AppColors.teal, width: 1)),
+          side: WidgetStateProperty.resolveWith((states) {
+            return BorderSide(
+              color: states.contains(WidgetState.selected) ? AppColors.teal : const Color(0x33FFFFFF),
+            );
+          }),
         ),
       ),
       switchTheme: SwitchThemeData(

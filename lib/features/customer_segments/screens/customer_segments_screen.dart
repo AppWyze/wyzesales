@@ -616,10 +616,10 @@ class _Tile extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
                           child: Text(
-                            '${_pctLabel(s.customers, totalCustomers)} of customers · ${_pctLabel(s.totalValue, totalValue)} of sales',
+                            '${_pctLabel(s.customers, totalCustomers)} of customers\n${_pctLabel(s.totalValue, totalValue)} of sales',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: fg, fontSize: 11),
+                            style: TextStyle(color: fg, fontSize: 10.5, height: 1.2),
                           ),
                         ),
                       const SizedBox(height: 4),
