@@ -228,6 +228,30 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     return variance == null ? '—' : formatPercent(variance);
   }
 
+  /// Variance for a Total row cell, compared like-for-like.
+  ///
+  /// 2026-10-07 (Craig, reviewing screenshots for the website): the Total
+  /// row used to divide the newer year's total by the older year's WHOLE
+  /// year, so part-way through FY2027 (Mar-Oct only) the Total read -26.7%
+  /// against a complete FY2026 - a quarter of the year simply hadn't
+  /// happened yet, not a decline. A variance column's Total is now computed
+  /// only over the fiscal months the NEWER year actually has figures for,
+  /// from both years. Once the newer year is complete this is identical to
+  /// the old whole-year comparison. The value columns' own Totals still show
+  /// each year's full total, as before.
+  ({num? current, num? previous, List<String> months}) _totalVarianceBasis(List<_YtdRow> ytdRows, _YearColumn col) {
+    num current = 0;
+    num previous = 0;
+    final months = <String>[];
+    for (final row in ytdRows) {
+      if (!row.yearValues.containsKey(col.year)) continue;
+      current += row.yearValues[col.year] ?? 0;
+      previous += row.yearValues[col.previousYear] ?? 0;
+      months.add(row.monthLabel);
+    }
+    return (current: current, previous: previous, months: months);
+  }
+
   /// Formats a cell for whichever measure is currently selected - Quantity
   /// is a unit count (formatQuantity), R Value/R Gross Profit are both Rand
   /// (formatRand) - replacing the bare `formatRand` calls below that
@@ -245,9 +269,12 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
     final columns = _yearColumns();
     final totalsRow = <String>['Total'];
     for (final col in columns) {
-      totalsRow.add(
-        col.isVariance ? _varianceLabel(yearTotal(col.year), yearTotal(col.previousYear!)) : _formatValue(yearTotal(col.year)),
-      );
+      if (col.isVariance) {
+        final basis = _totalVarianceBasis(ytdRows, col);
+        totalsRow.add(_varianceLabel(basis.current, basis.previous));
+      } else {
+        totalsRow.add(_formatValue(yearTotal(col.year)));
+      }
     }
 
     final measureLabel = _measure.label;
@@ -354,11 +381,18 @@ class _YtdComparativeScreenState extends ConsumerState<YtdComparativeScreen> {
       if (!col.isVariance) {
         cells.add(DataCell(Text(_formatValue(yearTotal(col.year)), style: style)));
       } else {
-        final current = yearTotal(col.year);
-        final previous = yearTotal(col.previousYear!);
-        final variance = variancePercent(current, previous);
+        final basis = _totalVarianceBasis(ytdRows, col);
+        final variance = variancePercent(basis.current, basis.previous);
         final color = variance == null ? null : (variance < 0 ? Theme.of(context).colorScheme.error : null);
-        cells.add(DataCell(Text(variance == null ? '—' : formatPercent(variance), style: style.copyWith(color: color))));
+        final text = Text(variance == null ? '—' : formatPercent(variance), style: style.copyWith(color: color));
+        final partial = basis.months.isNotEmpty && basis.months.length < ytdRows.length;
+        cells.add(DataCell(partial
+            ? Tooltip(
+                message: 'Like-for-like: ${basis.months.first} to ${basis.months.last} only, '
+                    'the months FY${col.year} has figures for.',
+                child: text,
+              )
+            : text));
       }
     }
     return DataRow(

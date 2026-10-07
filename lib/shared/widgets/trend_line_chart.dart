@@ -15,6 +15,13 @@ class TrendSeries {
 
 const double _leftMargin = 60;
 const double _rightMargin = 12;
+
+/// Horizontal inset between the y-axis line and the first category (and the
+/// right edge and the last one). 2026-10-07 (Craig, reviewing screenshots):
+/// the first category sat exactly ON the y-axis, so with Target bars drawn
+/// the first bar's left half covered the axis labels ("R778K"). Insetting
+/// every category keeps the lines, bars, hover guide and hit-testing in step.
+const double _xInset = 16;
 const double _topPadding = 12;
 const double _bottomMargin = 26;
 
@@ -121,7 +128,9 @@ class _TrendLineChartState extends State<TrendLineChart> {
     if (widget.categories.isEmpty) return;
     final plotWidth = size.width - _leftMargin - _rightMargin;
     if (plotWidth <= 0) return;
-    final relative = ((localPosition.dx - _leftMargin) / plotWidth).clamp(0.0, 1.0);
+    final usableWidth = plotWidth - 2 * _xInset;
+    if (usableWidth <= 0) return;
+    final relative = ((localPosition.dx - _leftMargin - _xInset) / usableWidth).clamp(0.0, 1.0);
     final count = widget.categories.length;
     // Written as explicit comparisons rather than a second `.clamp()` call —
     // `num.clamp()` returns `num` even when called on an already-rounded
@@ -490,7 +499,7 @@ class _TrendLinePainter extends CustomPainter {
 
     double xFor(int index) {
       if (categories.length == 1) return plotLeft + plotWidth / 2;
-      return plotLeft + plotWidth * index / (categories.length - 1);
+      return plotLeft + _xInset + (plotWidth - 2 * _xInset) * index / (categories.length - 1);
     }
 
     double yFor(num value) {
@@ -525,7 +534,7 @@ class _TrendLinePainter extends CustomPainter {
     final bars = targetBars;
     if (bars != null && categories.isNotEmpty) {
       final barPaint = Paint()..color = targetColor;
-      final avgSpacing = categories.length > 1 ? plotWidth / (categories.length - 1) : plotWidth;
+      final avgSpacing = categories.length > 1 ? (plotWidth - 2 * _xInset) / (categories.length - 1) : plotWidth;
       final barWidth = (avgSpacing * 0.5).clamp(4.0, 40.0);
       final zeroY = yFor(0);
       for (var i = 0; i < categories.length; i++) {

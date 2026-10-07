@@ -275,10 +275,11 @@ class _CustomerSegmentsScreenState extends ConsumerState<CustomerSegmentsScreen>
       context: context,
       builder: (dialogContext) {
         final size = MediaQuery.of(dialogContext).size;
+        final dialogWidth = size.width < 720 ? size.width * 0.9 : 820.0;
         return AlertDialog(
           title: Text('${def?.name ?? summary.segmentKey} · ${summary.customers} customers'),
           content: SizedBox(
-            width: size.width < 720 ? size.width * 0.9 : 680,
+            width: dialogWidth,
             height: size.height * 0.6,
             child: FutureBuilder<List<CustomerSegmentCustomer>>(
               future: future,
@@ -308,6 +309,8 @@ class _CustomerSegmentsScreenState extends ConsumerState<CustomerSegmentsScreen>
                       child: SingleChildScrollView(
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
+                          child: ConstrainedBox(
+                          constraints: BoxConstraints(minWidth: dialogWidth),
                           child: DataTable(
                             showCheckboxColumn: false,
                             columns: const [
@@ -334,6 +337,7 @@ class _CustomerSegmentsScreenState extends ConsumerState<CustomerSegmentsScreen>
                                   ],
                                 ),
                             ],
+                          ),
                           ),
                         ),
                       ),
@@ -772,7 +776,9 @@ class _SegmentTableCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final sorted = [...rows]..sort((a, b) => b.totalValue.compareTo(a.totalValue));
-    return Card(
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
       margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -781,8 +787,11 @@ class _SegmentTableCard extends StatelessWidget {
           children: [
             Text('All segments', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
-            SingleChildScrollView(
+            LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
               scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
               child: DataTable(
                 showCheckboxColumn: false,
                 columns: const [
@@ -825,9 +834,12 @@ class _SegmentTableCard extends StatelessWidget {
                     ),
                 ],
               ),
+              ),
+              ),
             ),
           ],
         ),
+      ),
       ),
     );
   }

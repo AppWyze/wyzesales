@@ -805,7 +805,13 @@ class _DocumentTable extends StatelessWidget {
         DataColumn(label: const Text('Doc'), onSort: onSort),
         DataColumn(label: const Text('Type'), onSort: onSort),
         DataColumn(label: const Text('Date'), onSort: onSort),
-        for (final d in dimensions) DataColumn(label: Text(d.displayLabel), onSort: onSort),
+        // maxLines: 2 (2026-10-07, Craig reviewing screenshots): a long
+        // dimension label such as "Customer Category" was being hard-clipped
+        // mid-letter ("Customer Categc") by the column's fixed width;
+        // wrapping onto a second line (the header row is tall enough for two)
+        // keeps it readable, and ellipsis is the fallback for anything longer.
+        for (final d in dimensions)
+          DataColumn(label: Text(d.displayLabel, maxLines: 2, overflow: TextOverflow.ellipsis), onSort: onSort),
         DataColumn(label: const Text('Qty'), numeric: true, onSort: onSort),
         DataColumn(label: const Text('Revenue'), numeric: true, onSort: onSort),
         DataColumn(label: const Text('GP'), numeric: true, onSort: onSort),
