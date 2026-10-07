@@ -161,7 +161,7 @@ class AppTheme {
         style: ButtonStyle(
           shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
           padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-          foregroundColor: WidgetStatePropertyAll(AppColors.lightText),
+          foregroundColor: const WidgetStatePropertyAll(AppColors.lightText),
           side: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.disabled)) return const BorderSide(color: Color(0x14000000));
             if (states.contains(WidgetState.focused) || states.contains(WidgetState.hovered)) {
@@ -317,7 +317,7 @@ class AppTheme {
         style: ButtonStyle(
           shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
           padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-          foregroundColor: WidgetStatePropertyAll(AppColors.darkText),
+          foregroundColor: const WidgetStatePropertyAll(AppColors.darkText),
           side: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.disabled)) return const BorderSide(color: Color(0x14FFFFFF));
             if (states.contains(WidgetState.focused) || states.contains(WidgetState.hovered)) {

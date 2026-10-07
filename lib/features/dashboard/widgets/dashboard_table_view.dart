@@ -65,13 +65,16 @@ class _PanelData {
 /// if that widget's own sizing ever changes, this estimate drifting
 /// slightly out of sync would just make the masonry balance a bit less
 /// even, not break anything.
+/// How many entity rows each panel shows under its Total row.
+const int _topRowCount = 10;
+
 double _estimatedPanelHeight(_PanelData panel) {
   const labelAndSpacing = 32.0; // titleMedium label (~24) + the 8px SizedBox under it
   if (panel.rows.isEmpty) {
     // Padding(vertical: 12) around one line of bodySmall text.
     return labelAndSpacing + 12 * 2 + 20;
   }
-  final visibleRowCountForHeight = panel.rows.length < 5 ? panel.rows.length : 5;
+  final visibleRowCountForHeight = panel.rows.length < _topRowCount ? panel.rows.length : _topRowCount;
   return labelAndSpacing + 56 + (1 + visibleRowCountForHeight) * 52;
 }
 
@@ -122,9 +125,8 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
         return AsyncSection<List<_PanelData>>(
           future: _future!,
           isEmpty: (data) => data.isEmpty,
-          emptyMessage: 'This client has no classification dimensions configured yet (Group/Market/Revenue '
-              'Split-style breakdowns) — ask a Platform Admin to add one under Dimensions, or switch back to '
-              'the standard Dashboard view above.',
+          emptyMessage: 'This client has no dimensions configured yet — ask a Platform Admin to add one under '
+              'Dimensions, or switch back to the standard Dashboard view above.',
           builder: (context, panels) {
             // 2026-09-08, Craig: "two tables next to each other... this will
             // hopefully work in Desktop view and maybe Tablet. When it
@@ -229,7 +231,12 @@ class _DashboardTableViewState extends ConsumerState<DashboardTableView> {
     required int startMonth,
     required List<ClientDimensionConfig> allDimensions,
   }) async {
-    final dimensions = allDimensions.where((d) => d.resolutionKind != 'existing').toList()
+    // 2026-10-07, Craig: Table view now shows EVERY dimension this client has
+    // (Sales Person, Customer, Item, Category, Branch and any classification
+    // dimensions), not only the classification ones - top 10 rows + a Total
+    // calculated from ALL entities. 'company' is left out: it is one row
+    // holding everything, i.e. exactly what each panel's Total row already is.
+    final dimensions = allDimensions.where((d) => d.dimensionKey != 'company').toList()
       ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
     if (dimensions.isEmpty) return const [];
 
@@ -343,7 +350,7 @@ class _DimensionPanelState extends State<_DimensionPanel> {
   int _sortColumnIndex = 1;
   bool _sortAscending = false;
 
-  static const _visibleRowCount = 5;
+  static const _visibleRowCount = _topRowCount;
 
   void _onSort(int columnIndex, bool ascending) {
     setState(() {
@@ -479,7 +486,8 @@ class _DimensionPanelState extends State<_DimensionPanel> {
                         DataCell(Text(formatPercent(totalGp), style: totalStyle)),
                       ],
                     ),
-                    for (final row in allRows)
+                    // Top N of the CURRENT sort only (Total above is from ALL entities).
+                    for (final row in allRows.take(_visibleRowCount))
                       DataRow(
                         onSelectChanged: (_) => widget.onEntityTap(FilterSelection(row.code, row.label)),
                         cells: [
