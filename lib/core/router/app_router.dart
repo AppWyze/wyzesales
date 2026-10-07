@@ -7,6 +7,7 @@ import '../../features/dashboard/screens/dashboard_screen.dart';
 import '../../features/sales_analysis/screens/sales_analysis_screen.dart';
 import '../../features/ytd_comparative/screens/ytd_comparative_screen.dart';
 import '../../features/dimension_templates/screens/budgets_screen.dart';
+import '../../features/customer_segments/screens/customer_segments_screen.dart';
 import '../../features/dimension_templates/screens/performance_screen.dart';
 import '../../features/dimension_templates/screens/sales_by_screen.dart';
 import '../../features/admin/screens/platform_admin_screen.dart';
@@ -68,6 +69,7 @@ final GoRouter appRouter = GoRouter(
     // itself, same as every other screen reads its own global filters.
     GoRoute(path: '/sales-analysis', builder: (context, state) => const SalesAnalysisScreen()),
     GoRoute(path: '/ytd-comparative', builder: (context, state) => const YtdComparativeScreen()),
+    GoRoute(path: '/customer-segments', builder: (context, state) => const CustomerSegmentsScreen()),
     // Quote Analysis and Sales Order Analysis (routes '/quote-analysis',
     // '/sales-order-analysis') were removed 2026-09-02 — task #93. Not
     // renamed/redirected: WCSA's daily-use IQRetail application has only

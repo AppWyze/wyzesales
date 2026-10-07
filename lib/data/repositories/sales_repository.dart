@@ -2,6 +2,7 @@ import '../../core/filters/global_filters.dart';
 import '../../core/supabase/supabase_config.dart';
 import '../../core/utils/sales_coverage.dart';
 import '../models/consolidated_sales.dart';
+import '../models/customer_segment.dart';
 import '../models/dimension_monthly_sales.dart';
 import '../models/dimension_performance.dart';
 import '../models/sales_document.dart';
@@ -475,5 +476,40 @@ class SalesRepository {
       start += page.length;
     }
     return all;
+  }
+
+  /// Customer Segments (RFM) — schema/060. One row per segment that has at
+  /// least one customer in the period (at most 10). `filters` is the same
+  /// dimension_key -> code map every other analysis RPC takes.
+  Future<List<CustomerSegmentSummary>> fetchCustomerSegmentsSummary({
+    required DateTime fromDate,
+    required DateTime toDate,
+    Map<String, String> filters = const {},
+  }) async {
+    final rows = await supabase.rpc('fn_customer_segments_summary', params: {
+      'p_from_date': _dateOnly(fromDate),
+      'p_to_date': _dateOnly(toDate),
+      'p_filters': filters,
+    });
+    return (rows as List).map<CustomerSegmentSummary>((r) => CustomerSegmentSummary.fromMap(r as Map<String, dynamic>)).toList();
+  }
+
+  /// The customers in ONE segment, biggest first, capped at `limit` (the
+  /// server caps it at 1000 regardless).
+  Future<List<CustomerSegmentCustomer>> fetchCustomerSegmentCustomers({
+    required DateTime fromDate,
+    required DateTime toDate,
+    required String segmentKey,
+    Map<String, String> filters = const {},
+    int limit = 500,
+  }) async {
+    final rows = await supabase.rpc('fn_customer_segment_customers', params: {
+      'p_from_date': _dateOnly(fromDate),
+      'p_to_date': _dateOnly(toDate),
+      'p_segment_key': segmentKey,
+      'p_filters': filters,
+      'p_limit': limit,
+    });
+    return (rows as List).map<CustomerSegmentCustomer>((r) => CustomerSegmentCustomer.fromMap(r as Map<String, dynamic>)).toList();
   }
 }
