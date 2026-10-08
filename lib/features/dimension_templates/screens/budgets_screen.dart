@@ -118,7 +118,18 @@ class _DimensionContributionData {
 /// annual total, and this one is an entity's share of the WHOLE
 /// dimension's total across every entity — different axes that just
 /// happen to reduce to the identical formula.
-String _formatContributionPct(num value, num total) => total == 0 ? '—' : '${(value / total * 100).round()}%';
+String _formatContributionPct(num value, num total) {
+  if (total == 0) return '—';
+  if (value == 0) return '0%';
+  // 2026-10-08: whole-percent rounding showed "0%" for every entity under
+  // 0.5% of the dimension total (WCSA: 1,296 of 1,333 forecast customers),
+  // which read as "no forecast". Small shares now keep their decimals.
+  final pct = value / total * 100;
+  if (pct < 0.01) return '<0.01%';
+  if (pct < 1) return '${pct.toStringAsFixed(2)}%';
+  if (pct < 10) return '${pct.toStringAsFixed(1)}%';
+  return '${pct.round()}%';
+}
 
 /// A dimension dropdown plus the global filter bar select which entity is
 /// showing (2026-09-30 — see `build()`'s own doc comment for the standalone
@@ -356,7 +367,12 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
     // primary metric. A static sort, not user-resortable: Craig, when
     // confirming this feature, opted for a plain read-only summary rather
     // than an interactive table here.
-    rows.sort((a, b) => b.budgetTotal.compareTo(a.budgetTotal));
+    rows.sort((a, b) {
+      final byBudget = b.budgetTotal.compareTo(a.budgetTotal);
+      // Ties (e.g. a client with no budgets loaded yet) fall back to the
+      // biggest Seasonal Forecast first instead of arbitrary order.
+      return byBudget != 0 ? byBudget : b.forecastTotal.compareTo(a.forecastTotal);
+    });
 
     return _DimensionContributionData(
       entities: rows,
