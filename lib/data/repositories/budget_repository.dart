@@ -8,10 +8,22 @@ import '../models/sales_forecast_figure.dart';
 /// recursion fix) to be applied — without either, an edit to an
 /// already-set month fails; see those migrations' comments for why.
 class BudgetRepository {
+  static const int _pageSize = 1000;
+
   Future<List<BudgetFigure>> fetchBudget({required String dimension, String? entityCode}) async {
-    var query = supabase.from('budget_figures').select().eq('dimension', dimension);
-    if (entityCode != null) query = query.eq('entity_code', entityCode);
-    final rows = await query.order('fiscal_month');
+    // 2026-10-08: paged. PostgREST silently caps any single response at 1000
+    // rows (Supabase "Max Rows"), so an all-entities read for a big dimension
+    // (WCSA Customer: 2,063 entities x 12 months) used to come back truncated.
+    final rows = <Map<String, dynamic>>[];
+    var from = 0;
+    while (true) {
+      var query = supabase.from('budget_figures').select().eq('dimension', dimension);
+      if (entityCode != null) query = query.eq('entity_code', entityCode);
+      final page = await query.order('fiscal_month').order('entity_code').range(from, from + _pageSize - 1);
+      rows.addAll(page);
+      if (page.length < _pageSize) break; // short page = last page
+      from += _pageSize;
+    }
     return rows.map<BudgetFigure>((r) => BudgetFigure.fromMap(r)).toList();
   }
 
@@ -36,9 +48,21 @@ class BudgetRepository {
   /// every rep's forecast at once, not just one entity's, the same reason
   /// fetchBudget itself takes an optional entityCode).
   Future<List<SalesForecastFigure>> fetchForecast({required String dimension, String? entityCode}) async {
-    var query = supabase.from('sales_forecast').select().eq('dimension', dimension);
-    if (entityCode != null) query = query.eq('entity_code', entityCode);
-    final rows = await query;
+    // 2026-10-08: paged, same reason as fetchBudget above. Unpaged, this
+    // returned only the first 1000 rows (~83 customers' 12 months), so the
+    // Budgets "Contribution by entity" table showed a forecast for a few
+    // dozen customers and 0% for everyone else, and every share was worked
+    // out against a truncated grand total.
+    final rows = <Map<String, dynamic>>[];
+    var from = 0;
+    while (true) {
+      var query = supabase.from('sales_forecast').select().eq('dimension', dimension);
+      if (entityCode != null) query = query.eq('entity_code', entityCode);
+      final page = await query.order('entity_code').order('fiscal_month').range(from, from + _pageSize - 1);
+      rows.addAll(page);
+      if (page.length < _pageSize) break; // short page = last page
+      from += _pageSize;
+    }
     return rows.map<SalesForecastFigure>((r) => SalesForecastFigure.fromMap(r)).toList();
   }
 

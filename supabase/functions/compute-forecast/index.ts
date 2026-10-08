@@ -8,85 +8,78 @@
 // budget_figures, which this function never touches).
 //
 // Deploy:   supabase functions deploy compute-forecast
-// Schedule: Supabase Cron, once daily, after the morning extract lands and
-//           WyzeSalesExtract has loaded the day's sales_document_facts —
-//           e.g. 05:00, an hour after the 04:00 extract run. See the design
-//           notes doc for the exact `cron.schedule(...)` call.
+// Schedule: fn_forecast_enqueue() (03:00 UTC) fills forecast_dispatch_queue and
+//           fn_forecast_dispatch() (every minute 03:00-06:59 UTC) sends a few
+//           chunks per minute to this function. fn_forecast_reconcile_ready()
+//           then scales every dimension's entity forecasts so they sum to the
+//           company forecast. See docs/schema/forecast_dispatch.sql.
 //
-// Depends on: forecast_input_series() (003_wyzesales_forecast_series.sql),
-// which returns a clean, gap-free monthly series per entity — genuine zero
-// months included, pre-existence months excluded. This function does no
-// gap-filling itself; it trusts that series as-is.
+// Depends on: forecast_input_series() (003_wyzesales_forecast_series.sql) and
+// its chunked wrapper forecast_input_series_chunk(), which return a clean,
+// monthly series per entity — genuine zero months included, pre-existence
+// months excluded. The series only ever extends to the entity's OWN last real
+// month (Fix #6); this function appends the trailing zero months itself (Fix #9).
 //
-// 2026-09-04: uses getServiceKey() (_shared/service_key.ts), same as the
-// other 4 full-access functions — the legacy SUPABASE_SERVICE_ROLE_KEY this
-// function originally read was fully deleted from the project in Section 59,
-// so reading it directly would authenticate with nothing at all. Needs the
-// same "wyzesales_edge" secret key those 4 functions use, plus its own
-// GRANTs (032_wyzesales_compute_forecast_grants.sql) — that key's role does
-// not automatically inherit table/function privileges the way the old
-// service_role key did (see Section 59's own postscript for that gap on
-// profiles/clients/license/pricing_plan; this migration is the same fix for
-// the tables/function this function touches instead).
+// 2026-10-08 (v14) — #12 SEASONAL RATIOS ARE CAPPED. Edgetec (project-based,
+//   lumpy: one R80m month in Jan 2025 against a typical R7m) was forecast
+//   R59m for next January because that one spike became a seasonal index of
+//   ~7x. A month's seasonal ratio (month value / that year's typical value) is
+//   now capped at SEASONAL_RATIO_CAP (3x) both when seeded and when updated.
+//   Edgetec company: R205m -> R174m a year (last 12 months R124m, prior 12
+//   months R190m). No effect on steady businesses (WCSA company identical).
 //
-// 2026-09-21: three robustness fixes, all found the same day investigating
-// "why does one dimension entity forecast fine while another (same
-// dimension) doesn't" for Edgetec (Craig). Verified against real client
-// data (not synthetic) before and after — see EDGETEC_FORECAST_ROBUSTNESS_
-// FIX_NOTES.md alongside this file for the four real cases this was tested
-// against and the before/after numbers. Summary of what was actually wrong:
+// 2026-10-08 (v13) — THREE MORE FIXES, found validating v12 on WCSA (company
+// forecast now R153m vs R158m actual, but customer/item still summed to 1.45x
+// the company figure):
 //
-//   1. yearAverages was a plain arithmetic mean of each 12-month block, used
-//      to seed level/trend AND as the denominator for every seasonal ratio
-//      in that block. A single outlier month anywhere in a year (one huge
-//      one-off sale, or one big credit note) dominates a 12-month mean, so
-//      it was silently poisoning both the starting point the whole forecast
-//      builds from and, far worse, occasionally landing a whole year's
-//      average within a hair of zero (two large, mostly-offsetting entries
-//      in the same year) — dividing by that near-zero number then produced
-//      a seasonal ratio in the hundreds of thousands, which is how one
-//      Edgetec customer forecast R0 for eleven months and R77 MILLION for
-//      the twelfth. Switched to the MEDIAN of each year's 12 months instead
-//      of the mean — median is the standard robust stand-in for exactly
-//      this failure mode (one or two extreme points can't drag it far),
-//      and for a year where most months cluster around a normal, repeating
-//      value (the common case here), it lands on that real value instead of
-//      on whatever a single anomaly happens to average in at.
+//   9. ENTITIES THAT STOPPED BUYING WERE FORECAST AS IF THEY WERE STILL ACTIVE.
+//      The series ends at the entity's last real month, so a customer whose
+//      last purchase was 8 months ago was projected from a level that had not
+//      decayed (e.g. TPG8179: last bought Nov 2025, R44k in the last 12
+//      months, forecast R455k). The complete months between the entity's last
+//      real month and last month are now appended as genuine zero months for
+//      the Holt-Winters tiers, so the level decays the way it should.
+//      (Dormancy at >= 12 idle months is unchanged: flat zero.)
 //
-//   2. The recursive level/trend update already capped the deseasonalized
-//      value fed into it at 1.5x the entity's own highest actual month ever
-//      (see the 2026-09-04 note below on the ORIGINAL over-forecast bug this
-//      guarded against) — but only on the high side. A single very large
-//      NEGATIVE month (a big credit note/return landing mid-series) had no
-//      equivalent floor, and when it happened to divide by a small seasonal
-//      factor, the same kind of numeric blowup happened in the other
-//      direction — one Edgetec market segment's April 2025 credit note
-//      (-R2m) produced a deseasonalized value of roughly -R10.4m in one
-//      step, which is what actually crashed that segment's trend deeply
-//      negative and floored 7 of its next 12 forecast months to R0 despite
-//      3 full, unbroken years of otherwise healthy, still-growing trade.
-//      Added a symmetric floor at 1.5x the lowest actual ever recorded,
-//      mirroring the existing ceiling exactly.
+//  10. SPARSE / INTERMITTENT ENTITIES BLEW UP THE SEASONAL MATHS. When more
+//      than half the history months are zero, the year's MEDIAN is 0, so the
+//      level started at 0 and the seasonal ratios divided by a made-up 1 —
+//      e.g. GEC001 (R133k in the last 12 months) forecast at R2.26m. Now: an
+//      entity that traded in fewer than half of its history months is forecast
+//      flat at its trailing-12-month average (confidence "low"), and where a
+//      year's median is 0 the year's mean is used for the seasonal base.
 //
-//   3. Even with #1 and #2, a linear trend applied identically to all 12
-//      forecast months can still run a forecast negative (and floor to R0)
-//      for the back half of the horizon whenever the trend estimate is
-//      meaningfully negative — correct behaviour for an entity that's
-//      genuinely still declining, but needlessly harsh for one that dropped
-//      once and has since leveled off, since the same fixed slope keeps
-//      getting applied 12 times over regardless. Switched to a DAMPED trend
-//      (Gardner & McKenzie's standard variant of Holt-Winters, built exactly
-//      for this): each successive month's trend contribution is discounted
-//      by a further factor of TREND_DAMPING, so its influence tapers off
-//      the further out the forecast runs instead of accumulating without
-//      limit. Applied consistently to both the in-sample recursion (as a
-//      1-step-ahead damped contribution) and the final 12-month projection,
-//      which is the standard formulation, not just the output.
+//  11. TIER 3 DENOMINATOR FLOOR 6 -> 9. Back-test on WCSA customers (history
+//      under 12 months at three cut-off dates; actual next-12-month sales vs
+//      history total): span 1-3 months 1.25x, 4-6 months 1.09x, 7-11 months
+//      1.28x of history. Floor 9 gives 1.33x for new customers and ~1.1-1.3x
+//      for 7-11 months: a close match (the floor of 6 gave 2.0x).
 //
-// None of this changes alpha/beta/gamma/full_history_months/partial_
-// history_months, which stay exactly as configured (client-overridable via
-// forecast_settings, same as before) — these three fixes are about numeric
-// robustness, not about changing how aggressively the model reacts.
+// 2026-10-08 (v12): #7 the current, incomplete calendar month is excluded from
+//   the history (company forecast R99.8m with it, R153.3m without, WCSA); #8 new
+//   Tier 3 formula (total over last up-to-12 complete months / months since
+//   first purchase, flat for 12 months) instead of repeating the last 1-3 months.
+//   Every dimension is then reconciled to the company forecast in SQL
+//   (fn_forecast_reconcile).
+//
+// 2026-10-08 (earlier, v11): silent failures + WCSA never forecasting.
+//   (a) pg_net only sends an HTTP request when the calling transaction
+//       commits, so the old cron job's pg_sleep(1.5) between posts spaced
+//       nothing out. (b) a failed series read was only console.error'd; now
+//       surfaced in `errors` (HTTP 207). (c) WCSA customer/item exceed one
+//       worker's resource limit; the body now also accepts { chunk, chunks }.
+//       Upserts are batched (2,000 rows).
+//
+// 2026-09-29: optional JSON body { client_id, dimension } to restrict a run.
+// 2026-09-29 (WORKER_RESOURCE_LIMIT): one invocation per client+dimension.
+// 2026-09-04: uses getServiceKey() (_shared/service_key.ts) — the legacy
+// SUPABASE_SERVICE_ROLE_KEY was deleted; "wyzesales_edge" secret key + GRANTs
+// (032_wyzesales_compute_forecast_grants.sql).
+//
+// 2026-09-21: robustness fixes #1-#3 (median year seeds; symmetric cap/floor;
+// damped trend). 2026-09-30: #4 history window = most recent
+// `full_history_months`; #5 tighter of peak-relative and median-relative cap;
+// #6 dormancy (no activity for >= `partial_history_months` => flat zero).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getServiceKey } from "../_shared/service_key.ts";
@@ -96,14 +89,29 @@ const MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// 2026-09-21: standard damped-trend factor (see Fix #3 above). 0.90 is a
-// conventional middle-of-the-road choice in the damped Holt-Winters
-// literature — damps meaningfully over a 12-month horizon (by month 12 the
-// cumulative trend contribution is roughly half of what an undamped model
-// would apply) without discarding a genuine, still-in-progress trend in the
-// near term. Not exposed via forecast_settings — this is a numeric-
-// robustness constant, not a per-client tuning knob like alpha/beta/gamma.
+// Standard damped-trend factor (Fix #3). Numeric-robustness constant.
 const TREND_DAMPING = 0.90;
+
+// Fix #5: how far above/below the entity's own MEDIAN non-zero month the
+// deseasonalized cap/floor may reach; the tighter of this and the 1.5x-peak
+// bound wins.
+const MEDIAN_CAP_MULTIPLE = 5;
+
+// Fix #12: a single month's seasonal ratio (value / that year's typical
+// value) may not exceed this multiple, so one project-sized spike cannot
+// become a permanent seasonal peak.
+const SEASONAL_RATIO_CAP = 3;
+
+// Fix #8/#11: Tier 3 averaging denominator bounds (months).
+const TIER3_MIN_DENOMINATOR = 9;
+const TIER3_MAX_DENOMINATOR = 12;
+
+// Fix #10: an entity that traded in fewer than this share of its history
+// months is "intermittent" and is forecast flat instead of seasonally.
+const INTERMITTENT_MIN_ACTIVE_SHARE = 0.5;
+
+// Rows per sales_forecast upsert request.
+const UPSERT_BATCH_SIZE = 2000;
 
 type Confidence = "full" | "partial" | "low";
 
@@ -128,10 +136,7 @@ const DEFAULT_SETTINGS: ForecastSettings = {
   partial_history_months: 12,
 };
 
-// 2026-09-21: median of a small numeric array — the robust stand-in for a
-// plain mean used in Fix #1 above. Standard textbook definition (average of
-// the two middle values on an even-length input); nothing forecast-specific
-// about it, kept local rather than pulled in as a dependency for one line.
+// Median of a numeric array (Fix #1).
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -140,54 +145,84 @@ function median(values: number[]): number {
     : sorted[mid];
 }
 
-// 2026-09-21: the damped-trend cumulative contribution over `steps` months
-// ahead — sum_{i=1}^{steps} trend * phi^i, closed-form. Used identically for
-// the in-sample 1-step-ahead expectation (steps=1) and the final h-step-
-// ahead forecast (steps=h+1), which is the standard damped Holt-Winters
-// formulation (see Fix #3 above) rather than only damping the output.
+// Damped-trend cumulative contribution over `steps` months ahead (Fix #3).
 function dampedTrendContribution(trend: number, phi: number, steps: number): number {
   if (phi >= 1) return trend * steps; // undamped fallback; TREND_DAMPING never actually reaches this
   return (trend * phi * (1 - Math.pow(phi, steps))) / (1 - phi);
 }
 
+// Fix #12: clamp a seasonal ratio to [0, SEASONAL_RATIO_CAP].
+function clampSeasonalRatio(ratio: number): number {
+  return Math.max(0, Math.min(ratio, SEASONAL_RATIO_CAP));
+}
+
 /**
- * monthlyHistory: oldest -> newest, one entry per calendar month, no gaps
- * (guaranteed by forecast_input_series). startMonthIndex: 0=Jan..11=Dec,
- * the calendar month of monthlyHistory[0].
+ * tier3 = true: monthlyHistory is the entity's REAL complete months (first
+ * purchase -> last real month), trailingZeroMonths the complete months since.
+ * tier3 = false: monthlyHistory is oldest -> newest COMPLETE calendar months
+ * INCLUDING appended trailing zeros (Fix #9), already truncated by the caller
+ * to at most `full_history_months` (Fix #4), ending at last month.
+ * startMonthIndex: 0=Jan..11=Dec, the calendar month of monthlyHistory[0].
+ * monthsSinceLastActivity: months between the entity's own last REAL month
+ * (including the current month, if it traded in it) and today (Fix #6).
  */
 function holtWintersForecast(
   monthlyHistory: number[],
   startMonthIndex: number,
   settings: ForecastSettings,
+  monthsSinceLastActivity: number,
+  trailingZeroMonths: number,
+  tier3: boolean,
 ): ForecastResult | null {
   const n = monthlyHistory.length;
   const PERIOD = 12;
   if (n === 0) return null;
 
   const monthAt = (offsetFromStart: number) => MONTH_NAMES[(startMonthIndex + offsetFromStart) % 12];
+  const flat = (monthly: number): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (let h = 0; h < 12; h++) out[monthAt(n + h)] = monthly;
+    return out;
+  };
 
-  // Tier 3: not enough history to trust a seasonal pattern - straight
-  // recent-trend projection, flat across all 12 forecast months.
-  if (n < settings.partial_history_months) {
-    const recent = monthlyHistory.slice(-Math.min(3, n));
-    const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
-    const forecastByMonth: Record<string, number> = {};
-    for (let h = 0; h < 12; h++) forecastByMonth[monthAt(n + h)] = Math.max(0, avg);
-    return { forecastByMonth, confidence: "low" };
+  // Fix #6: no real trading activity in at least `partial_history_months`
+  // months => flat zero, "low" confidence. Takes priority over everything.
+  if (monthsSinceLastActivity >= settings.partial_history_months) {
+    return { forecastByMonth: flat(0), confidence: "low" };
+  }
+
+  // Tier 3 (Fix #8, #11): not enough history to trust a seasonal pattern.
+  // The entity's total over the last up-to-12 complete months, divided by the
+  // months since its first purchase (floored at TIER3_MIN_DENOMINATOR, capped
+  // at TIER3_MAX_DENOMINATOR), spread flat across the 12 forecast months.
+  if (tier3) {
+    const observedMonths = n + trailingZeroMonths; // first purchase -> last complete month
+    const windowStart = Math.max(0, n - Math.max(0, TIER3_MAX_DENOMINATOR - trailingZeroMonths));
+    const total = monthlyHistory.slice(windowStart).reduce((a, b) => a + b, 0);
+    const denominator = Math.min(TIER3_MAX_DENOMINATOR, Math.max(TIER3_MIN_DENOMINATOR, observedMonths));
+    return { forecastByMonth: flat(Math.max(0, total / denominator)), confidence: "low" };
+  }
+
+  // Fix #10: intermittent entity (traded in under half its history months):
+  // flat at the trailing-12-month average; seasonal maths is meaningless.
+  const activeMonths = monthlyHistory.filter((v) => v !== 0).length;
+  if (activeMonths < n * INTERMITTENT_MIN_ACTIVE_SHARE) {
+    const last12 = monthlyHistory.slice(Math.max(0, n - 12));
+    const monthly = Math.max(0, last12.reduce((a, b) => a + b, 0) / last12.length);
+    return { forecastByMonth: flat(monthly), confidence: "low" };
   }
 
   // Tiers 1 & 2: full Holt-Winters. Initialize from however many full years
   // of history are available (1 year -> flat trend/no cross-year seasonal
   // averaging; 2+ years -> real trend and averaged seasonal ratios).
   //
-  // 2026-09-21 (Fix #1): each year's "typical value" is now its MEDIAN, not
-  // its mean — see this file's header note. yearTypicalValues seeds level
-  // and trend below, and is the denominator for every seasonal ratio in
-  // that year, so a single outlier month can no longer dominate either.
+  // Fix #1: each year's "typical value" is its MEDIAN, not its mean (Fix #10:
+  // or its mean when the median is 0).
   const years = Math.floor(n / PERIOD);
   const yearTypicalValues = Array.from({ length: years }, (_, y) => {
     const slice = monthlyHistory.slice(y * PERIOD, (y + 1) * PERIOD);
-    return median(slice);
+    const med = median(slice);
+    return med !== 0 ? med : slice.reduce((a, b) => a + b, 0) / slice.length;
   });
 
   let level = yearTypicalValues[0];
@@ -196,66 +231,43 @@ function holtWintersForecast(
   const seasonal = Array.from({ length: PERIOD }, (_, m) => {
     const ratios = Array.from({ length: years }, (_, y) => {
       const denom = yearTypicalValues[y] === 0 ? 1 : yearTypicalValues[y];
-      return monthlyHistory[y * PERIOD + m] / denom;
+      return clampSeasonalRatio(monthlyHistory[y * PERIOD + m] / denom); // Fix #12
     });
     return ratios.reduce((a, b) => a + b, 0) / ratios.length;
   });
   const seasonalMean = seasonal.reduce((a, b) => a + b, 0) / PERIOD || 1;
   for (let i = 0; i < PERIOD; i++) seasonal[i] /= seasonalMean;
 
-  // 2026-09-04: found live, against a real item ("Tool Kit Pump Maintenance",
-  // WCSA) once row-limit truncation (see this file's other 2026-09-04 note)
-  // stopped hiding it from ever actually running - a genuine, months-long-
-  // established real item forecast to 2-9x its own highest month EVER
-  // recorded (R400k+ vs. a real historical peak under R45k). Root cause:
-  // this month-position's seasonal factor had recursively drifted down to
-  // ~0.06 by the time a normal-sized real actual landed on it, so dividing
-  // by that near-zero seasonal factor produced a ~x16 "surprise" that
-  // permanently blew up level and trend for every month after - a known
-  // failure mode of multiplicative Holt-Winters on real, gappy retail data
-  // (lots of true zero months shrink a position's seasonal factor over
-  // time; a normal month landing on an over-shrunk position then explodes).
-  // Fix: cap the deseasonalized value fed into the level/trend update at
-  // 1.5x this entity's own highest ACTUAL month ever recorded - generous
-  // enough to still let a genuinely growing entity forecast above its past
-  // peak, but not by an order of magnitude on the back of one arithmetic
-  // fluke. Verified this is a true no-op for well-behaved data (a clean
-  // synthetic series with normal seasonality never once triggers it) and
-  // fires exactly once for the real series that broke - after which the
-  // forecast for that item came back in line with (a plausible, moderately
-  // elevated multiple of) its real historical range instead of ~9x it.
-  //
-  // 2026-09-21 (Fix #2): added the symmetric floor (deseasonalizedFloor) —
-  // see this file's header note. Same reasoning, opposite direction: one
-  // very large NEGATIVE month (a big credit note) landing on a small
-  // seasonal factor produces the same kind of blowup, just downward, and
-  // was crashing level/trend for the rest of the series just as badly as
-  // the original over-forecast bug did.
+  // 2026-09-04: cap the deseasonalized value fed into the level/trend update
+  // at 1.5x this entity's own highest ACTUAL month. Fix #2 added the symmetric
+  // floor; Fix #5 added the median-relative bounds (tighter of the two wins).
+  // `nonZeroMonths` excludes 0s so a run of zeros can't drag the typical
+  // month to 0 for an intermittent entity.
   const maxActual = Math.max(...monthlyHistory, 0);
-  const deseasonalizedCap = maxActual * 1.5;
+  const peakCap = maxActual * 1.5;
   const minActual = Math.min(...monthlyHistory, 0);
-  const deseasonalizedFloor = minActual * 1.5;
+  const peakFloor = minActual * 1.5;
+  const nonZeroMonths = monthlyHistory.filter((v) => v !== 0);
+  const typicalMonth = nonZeroMonths.length > 0 ? median(nonZeroMonths) : 0;
+  const medianCap = typicalMonth > 0 ? typicalMonth * MEDIAN_CAP_MULTIPLE : Infinity;
+  const medianFloor = typicalMonth < 0 ? typicalMonth * MEDIAN_CAP_MULTIPLE : -Infinity;
+  const deseasonalizedCap = Math.min(peakCap, medianCap);
+  const deseasonalizedFloor = Math.max(peakFloor, medianFloor);
 
-  // Recursive updates across ALL available history (not just whole years) -
-  // this is what lets a trailing partial year still sharpen the estimate.
+  // Recursive updates across ALL available history (not just whole years).
   for (let t = 0; t < n; t++) {
     const s = seasonal[t % PERIOD] || 1;
     const prevLevel = level;
     const deseasonalized = Math.max(deseasonalizedFloor, Math.min(monthlyHistory[t] / s, deseasonalizedCap));
-    // 2026-09-21 (Fix #3): the one-step-ahead expectation used here is now
-    // level + a DAMPED 1-step trend contribution, not the raw trend value -
-    // consistent with the damped forecast below rather than only damping
-    // the final output.
+    // Fix #3: one-step-ahead expectation is level + a DAMPED 1-step trend.
     level = settings.alpha * deseasonalized + (1 - settings.alpha) * (level + dampedTrendContribution(trend, TREND_DAMPING, 1));
     trend = settings.beta * (level - prevLevel) + (1 - settings.beta) * trend;
-    seasonal[t % PERIOD] = settings.gamma * (monthlyHistory[t] / (level || 1)) + (1 - settings.gamma) * s;
+    seasonal[t % PERIOD] = settings.gamma * clampSeasonalRatio(monthlyHistory[t] / (level || 1)) + (1 - settings.gamma) * s; // Fix #12
   }
 
   const forecastByMonth: Record<string, number> = {};
   for (let h = 0; h < 12; h++) {
-    // 2026-09-21 (Fix #3): damped multi-step trend contribution instead of
-    // trend * (h + 1) - tapers the further out the forecast runs instead of
-    // extrapolating one fixed slope, unchecked, for all 12 months.
+    // Fix #3: damped multi-step trend contribution.
     const value = Math.max(0, (level + dampedTrendContribution(trend, TREND_DAMPING, h + 1)) * seasonal[(n + h) % PERIOD]);
     forecastByMonth[monthAt(n + h)] = value;
   }
@@ -266,22 +278,18 @@ function holtWintersForecast(
   };
 }
 
-// 2026-09-04: Supabase's project-wide "Max Rows" setting (PostgREST's
-// db-max-rows) caps any single API/RPC response and silently TRUNCATES
-// anything past it rather than erroring. Found the hard way against a real
-// client: the Item dimension alone needed 1185 rows against this project's
-// 1000-row cap, so a plain single-shot call here was silently dropping
-// ~185 rows' worth of history — whichever entities sorted last (by the
-// entity_code/month ordering forecast_input_series itself guarantees) never
-// got seen at all, and got no forecast, with nothing anywhere that looked
-// like an error. Paginates via .range() instead of assuming one call ever
-// returns everything; safe specifically because forecast_input_series's own
-// `order by entity_code, month` is stable and deterministic across pages,
-// so nothing gets skipped or duplicated at a page boundary.
+// Supabase's project-wide "Max Rows" (PostgREST db-max-rows, 1000) silently
+// TRUNCATES any single response, so this paginates via .range(); safe because
+// the series function's own `order by entity_code, month` is stable.
+// Reads through forecast_input_series_chunk() so a large dimension can be
+// fetched and forecast one ~500-entity chunk at a time (chunks <= 1 = every
+// entity).
 async function fetchAllInputSeries(
   supabase: ReturnType<typeof createClient>,
   clientId: string,
   dimension: string,
+  chunk: number,
+  chunks: number,
 ): Promise<{
   data: { entity_code: string; month: string; value: number }[] | null;
   error: { message: string } | null;
@@ -291,7 +299,12 @@ async function fetchAllInputSeries(
   let from = 0;
   while (true) {
     const { data, error } = await supabase
-      .rpc("forecast_input_series", { p_client_id: clientId, p_dimension: dimension })
+      .rpc("forecast_input_series_chunk", {
+        p_client_id: clientId,
+        p_dimension: dimension,
+        p_chunk: chunk,
+        p_chunks: chunks,
+      })
       .range(from, from + pageSize - 1);
     if (error) return { data: null, error };
     const page = (data ?? []) as { entity_code: string; month: string; value: number }[];
@@ -302,19 +315,53 @@ async function fetchAllInputSeries(
   return { data: allRows, error: null };
 }
 
-Deno.serve(async (_req) => {
+Deno.serve(async (req) => {
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     getServiceKey(),
   );
 
-  const { data: clients, error: clientsError } = await supabase.from("clients").select("id");
+  // Optional { client_id, dimension, chunk, chunks } body (see header notes).
+  let requestedClientId: string | null = null;
+  let requestedDimension: string | null = null;
+  let requestedChunk = 0;
+  let requestedChunks = 1;
+  try {
+    const body = await req.json();
+    if (body && typeof body.client_id === "string" && body.client_id.length > 0) {
+      requestedClientId = body.client_id;
+    }
+    if (body && typeof body.dimension === "string" && body.dimension.length > 0) {
+      requestedDimension = body.dimension;
+    }
+    if (
+      body &&
+      Number.isInteger(body.chunks) && body.chunks > 1 &&
+      Number.isInteger(body.chunk) && body.chunk >= 0 && body.chunk < body.chunks
+    ) {
+      requestedChunks = body.chunks;
+      requestedChunk = body.chunk;
+    }
+  } catch {
+    // No body, or not valid JSON — treat as "every client".
+  }
+
+  let clientsQuery = supabase.from("clients").select("id");
+  if (requestedClientId) {
+    clientsQuery = clientsQuery.eq("id", requestedClientId);
+  }
+  const { data: clients, error: clientsError } = await clientsQuery;
   if (clientsError) {
     return new Response(JSON.stringify({ ok: false, error: clientsError.message }), { status: 500 });
   }
 
   const rowsWrittenByClient: Record<string, number> = {};
   const errorsByClient: Record<string, string> = {};
+
+  // Fix #7: the first day of the current (incomplete) calendar month, UTC.
+  const nowUtc = new Date();
+  const currentMonthStartMs = Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), 1);
+  const currentMonthIndex = nowUtc.getUTCFullYear() * 12 + nowUtc.getUTCMonth();
 
   for (const client of clients ?? []) {
     const clientId = client.id as string;
@@ -327,58 +374,41 @@ Deno.serve(async (_req) => {
 
     const settings: ForecastSettings = settingsRow ?? DEFAULT_SETTINGS;
 
-    // 2026-09-07: was a hardcoded `["sales_person", "customer", "item",
-    // "category", "branch", "company"]` — WCSA's own fixed six, the exact
-    // same "only ever matches WCSA" gap already found and fixed in Sales
-    // By/Performance/Budgets/Sales Analysis/the Dashboard's ranking widget
-    // this same day (client_dimensions, migration 038/042/050). A client
-    // like Edgetec, whose real configured set is sales_person/customer/
-    // company plus dim_1..dim_5 (Group/Market/Revenue Split/Category Type/
-    // Business Unit), would silently never get a forecast computed for any
-    // of its five real generic dimensions — Budgets' budget-or-forecast
-    // fallback (schema/021) for those would stay permanently empty no
-    // matter how many times this function runs, since it only ever wrote
-    // rows for dimension keys on the old fixed list.
-    //
-    // Reading this client's own `client_dimensions` instead (same table
-    // every other generalized screen/RPC already reads from) makes this
-    // exactly zero-behaviour-change for WCSA — its 6 seeded rows
-    // (schema/038 Section 4) are precisely the old hardcoded list, just in
-    // a different order, which doesn't matter for a loop — while Edgetec
-    // (and any future client) now gets a forecast computed for every
-    // dimension it actually has, 'company' included either way.
+    // Dimensions come from this client's own `client_dimensions` rows.
     const { data: dimensionRows, error: dimensionsError } = await supabase
       .from("client_dimensions")
       .select("dimension_key")
       .eq("client_id", clientId);
     if (dimensionsError) {
       console.error(`[${clientId}] client_dimensions read failed:`, dimensionsError.message);
+      errorsByClient[`${clientId}/client_dimensions`] = dimensionsError.message;
       continue;
     }
-    const dimensions = (dimensionRows ?? []).map((d) => d.dimension_key as string);
+    let dimensions = (dimensionRows ?? []).map((d) => d.dimension_key as string);
+    if (requestedDimension) {
+      dimensions = dimensions.filter((d) => d === requestedDimension);
+    }
 
-    const rowsToUpsert: Array<{
-      client_id: string;
-      dimension: string;
-      entity_code: string;
-      fiscal_month: string;
-      forecast_value: number;
-      confidence: Confidence;
-      computed_at: string;
-    }> = [];
     const runTimestamp = new Date().toISOString();
+    let clientRowsWritten = 0;
+    let clientHadWork = false;
 
+    // Dimensions are processed (and upserted) one at a time, so one failed
+    // dimension no longer loses the others and memory stays bounded.
     for (const dimension of dimensions) {
-      const { data: series, error: seriesError } = await fetchAllInputSeries(supabase, clientId, dimension);
+      const errKey = `${clientId}/${dimension}#${requestedChunk}`;
+      const { data: series, error: seriesError } = await fetchAllInputSeries(
+        supabase, clientId, dimension, requestedChunk, requestedChunks,
+      );
 
       if (seriesError) {
         console.error(`[${clientId}/${dimension}] forecast_input_series failed:`, seriesError.message);
+        errorsByClient[errKey] = seriesError.message;
         continue;
       }
 
-      // forecast_input_series returns flat (entity_code, month, value) rows,
-      // already ordered oldest -> newest per entity - group them back into
-      // one array per entity.
+      // Group the flat (entity_code, month, value) rows back into one array
+      // per entity, oldest -> newest.
       const byEntity = new Map<string, { month: string; value: number }[]>();
       for (const row of (series ?? []) as { entity_code: string; month: string; value: number }[]) {
         const list = byEntity.get(row.entity_code) ?? [];
@@ -386,10 +416,66 @@ Deno.serve(async (_req) => {
         byEntity.set(row.entity_code, list);
       }
 
+      if (byEntity.size === 0) {
+        errorsByClient[errKey] = "no input series returned";
+        continue;
+      }
+
+      const rowsToUpsert: Array<{
+        client_id: string;
+        dimension: string;
+        entity_code: string;
+        fiscal_month: string;
+        forecast_value: number;
+        confidence: Confidence;
+        computed_at: string;
+      }> = [];
+
       for (const [entityCode, points] of byEntity) {
-        const history = points.map((p) => p.value);
-        const startMonthIndex = new Date(points[0].month).getUTCMonth();
-        const result = holtWintersForecast(history, startMonthIndex, settings);
+        // Fix #6: months since this entity's own last REAL month, from the FULL
+        // (untruncated, current-month-inclusive) series.
+        const lastActivityMonth = new Date(points[points.length - 1].month);
+        const monthsSinceLastActivity =
+          (nowUtc.getUTCFullYear() - lastActivityMonth.getUTCFullYear()) * 12 +
+          (nowUtc.getUTCMonth() - lastActivityMonth.getUTCMonth());
+
+        // Fix #7: only COMPLETE calendar months feed the maths.
+        const completePoints = points.filter((p) => new Date(p.month).getTime() < currentMonthStartMs);
+        if (completePoints.length === 0) continue; // first ever activity is this month — nothing complete to forecast from yet
+
+        const realValues = completePoints.map((p) => p.value);
+        const firstMonth = new Date(completePoints[0].month);
+        const firstIndex = firstMonth.getUTCFullYear() * 12 + firstMonth.getUTCMonth();
+        const lastRealMonth = new Date(completePoints[completePoints.length - 1].month);
+        const lastRealIndex = lastRealMonth.getUTCFullYear() * 12 + lastRealMonth.getUTCMonth();
+
+        // Fix #9: complete months between the entity's last real month and the
+        // last complete calendar month — genuine zero months.
+        const trailingZeroMonths = Math.max(0, currentMonthIndex - 1 - lastRealIndex);
+
+        // Fix #8: Tier 3 = under `partial_history_months` months from first
+        // purchase to last complete month.
+        const spanMonths = realValues.length + trailingZeroMonths;
+        const tier3 = spanMonths < settings.partial_history_months;
+
+        let history: number[];
+        let startMonthIndex: number;
+        if (tier3) {
+          history = realValues;
+          startMonthIndex = firstIndex % 12;
+        } else {
+          // Extend with the trailing zeros (Fix #9), then Fix #4: keep the most
+          // recent `full_history_months` months.
+          const extended = trailingZeroMonths > 0 ? realValues.concat(new Array(trailingZeroMonths).fill(0)) : realValues;
+          const cap = settings.full_history_months;
+          const dropped = extended.length > cap ? extended.length - cap : 0;
+          history = dropped > 0 ? extended.slice(dropped) : extended;
+          startMonthIndex = (firstIndex + dropped) % 12;
+        }
+
+        const result = holtWintersForecast(
+          history, startMonthIndex, settings, monthsSinceLastActivity, trailingZeroMonths, tier3,
+        );
         if (!result) continue;
 
         for (const [fiscalMonth, forecastValue] of Object.entries(result.forecastByMonth)) {
@@ -404,37 +490,30 @@ Deno.serve(async (_req) => {
           });
         }
       }
-    }
 
-    // 2026-09-07: found live against Edgetec — this upsert is one single
-    // multi-row INSERT for the client's entire batch (every dimension's rows
-    // together), which Postgres commits or rejects as a whole. A single row
-    // with a NULL entity_code (schema/052's now-fixed root cause: v_sales_
-    // documents/v_dimension_monthly_sales letting an unattributed line
-    // produce a NULL group, in violation of sales_forecast.entity_code's
-    // NOT NULL constraint) silently failed the ENTIRE batch — every
-    // dimension for that client, not just the one with the bad row — while
-    // `rowsWrittenByClient[clientId]` was set to the COMPUTED length
-    // regardless of whether the upsert actually landed. The caller (Craig,
-    // via curl) saw `{"ok":true,"rowsWritten":{"...":3084}}` and reasonably
-    // read that as "3084 rows were written," when in fact sales_forecast had
-    // zero rows for that client. Now: only report a count once the upsert
-    // has actually succeeded; a failure is surfaced in `errors` instead, and
-    // still lets every OTHER client's loop iteration continue rather than
-    // aborting the whole run.
-    if (rowsToUpsert.length > 0) {
-      const { error: upsertError } = await supabase
-        .from("sales_forecast")
-        .upsert(rowsToUpsert, { onConflict: "client_id,dimension,entity_code,fiscal_month" });
-
-      if (upsertError) {
-        console.error(`[${clientId}] sales_forecast upsert failed:`, upsertError.message);
-        errorsByClient[clientId] = upsertError.message;
-        continue;
+      // Only report a count once the upsert has actually succeeded; batches of
+      // UPSERT_BATCH_SIZE rows.
+      let dimensionOk = true;
+      for (let i = 0; i < rowsToUpsert.length; i += UPSERT_BATCH_SIZE) {
+        const { error: upsertError } = await supabase
+          .from("sales_forecast")
+          .upsert(rowsToUpsert.slice(i, i + UPSERT_BATCH_SIZE), {
+            onConflict: "client_id,dimension,entity_code,fiscal_month",
+          });
+        if (upsertError) {
+          console.error(`[${clientId}/${dimension}] sales_forecast upsert failed:`, upsertError.message);
+          errorsByClient[errKey] = upsertError.message;
+          dimensionOk = false;
+          break;
+        }
+      }
+      if (dimensionOk) {
+        clientRowsWritten += rowsToUpsert.length;
+        clientHadWork = true;
       }
     }
 
-    rowsWrittenByClient[clientId] = rowsToUpsert.length;
+    if (clientHadWork) rowsWrittenByClient[clientId] = clientRowsWritten;
   }
 
   const ok = Object.keys(errorsByClient).length === 0;
