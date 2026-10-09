@@ -5,6 +5,7 @@ import '../models/consolidated_sales.dart';
 import '../models/customer_segment.dart';
 import '../models/dimension_monthly_sales.dart';
 import '../models/dimension_performance.dart';
+import '../models/item_segment.dart';
 import '../models/sales_document.dart';
 
 /// Everything Sales Analysis, YTD Comparative, Sales by [Dimension], and
@@ -511,5 +512,52 @@ class SalesRepository {
       'p_limit': limit,
     });
     return (rows as List).map<CustomerSegmentCustomer>((r) => CustomerSegmentCustomer.fromMap(r as Map<String, dynamic>)).toList();
+  }
+
+  /// Item Segments — schema/061. One row per (segment, ABC class) cell that has
+  /// at least one item, plus one 'dormant' row. Always the last 12 closed
+  /// months before `asOf`; `filters` is the usual dimension_key -> code map.
+  Future<List<ItemSegmentCell>> fetchItemSegmentsSummary({
+    required DateTime asOf,
+    Map<String, String> filters = const {},
+  }) async {
+    final rows = await supabase.rpc('fn_item_segments_summary', params: {
+      'p_as_of': _dateOnly(asOf),
+      'p_filters': filters,
+    });
+    return (rows as List).map<ItemSegmentCell>((r) => ItemSegmentCell.fromMap(r as Map<String, dynamic>)).toList();
+  }
+
+  /// A and B items that depend on one or two customers — schema/061.
+  Future<ItemConcentration> fetchItemConcentration({
+    required DateTime asOf,
+    Map<String, String> filters = const {},
+  }) async {
+    final rows = await supabase.rpc('fn_item_concentration', params: {
+      'p_as_of': _dateOnly(asOf),
+      'p_filters': filters,
+    });
+    final list = rows as List;
+    if (list.isEmpty) return ItemConcentration.empty;
+    return ItemConcentration.fromMap(list.first as Map<String, dynamic>);
+  }
+
+  /// The items in ONE cell (segment + ABC class; '-' for dormant), biggest
+  /// first, capped at `limit` (the server caps it at 1000 regardless).
+  Future<List<ItemSegmentItem>> fetchItemSegmentItems({
+    required DateTime asOf,
+    required String segmentKey,
+    required String abc,
+    Map<String, String> filters = const {},
+    int limit = 500,
+  }) async {
+    final rows = await supabase.rpc('fn_item_segment_items', params: {
+      'p_as_of': _dateOnly(asOf),
+      'p_segment_key': segmentKey,
+      'p_abc': abc,
+      'p_filters': filters,
+      'p_limit': limit,
+    });
+    return (rows as List).map<ItemSegmentItem>((r) => ItemSegmentItem.fromMap(r as Map<String, dynamic>)).toList();
   }
 }

@@ -54,6 +54,11 @@ class Client {
   /// schema/037 ran still renders sensibly.
   final String logoBackground;
 
+  /// Item Segments screen on/off for this client (schema/061, Platform Admin >
+  /// Edit client). Defaults to on, also client-side, so a row read before the
+  /// migration still behaves.
+  final bool itemSegmentsEnabled;
+
   const Client({
     required this.id,
     required this.code,
@@ -71,6 +76,7 @@ class Client {
     this.logoPath,
     this.logoUpdatedAt,
     this.logoBackground = 'light',
+    this.itemSegmentsEnabled = true,
   });
 
   factory Client.fromMap(Map<String, dynamic> map) {
@@ -91,6 +97,7 @@ class Client {
       logoPath: map['logo_path'] as String?,
       logoUpdatedAt: map['logo_updated_at'] == null ? null : DateTime.parse(map['logo_updated_at'] as String),
       logoBackground: (map['logo_background'] as String?) ?? 'light',
+      itemSegmentsEnabled: (map['item_segments_enabled'] as bool?) ?? true,
     );
   }
 }

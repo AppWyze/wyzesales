@@ -636,6 +636,8 @@ class _EditClientDialogState extends ConsumerState<_EditClientDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _emailController;
   late final TextEditingController _phoneController;
+  late final TextEditingController _excludedItemsController;
+  late bool _itemSegmentsEnabled;
   bool _saving = false;
   String? _error;
 
@@ -645,6 +647,10 @@ class _EditClientDialogState extends ConsumerState<_EditClientDialog> {
     _nameController = TextEditingController(text: widget.client['name'] as String? ?? '');
     _emailController = TextEditingController(text: widget.client['contact_email'] as String? ?? '');
     _phoneController = TextEditingController(text: widget.client['contact_number'] as String? ?? '');
+    _itemSegmentsEnabled = (widget.client['item_segments_enabled'] as bool?) ?? true;
+    _excludedItemsController = TextEditingController(
+      text: ((widget.client['item_segments_excluded_codes'] as List?) ?? const []).join(', '),
+    );
   }
 
   @override
@@ -652,6 +658,7 @@ class _EditClientDialogState extends ConsumerState<_EditClientDialog> {
     _nameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
+    _excludedItemsController.dispose();
     super.dispose();
   }
 
@@ -670,6 +677,11 @@ class _EditClientDialogState extends ConsumerState<_EditClientDialog> {
         'name': name,
         'contact_email': _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
         'contact_number': _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim(),
+        'item_segments_enabled': _itemSegmentsEnabled,
+        'item_segments_excluded_codes': [
+          for (final c in _excludedItemsController.text.split(RegExp(r'[,\n;]')))
+            if (c.trim().isNotEmpty) c.trim(),
+        ],
       });
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
@@ -702,6 +714,16 @@ class _EditClientDialogState extends ConsumerState<_EditClientDialog> {
                     _tf('Contact email', _emailController, isDark, keyboardType: TextInputType.emailAddress),
                     const SizedBox(height: 10),
                     _tf('Contact number', _phoneController, isDark, keyboardType: TextInputType.phone),
+                    const SizedBox(height: 14),
+                    _switchTile(
+                      'Item Segments',
+                      'Shows the Item Segments screen for this client. Off hides it from the menu.',
+                      _itemSegmentsEnabled,
+                      (v) => setState(() => _itemSegmentsEnabled = v),
+                      isDark,
+                    ),
+                    const SizedBox(height: 6),
+                    _tf('Items left out of Item Segments (codes, comma separated)', _excludedItemsController, isDark),
                     if (_error != null) ...[
                       const SizedBox(height: 12),
                       Text(_error!, style: const TextStyle(fontSize: 12, color: AppColors.negative)),

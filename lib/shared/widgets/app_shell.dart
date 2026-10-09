@@ -10,6 +10,7 @@ import '../../core/utils/client_logo.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/active_alert.dart';
 import '../../data/models/client.dart';
+import '../../data/models/client_dimension_config.dart';
 import '../../data/models/data_load_run.dart';
 import '../../data/models/profile.dart';
 import 'app_logo.dart';
@@ -620,6 +621,14 @@ class _Sidebar extends ConsumerWidget {
     // "Powered by WyzeSales" directly under the WyzeSales mark itself, for
     // every client that hasn't set one, would be redundant.
     final hasClientLogo = clientAsync.value != null && clientLogoUrl(clientAsync.value!) != null;
+    // Item Segments: hidden until the client is loaded, when the platform admin
+    // has switched it off for this client, or when the client has no Item
+    // dimension (schema/061).
+    final itemDims = ref.watch(clientDimensionsProvider).valueOrNull;
+    final showItemSegments = clientAsync.value != null &&
+        clientAsync.value!.itemSegmentsEnabled &&
+        itemDims != null &&
+        itemDims.forKey('item') != null;
 
     return Container(
       color: AppColors.navyDeep,
@@ -648,6 +657,8 @@ class _Sidebar extends ConsumerWidget {
                 _NavTile(icon: Icons.show_chart, label: 'Sales Analysis', route: '/sales-analysis', currentRoute: currentRoute, isDrawer: isDrawer),
                 _NavTile(icon: Icons.calendar_view_month, label: 'YTD Comparative', route: '/ytd-comparative', currentRoute: currentRoute, isDrawer: isDrawer),
                 _NavTile(icon: Icons.groups_outlined, label: 'Customer Segments', route: '/customer-segments', currentRoute: currentRoute, isDrawer: isDrawer),
+                if (showItemSegments)
+                  _NavTile(icon: Icons.inventory_2_outlined, label: 'Item Segments', route: '/item-segments', currentRoute: currentRoute, isDrawer: isDrawer),
                 // Quote Analysis / Sales Order Analysis tiles removed
                 // 2026-09-02 — task #93, see Wyzesales_Rebuild_Decisions.md
                 // Section 55 (no reliable quote/order data source; WCSA's
